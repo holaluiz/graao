@@ -4,10 +4,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, type Room } from '@colyseus/sdk';
-import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, WEAPONS, randomAppearance } from '@graao/game-data';
-import { castOrigin, chestOf } from '@graao/game-core';
+import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, PLANET, UFO, WEAPONS, randomAppearance } from '@graao/game-data';
+import { castOrigin, chestOf, diveStart, ufoPosition } from '@graao/game-core';
 import { SnapshotInterpolator } from '../apps/client/src/net/SnapshotInterpolator';
-import { AIM_SCALE, AbilityReject, C2S, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MatchPhase, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
+import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MatchPhase, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
 import { createGraaoServer } from '../apps/server/src/app';
 import { getWorld } from '../apps/server/src/world';
 
@@ -310,7 +310,7 @@ describe('a complete 1v1 match (gate 3: A wins)', () => {
   let shoot: ReturnType<typeof shooter>;
 
   it('starts when both players are ready, with a countdown that locks weapons', async () => {
-    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 600, resultsMs: 900, closeSpawns: true, skipDraft: true });
+    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 600, resultsMs: 900, closeSpawns: true, skipDraft: true, skipUfo: true });
     const wa = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
     ia = wa.index;
     b = await new Client(url).joinById(wa.code, opts('B'));
@@ -408,7 +408,7 @@ describe('abilities through the authoritative server (gate 4: guns and magic)', 
   let cast: ReturnType<typeof caster>;
 
   it('hands out the default loadouts and refuses casts during the countdown', async () => {
-    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 300, resultsMs: 900, closeSpawns: true, ultimateChargeMs: 0, skipDraft: true });
+    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 300, resultsMs: 900, closeSpawns: true, ultimateChargeMs: 0, skipDraft: true, skipUfo: true });
     const wa = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
     ia = wa.index;
     const joined = waitFor<RoomStateMsg>(a, S2C.ROOM_STATE, (m) => m.players.length === 2);
@@ -529,7 +529,7 @@ describe('ability draft through the authoritative server (gate 6: players enter 
   const picksOf = (m: DraftStateMsg, i: number) => m.seats.find((s) => s.index === i)!.picks;
 
   it('READY opens the draft: round 1 is a basic round, nobody can fight', async () => {
-    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 300, resultsMs: 900, closeSpawns: true, draftPickMs: 2500, draftRepickMs: 2500, draftRevealMs: 150 });
+    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 300, resultsMs: 900, closeSpawns: true, draftPickMs: 2500, draftRepickMs: 2500, draftRevealMs: 150, skipUfo: true });
     da = inbox<DraftStateMsg>(a, S2C.DRAFT_STATE);
     ra = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
     ia = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
@@ -629,4 +629,144 @@ describe('ability draft through the authoritative server (gate 6: players enter 
     await a.leave(true);
     await b.leave(true);
   });
+});
+
+describe('UFO deployment through the authoritative server (gate 7: draft → UFO → drop → combat)', () => {
+  let a: Room;
+  let b: Room;
+  let ia = -1;
+  let ib = -1;
+  let ra: ReturnType<typeof inbox<RoomStateMsg>>;
+  let ea: ReturnType<typeof inbox<EventsMsg>>;
+  let sa: ReturnType<typeof inbox<SnapshotMsg>>;
+  let route: NonNullable<RoomStateMsg['ufo']>;
+  const snapOf = (m: SnapshotMsg, i: number) => m.p.find((p) => p[0] === i)!;
+  const radius = (s: number[]) => Math.hypot(s[1]!, s[2]!, s[3]!) / 1000;
+  const eventOf = <K extends GameEvent['e']>(kind: K, target: number) =>
+    ea.until((m) => m.ev.some((e) => e.e === kind && (e as { target?: number }).target === target), 15000).then(
+      (m) => m.ev.find((e) => e.e === kind && (e as { target?: number }).target === target) as Extract<GameEvent, { e: K }>,
+    );
+
+  it('READY boards everyone onto the UFO: a route over the arena, nobody simulated, nobody can fight', async () => {
+    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 300, resultsMs: 900, skipDraft: true, ufoRevealMs: 500, ufoWindowMs: 1800 });
+    ra = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+    ea = inbox<EventsMsg>(a, S2C.EVENTS);
+    sa = inbox<SnapshotMsg>(a, S2C.SNAPSHOT);
+    ia = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+    b = await new Client(url).joinById((await ra.until((m) => m.players.length === 1)).code, opts('B'));
+    ib = (await waitFor<WelcomeMsg>(b, S2C.WELCOME)).index;
+    await ra.until((m) => m.players.length === 2);
+    a.send(C2S.READY, { r: 1 });
+    b.send(C2S.READY, { r: 1 });
+    const st = await ra.until((m) => m.phase === MatchPhase.UFO);
+    expect(st.ufo).not.toBeNull();
+    route = st.ufo!;
+    expect(st.players.every((p) => p.inMatch && p.deploy === DeployState.SHIP)).toBe(true);
+    const s = await sa.until((m) => m.p.length === 2 && m.p.every((p) => (p[13] & SnapFlag.ON_SHIP) !== 0));
+    // Riders are where the ship is: on its orbit, 100 m above the sea.
+    expect(radius(snapOf(s, ia))).toBeCloseTo(UFO.orbitRadius, 0);
+    const ship = ufoPosition(route, s.t);
+    expect(Math.hypot(snapOf(s, ia)[1] / 1000 - ship.x, snapOf(s, ia)[2] / 1000 - ship.y, snapOf(s, ia)[3] / 1000 - ship.z)).toBeLessThan(3);
+    // Inputs aboard are acknowledged, never simulated.
+    a.send(C2S.PLAYER_INPUT, { i: [[1, WISH_SCALE, 0, 0, 0, 0, AIM_SCALE, InputButton.JUMP] as InputCmd] });
+    // No fighting aboard.
+    const r = await new Promise<AbilityResultMsg>((resolve) => {
+      const off = a.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => (off(), resolve(m)));
+      a.send(C2S.ABILITY_REQUEST, { s: 1, k: 0, a: DEFAULT_LOADOUTS[0]![0], c: 0 });
+    });
+    expect(r.r).toBe(AbilityReject.PHASE);
+  });
+
+  it('refuses a jump before the hatch opens; A jumps inside the window from exactly the announced state', async () => {
+    a.send(C2S.UFO_JUMP, {});
+    await sleep(120);
+    expect(ra.latest()!.players.find((p) => p.index === ia)!.deploy).toBe(DeployState.SHIP);
+    await sleep(Math.max(0, route.open - Date.now()) + 150);
+    a.send(C2S.UFO_JUMP, {});
+    const j = await eventOf('jump', ia);
+    expect(j.auto).toBe(false);
+    // The start state is the shared diveStart(route, t) for some t inside the window, quantized (mm, cm/s).
+    const up = Math.hypot(...j.at) / 1000;
+    expect(up).toBeCloseTo(UFO.orbitRadius - UFO.exitDrop, 1);
+    expect(Math.hypot(...j.v) / 100).toBeCloseTo(UFO.exitSpeed, 1);
+    // Exactly the shared diveStart(route, t) at the server's receive time t (somewhere since the hatch opened).
+    let match = -1;
+    for (let t = route.open; t <= Date.now() && match < 0; t++) {
+      const d = diveStart(route, t);
+      const at = [d.pos.x, d.pos.y, d.pos.z].map((x) => Math.round(x * 1000));
+      const v = [d.vel.x, d.vel.y, d.vel.z].map((x) => Math.round(x * 100));
+      if (at.every((x, k) => x === j.at[k]) && v.every((x, k) => x === j.v[k])) match = t;
+    }
+    expect(match).toBeGreaterThanOrEqual(route.open);
+    const st = await ra.until((m) => m.players.find((p) => p.index === ia)?.deploy === DeployState.DIVING);
+    expect(st.players.find((p) => p.index === ib)!.deploy).toBe(DeployState.SHIP);
+    // A second jump is ignored.
+    a.send(C2S.UFO_JUMP, {});
+  });
+
+  it('A dives under its own control (head-first) and lands on the planet; B is dropped when the window closes', async () => {
+    let seq = 1000;
+    let sending = true;
+    const t0 = Date.now();
+    let sent = 0;
+    void (async () => {
+      while (sending) {
+        const due = Math.floor(((Date.now() - t0) / 1000) * 60) - sent;
+        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, 0, 0, 0, 0, 0, AIM_SCALE, InputButton.SPRINT] as InputCmd);
+        sent += cmds.length;
+        if (cmds.length) a.send(C2S.PLAYER_INPUT, { i: cmds });
+        await sleep(33);
+      }
+    })();
+    const diving = await sa.until((m) => (snapOf(m, ia)[13] & SnapFlag.DIVING) !== 0);
+    expect(radius(snapOf(diving, ia))).toBeGreaterThan(PLANET.radius + 20);
+    const landA = await eventOf('land', ia);
+    sending = false;
+    expect(Math.hypot(...landA.at) / 1000).toBeLessThan(PLANET.radius + 25);
+    expect(Math.hypot(...landA.at) / 1000).toBeGreaterThan(PLANET.radius - 8);
+    // B never pressed jump: dropped at the close, falling on its own (its client sends nothing).
+    const jb = await eventOf('jump', ib);
+    expect(jb.auto).toBe(true);
+    await eventOf('land', ib);
+  }, 30000);
+
+  it('everyone down: the match starts where they landed, weapons unlock after the countdown', async () => {
+    const st = await ra.until((m) => m.phase === MatchPhase.MATCH, 10000);
+    expect(st.ufo).toBeNull();
+    expect(st.players.every((p) => p.inMatch && p.deploy === DeployState.NONE)).toBe(true);
+    expect(st.startsAt).toBeGreaterThan(Date.now() - 100);
+    const s = await sa.until((m) => m.t > st.startsAt - 200);
+    for (const i of [ia, ib]) {
+      const p = snapOf(s, i);
+      expect(p[13] & (SnapFlag.ON_SHIP | SnapFlag.DIVING)).toBe(0);
+      expect(p[13] & SnapFlag.ALIVE).not.toBe(0);
+      expect(radius(p)).toBeLessThan(PLANET.radius + 25);
+    }
+    await sleep(Math.max(0, st.startsAt - Date.now()) + 100);
+    const r = await new Promise<AbilityResultMsg>((resolve) => {
+      const off = b.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => (off(), resolve(m)));
+      b.send(C2S.ABILITY_REQUEST, { s: 5, k: 1, a: st.players.find((p) => p.index === ib)!.loadout[1]!, c: 0 });
+    });
+    expect(r.r).not.toBe(AbilityReject.PHASE);
+  });
+
+  it('an opponent leaving during the deployment hands the win to the one still there', async () => {
+    await a.leave(true);
+    await b.leave(true);
+    const c = await new Client(url).create(ROOM_NAME, { ...opts('A'), resultsMs: 900, skipDraft: true, ufoRevealMs: 400, ufoWindowMs: 6000 });
+    const rc = inbox<RoomStateMsg>(c, S2C.ROOM_STATE);
+    const ic = (await waitFor<WelcomeMsg>(c, S2C.WELCOME)).index;
+    const d = await new Client(url).joinById((await rc.until((m) => m.players.length === 1)).code, opts('B'));
+    await rc.until((m) => m.players.length === 2);
+    c.send(C2S.READY, { r: 1 });
+    d.send(C2S.READY, { r: 1 });
+    await rc.until((m) => m.phase === MatchPhase.UFO);
+    await d.leave(true);
+    const res = await rc.until((m) => m.phase === MatchPhase.RESULTS);
+    expect(res.winner).toBe(ic);
+    // Back in warmup the one still aboard is put back on the ground.
+    const warm = await rc.until((m) => m.phase === MatchPhase.FREE_ROAM, 5000);
+    expect(warm.players.every((p) => p.deploy === DeployState.NONE)).toBe(true);
+    await c.leave(true);
+  }, 20000);
 });

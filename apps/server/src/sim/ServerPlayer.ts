@@ -2,7 +2,7 @@
 import type { Client } from '@colyseus/core';
 import { manaShown, newInput, newVitals, type AbilityActor, type CharacterBody, type CharacterInput, type CharacterState, type Vitals } from '@graao/game-core';
 import { LOADOUT_SLOTS, WEAPONS, WEAPON_SLOTS, type Loadout } from '@graao/game-data';
-import type { CharacterAppearance, InputCmd, SelfStatusMsg, Vec3 } from '@graao/shared';
+import { DeployState, type CharacterAppearance, type InputCmd, type SelfStatusMsg, type Vec3 } from '@graao/shared';
 
 /** A dash accepted by the ability system, started when movement command `seq` is simulated. */
 export interface PendingDash {
@@ -41,6 +41,8 @@ export class ServerPlayer implements AbilityActor {
   respawnAt = 0;
   kills = 0;
   deaths = 0;
+  /** UFO deployment progress (aboard → diving → landed); NONE outside a deployment. */
+  deploy: DeployState = DeployState.NONE;
 
   // Abilities (owned by the server; the draft will replace the loadout in Phase 6).
   readonly cooldownEnds: number[] = new Array<number>(LOADOUT_SLOTS).fill(0);

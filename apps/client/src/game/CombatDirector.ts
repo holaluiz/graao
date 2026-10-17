@@ -133,8 +133,8 @@ export class CombatDirector {
     if (!this.alive || !this.app.input.locked) return false;
     // Hands are busy while an ability winds up (the server refuses shots then too).
     if (this.abilities.casting()) return false;
-    if (!this.online) return true;
-    if (this.phase === MatchPhase.RESULTS) return false;
+    if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
+    if (this.phase === MatchPhase.RESULTS || this.phase === MatchPhase.UFO) return false;
     if (this.phase === MatchPhase.MATCH) return this.serverNow() >= this.startsAt && !!this.me()?.inMatch;
     return true;
   }
@@ -383,7 +383,12 @@ export class CombatDirector {
     if (prev !== m.phase) {
       // The Ability Draft is a screen over the world; leaving it (match start, or called off) gives the world back.
       this.app.setDraft(m.phase === MatchPhase.ABILITY_DRAFT);
-      if (m.phase === MatchPhase.MATCH) {
+      if (m.phase === MatchPhase.UFO) {
+        // Boarding: fresh weapons and abilities arrive with SELF; nothing to fight with until everyone has landed.
+        this.weapon.reset();
+        this.abilities.onRespawn();
+        this.app.hud.setResults(null);
+      } else if (m.phase === MatchPhase.MATCH) {
         this.weapon.reset();
         this.abilities.onRespawn();
         this.match.shots = this.match.hits = this.match.damage = this.match.kills = 0;
@@ -401,6 +406,7 @@ export class CombatDirector {
       }
     }
     this.abilities.onRoomState(m);
+    this.app.deploy.onRoomState(m);
   }
 
   onSelf(s: SelfStatusMsg): void {
@@ -464,6 +470,10 @@ export class CombatDirector {
         case 'area':
         case 'fx':
           this.abilities.onEvent(e);
+          break;
+        case 'jump':
+        case 'land':
+          this.app.deploy.onEvent(e);
           break;
         case 'reload':
           if (e.by !== me) {

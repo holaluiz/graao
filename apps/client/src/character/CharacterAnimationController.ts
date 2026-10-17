@@ -23,7 +23,7 @@ function split(clip: THREE.AnimationClip): { lower: THREE.AnimationClip; upper: 
   };
 }
 
-const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall'];
+const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall', 'skydive'];
 /** Ground speed (m/s) at which each locomotion clip plays at timeScale 1 (tuned by eye). */
 const NATIVE_SPEED: Partial<Record<ClipName, number>> = { walk: 1.5, run: 4.6, sprint: 7.2 };
 
@@ -41,6 +41,10 @@ export interface AnimInput {
   /** Aim pitch relative to the local horizon, radians (+ up). */
   aimPitch: number;
   action: ActionState;
+  /** Skydiving out of the UFO (box pose, no aiming). */
+  diving?: boolean;
+  /** Height above whatever is below (m), while diving: the body flares feet-first near the ground. */
+  groundDist?: number;
 }
 
 export class CharacterAnimationController {
@@ -136,7 +140,7 @@ export class CharacterAnimationController {
 
     // Jump / land transitions.
     if (!s.grounded) this.airTime += dt;
-    if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP) this.playOneShot('jumpStart', { speed: 1.6 });
+    if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP && !s.diving) this.playOneShot('jumpStart', { speed: 1.6 });
     if (!this.wasGrounded && s.grounded && this.airTime > 0.35) this.playOneShot('land', { speed: 2.2 });
     if (s.grounded) this.airTime = 0;
     this.wasGrounded = s.grounded;
@@ -160,6 +164,7 @@ export class CharacterAnimationController {
         loco = this.airTime > 0.9 ? 'fall' : 'air';
         break;
     }
+    if (s.diving) loco = 'skydive';
     for (const [name, l] of this.lower) l.target = name === loco ? 1 : 0;
     const native = NATIVE_SPEED[loco];
     const scale = native ? THREE.MathUtils.clamp(s.speed / native, 0.65, 1.45) : 1;
@@ -174,7 +179,7 @@ export class CharacterAnimationController {
     if (this.upperShot && this.time < this.upperShot.until) {
       this.upperActions.get(this.upperShot.name)!.target = 1;
       upperW = 1;
-    } else if (s.aiming) {
+    } else if (s.aiming && !s.diving) {
       const p = THREE.MathUtils.clamp(s.aimPitch / 0.9, -1, 1);
       this.upperActions.get('aim')!.target = 1 - Math.abs(p);
       if (p > 0) this.upperActions.get('aimUp')!.target = p;

@@ -7,6 +7,8 @@
  *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs
  *   top           place name, match status chip, room code, kill feed
  *   overlays      countdown / banners, elimination screen, results
+ *   deploy        UFO / drop panel (bottom-centre): what to do, the jump key, the window bar, the altitude; combat
+ *                 widgets hide while aboard and falling (`setMode`)
  *
  * Attention: QUIET (static), RELEVANT (brief motion), URGENT (pulse once), CRITICAL (low health, persistent).
  * Every hit kind has its own shape, not only a color.
@@ -73,6 +75,20 @@ export interface ResultsView {
   secondsLeft: number;
 }
 
+/** UFO deployment panel (aboard, falling, landed). */
+export interface DeployView {
+  title: string;
+  line: string;
+  /** Key cap and what it does (the jump while aboard). */
+  key?: string;
+  keyLabel?: string;
+  /** 0..1 of the jump window still open. */
+  progress?: number;
+  /** Metres above the ground (falling). */
+  altitude?: number;
+  tone: 'quiet' | 'relevant' | 'urgent';
+}
+
 export class Hud {
   readonly el = el('div', 'hud');
   private readonly placeEl = el('div', 'place', this.el);
@@ -133,6 +149,17 @@ export class Hud {
   private readonly deathSub = el('div', 'death-sub', this.deathEl);
   private readonly resultsEl = el('div', 'results', this.el);
   private readonly lowHealthEl = el('div', 'low-health', this.el);
+  private readonly deployEl = el('div', 'deploy', this.el);
+  private readonly deployTitle = el('div', 'deploy-title', this.deployEl);
+  private readonly deployRow = el('div', 'deploy-row', this.deployEl);
+  private readonly deployKey = el('div', 'deploy-key', this.deployRow);
+  private readonly deployKeyLabel = el('div', 'deploy-key-label', this.deployRow);
+  private readonly deployLine = el('div', 'deploy-line', this.deployEl);
+  private readonly deployBar = el('div', 'deploy-bar', this.deployEl);
+  private readonly deployFill = el('i', '', this.deployBar);
+  private readonly altimeter = el('div', 'altimeter', this.el);
+  private readonly altFill = el('i', '', this.altimeter);
+  private lastDeploy = '';
 
   private placeTimer = 0;
   private noticeTimer = 0;
@@ -150,6 +177,9 @@ export class Hud {
     this.noticeEl.hidden = true;
     this.ammoHint.hidden = true;
     this.slowChip.hidden = true;
+    this.deployEl.hidden = true;
+    this.altimeter.hidden = true;
+    this.el.dataset.mode = 'combat';
     for (let i = 0; i < 2; i++) {
       const root = el('div', 'slot', this.weaponsEl);
       const key = el('div', 'slot-key', root);
@@ -173,6 +203,37 @@ export class Hud {
 
   show(v: boolean): void {
     this.el.hidden = !v;
+  }
+
+  /** Combat widgets (vitals, weapons, abilities, reticle) hide aboard the UFO and during the drop. */
+  setMode(mode: 'combat' | 'ufo' | 'drop'): void {
+    this.el.dataset.mode = mode;
+  }
+
+  /** The UFO / drop panel; null hides it. */
+  setDeploy(v: DeployView | null): void {
+    this.deployEl.hidden = !v;
+    this.altimeter.hidden = !v || v.altitude === undefined;
+    if (!v) {
+      this.lastDeploy = '';
+      return;
+    }
+    const key = `${v.title}|${v.line}|${v.key ?? ''}|${v.tone}`;
+    if (key !== this.lastDeploy) {
+      const titleChanged = !this.lastDeploy.startsWith(`${v.title}|`);
+      this.lastDeploy = key;
+      this.deployTitle.textContent = v.title;
+      this.deployLine.textContent = v.line;
+      this.deployRow.hidden = !v.key;
+      this.deployKey.textContent = v.key ?? '';
+      this.deployKeyLabel.textContent = v.keyLabel ?? '';
+      this.deployEl.dataset.tone = v.tone;
+      if (titleChanged && v.tone !== 'quiet') replay(this.deployEl, 'pop');
+    }
+    this.deployBar.hidden = v.progress === undefined;
+    if (v.progress !== undefined) this.deployFill.style.width = `${Math.max(0, Math.min(1, v.progress)) * 100}%`;
+    // Altimeter: a vertical gauge on the right, 100 m full scale.
+    if (v.altitude !== undefined) this.altFill.style.height = `${Math.max(0, Math.min(1, v.altitude / 100)) * 100}%`;
   }
 
   // ------------------------------------------------------------------------------------------------ top

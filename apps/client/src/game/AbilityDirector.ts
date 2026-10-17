@@ -223,8 +223,8 @@ export class AbilityDirector {
   /** Can this player fight right now (phase rule mirror; the server decides). */
   private canFight(): boolean {
     const c = this.app.combat;
-    if (!this.online) return true;
-    if (c.phase === MatchPhase.RESULTS) return false;
+    if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
+    if (c.phase === MatchPhase.RESULTS || c.phase === MatchPhase.UFO) return false;
     if (c.phase === MatchPhase.MATCH) return this.serverNow() >= c.matchStartsAt && c.inMatch;
     return true;
   }
@@ -831,9 +831,10 @@ export class AbilityDirector {
     });
     hud.setAbilities(slots);
     hud.setEffects(Math.max(0, (this.ctl.slowEnd - now) / 1000), this.ctl.slowFactor);
-    // Ultimate charged (cooldown over, alive): URGENT once, then the HUD settles to RELEVANT/QUIET.
+    // Ultimate charged (cooldown over, alive, allowed to fight — never announced aboard the UFO or mid-drop):
+    // URGENT once, then the HUD settles to RELEVANT/QUIET.
     const ult = this.ctl.loadout[ULTIMATE_SLOT]!;
-    const ready = alive && this.ctl.cooldownLeft(ULTIMATE_SLOT, now) <= 0;
+    const ready = alive && fight && this.ctl.cooldownLeft(ULTIMATE_SLOT, now) <= 0;
     if (this.ultKnown && ready && !this.ultWasReady) {
       hud.ultimateReady(ABILITIES[ult].name);
       this.app.audio.play('ult.ready');

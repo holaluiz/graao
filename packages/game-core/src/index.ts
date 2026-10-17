@@ -11,3 +11,4 @@ export * from './match';
 export * from './abilities';
 export * from './abilitySystem';
 export * from './draft';
+export * from './deploy';

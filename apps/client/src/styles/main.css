@@ -242,6 +242,45 @@ body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-u
 
 .nameplate.down { opacity: .45; text-decoration: line-through; }
 
+/* ------------------------------------------------------------------------------------------- UFO deployment */
+/* Aboard and falling, the combat widgets step aside: nobody can fight until everyone has landed. */
+.hud[data-mode='ufo'] :is(.vitals, .weapons, .abilities, .reticle-wrap, .ammo-hint),
+.hud[data-mode='drop'] :is(.weapons, .abilities, .reticle-wrap, .ammo-hint) { display: none !important; }
+.deploy { position: absolute; left: 50%; bottom: 46px; transform: translateX(-50%); display: grid; justify-items: center; gap: 5px; text-align: center;
+  min-width: min(380px, calc(100vw - 32px)); padding: 8px 16px 10px; border: 3px solid var(--ink); border-radius: 20px; background: rgba(243, 233, 216, .93);
+  box-shadow: 0 5px 0 var(--ink); }
+.deploy.pop { animation: deploy-pop .4s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes deploy-pop { from { transform: translateX(-50%) scale(.88); } to { transform: translateX(-50%) scale(1); } }
+.deploy-title { font-weight: 900; font-size: 17px; letter-spacing: .1em; }
+.deploy[data-tone='relevant'] .deploy-title { color: #b8641f; }
+.deploy[data-tone='urgent'] .deploy-title { color: var(--danger); }
+.deploy-row { display: flex; align-items: center; gap: 10px; }
+.deploy-key { font-weight: 900; font-size: 14px; letter-spacing: .12em; padding: 6px 16px; border: 3px solid var(--ink); border-radius: 12px; background: var(--sun);
+  box-shadow: 0 4px 0 var(--ink); }
+.deploy[data-tone='relevant'] .deploy-key { animation: deploy-key 1.3s ease-in-out infinite; }
+@keyframes deploy-key { 50% { transform: translateY(2px); box-shadow: 0 2px 0 var(--ink); } }
+.deploy-key-label { font-weight: 900; font-size: 15px; letter-spacing: .1em; }
+.deploy-line { font-weight: 800; font-size: 13px; opacity: .8; }
+.deploy-bar { width: 100%; height: 8px; border: 2px solid var(--ink); border-radius: 6px; background: rgba(42, 33, 48, .15); overflow: hidden; }
+.deploy-bar > i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, var(--orange), var(--sun)); transition: width .2s linear; }
+.deploy[data-tone='urgent'] .deploy-bar > i { background: linear-gradient(90deg, var(--danger), var(--orange)); }
+.altimeter { position: absolute; right: 26px; top: 50%; transform: translateY(-50%); width: 14px; height: min(260px, 40vh); border: 3px solid var(--ink); border-radius: 10px;
+  background: rgba(243, 233, 216, .7); overflow: hidden; }
+.altimeter > i { position: absolute; left: 0; right: 0; bottom: 0; height: 100%; background: linear-gradient(0deg, var(--leaf), #bfe3ff); transition: height .1s linear; }
+.altimeter::after { content: ''; position: absolute; left: -3px; right: -3px; bottom: 12%; border-top: 3px dashed var(--ink); opacity: .55; }
+
+/* Landmark names over the planet while aboard (DOM, never in the 3D scene). */
+.landmarks { position: absolute; inset: 0; pointer-events: none !important; overflow: hidden; }
+.landmark { position: absolute; left: 0; top: 0; font-weight: 900; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; padding: 3px 9px 3px 20px;
+  border-radius: 999px; background: rgba(243, 233, 216, .9); border: 2px solid var(--ink); white-space: nowrap; will-change: transform; }
+.landmark::before { content: ''; position: absolute; left: 5px; top: 50%; width: 7px; height: 7px; margin-top: -5.5px; border-radius: 50%; background: var(--orange);
+  border: 2px solid var(--ink); box-sizing: content-box; }
+
+/* Into the world reveal: the page opens a pigment hole onto the planet (never a black fade). */
+.paper-wipe { position: fixed; inset: 0; z-index: 30; pointer-events: none; background: var(--paper); animation: graao-reveal 1.25s cubic-bezier(.6, 0, .3, 1) forwards;
+  -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent var(--r, 0%), #000 calc(var(--r, 0%) + 12%));
+  mask-image: radial-gradient(circle at 50% 50%, transparent var(--r, 0%), #000 calc(var(--r, 0%) + 12%)); }
+
 @media (max-width: 980px) {
   .abilities { bottom: 172px; }
 }

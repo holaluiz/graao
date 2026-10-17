@@ -24,6 +24,8 @@ export class GraaoThirdPersonCamera {
   readonly up = new THREE.Vector3(0, 1, 0);
   pitch = -0.18;
   aim = false;
+  /** Extra field of view (degrees), e.g. the speed of a dive. */
+  fovBoost = 0;
   private aimBlend = 0;
   private distance = 4.4;
   private readonly baseDistance = 4.4;
@@ -107,7 +109,7 @@ export class GraaoThirdPersonCamera {
     this.camera.position.copy(pos);
     this.camera.up.copy(this.up);
     this.camera.lookAt(this.pivot.clone().addScaledVector(view, 8));
-    const fov = THREE.MathUtils.lerp(70, 52, this.aimBlend);
+    const fov = THREE.MathUtils.lerp(70, 52, this.aimBlend) + this.fovBoost;
     if (Math.abs(this.camera.fov - fov) > 0.01) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();

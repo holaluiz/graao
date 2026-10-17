@@ -48,6 +48,8 @@ export interface CharacterState {
   dashSpeed: number;
   /** Movement speed multiplier (1 = normal; < 1 while slowed by an ability). */
   slow: number;
+  /** Skydiving out of the UFO: capped fall, wide steering, no jumps; cleared on the first ground contact. */
+  diving: boolean;
 }
 
 export interface CharacterInput {
@@ -72,6 +74,7 @@ export function createCharacterState(pos: Vec3, facing: Vec3): CharacterState {
     dashDir: v3(),
     dashSpeed: 0,
     slow: 1,
+    diving: false,
   };
 }
 
@@ -161,10 +164,12 @@ export class CharacterMotor {
   /** Advances `s` by one fixed step `dt` with input `inp`. Deterministic for the same state, input and world. */
   step(body: CharacterBody, s: CharacterState, inp: CharacterInput, dt: number): void {
     const up = v3normalize(s.pos, this.tmpUp);
-    const jumpDown = (inp.buttons & InputButton.JUMP) !== 0;
+    const diving = s.diving;
+    const jumpDown = !diving && (inp.buttons & InputButton.JUMP) !== 0;
     const sprint = (inp.buttons & InputButton.SPRINT) !== 0;
-    s.aiming = (inp.buttons & InputButton.AIM) !== 0;
-    const firing = (inp.buttons & InputButton.FIRE) !== 0;
+    // Hands are spread while skydiving: no aiming, no firing pose.
+    s.aiming = !diving && (inp.buttons & InputButton.AIM) !== 0;
+    const firing = !diving && (inp.buttons & InputButton.FIRE) !== 0;
     if (v3len(inp.aim) > 0.5) v3normalize(inp.aim, s.aim);
 
     // Wish direction on the tangent plane, length ≤ 1.
@@ -178,8 +183,12 @@ export class CharacterMotor {
     const h = v3projectOnPlane(s.vel, up, this.tmpH);
 
     const forwardish = wishLen > 0.1 ? v3dot(wish, s.facing) / Math.max(wishLen, 1e-6) : 0;
-    const canSprint = sprint && !s.aiming && !firing && forwardish > 0.3;
-    const maxSpeed = (s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed) * s.slow;
+    const canSprint = !diving && sprint && !s.aiming && !firing && forwardish > 0.3;
+    const maxSpeed = diving
+      ? sprint
+        ? MOVEMENT.diveFastSpeed
+        : MOVEMENT.diveSpeed
+      : (s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed) * s.slow;
     const dashing = s.dashSteps > 0;
     if (dashing) {
       // Dash: a fixed ground-plane velocity along the dash direction; no steering.
@@ -188,7 +197,7 @@ export class CharacterMotor {
     } else {
       const target = v3set(this.tmpTarget, wish.x * maxSpeed, wish.y * maxSpeed, wish.z * maxSpeed);
       // Accelerate horizontal velocity toward the target.
-      const accel = s.grounded ? (wishLen > 0.05 ? MOVEMENT.groundAccel : MOVEMENT.groundDecel) : MOVEMENT.airAccel;
+      const accel = diving ? MOVEMENT.diveAccel : s.grounded ? (wishLen > 0.05 ? MOVEMENT.groundAccel : MOVEMENT.groundDecel) : MOVEMENT.airAccel;
       const dx = target.x - h.x, dy = target.y - h.y, dz = target.z - h.z;
       const dl = Math.hypot(dx, dy, dz);
       const maxDv = accel * dt;
@@ -213,7 +222,11 @@ export class CharacterMotor {
     if (dashing) vs = s.grounded ? -0.5 : 0;
     else if (!s.grounded || jumped) vs -= PLANET.gravity * dt;
     else vs = -0.5; // keep contact; snap-to-ground does the rest
-    vs = Math.max(vs, -MOVEMENT.terminalSpeed);
+    if (diving) {
+      // Skydive: the fall is capped (head-first with sprint is faster); slowing down from a faster fall brakes smoothly.
+      const terminal = sprint ? MOVEMENT.diveFastTerminalSpeed : MOVEMENT.diveTerminalSpeed;
+      if (vs < -terminal) vs = Math.min(-terminal, vs + MOVEMENT.diveBrake * dt);
+    } else vs = Math.max(vs, -MOVEMENT.terminalSpeed);
 
     const desired = v3set(this.tmpDesired, (h.x + up.x * vs) * dt, (h.y + up.y * vs) * dt, (h.z + up.z * vs) * dt);
 
@@ -243,6 +256,8 @@ export class CharacterMotor {
       vs = 0;
       s.grounded = true;
       s.airTime = 0;
+      // First ground contact ends the dive (landing).
+      s.diving = false;
     } else {
       // Hit a ceiling: kill upward speed.
       if (vs > 0 && movedUp < vs * 0.5) vs = Math.min(vs, movedUp);

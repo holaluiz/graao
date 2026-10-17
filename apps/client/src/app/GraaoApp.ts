@@ -1,8 +1,9 @@
 /**
  * GraaoApp: owns the renderer, the shared world, the local character and the presentation phases.
  * Phases (GRAHudDirector): MENU → CHARACTER_CREATOR → MATCH (free roam / online). Each phase controls visible UI,
- * camera context and input. Inside MATCH the server's match phase (warmup → match → results) drives the HUD through
- * the CombatDirector.
+ * camera context and input. Inside MATCH the server's match phase (warmup → draft → UFO → match → results) drives
+ * the HUD through the CombatDirector; the UFO and DROP presentation phases belong to the DeployDirector (aboard,
+ * the ride owns the camera and the local player is not simulated).
  */
 import * as THREE from 'three';
 import { createGameWorld, latLonToDir, mulberry32, type GameWorld } from '@graao/game-core';
@@ -13,8 +14,10 @@ import { GRAAudioManager } from '../audio/GRAAudioManager';
 import { GRAAnimationLibrary } from '../character/animation/GRAAnimationLibrary';
 import { CharacterPartLibrary } from '../character/CharacterAppearanceController';
 import { GraaoCharacter } from '../character/GraaoCharacter';
+import type { AnimInput } from '../character/CharacterAnimationController';
 import { weaponTriangles } from '../character/WeaponModels';
 import { CombatDirector } from '../game/CombatDirector';
+import { DeployDirector } from '../game/DeployDirector';
 import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
 import { LocalPlayer } from '../game/LocalPlayer';
@@ -69,6 +72,8 @@ export class GraaoApp {
   local!: LocalPlayer;
   character!: GraaoCharacter;
   combat!: CombatDirector;
+  /** UFO deployment presentation (reveal, ride, dive, landing). */
+  deploy!: DeployDirector;
   net: NetSession | null = null;
   phase: HudPhase = 'BOOT';
   appearance: CharacterAppearance;
@@ -154,6 +159,7 @@ export class GraaoApp {
     this.r.scene.add(this.character.root);
     this.combat = new CombatDirector(this);
     this.combat.responseScale = RESPONSE_SCALE[this.cameraResponse];
+    this.deploy = new DeployDirector(this);
     if (new URLSearchParams(location.search).has('lineup')) this.spawnLineup(dir);
     this.buildUi();
     t = performance.now();
@@ -311,7 +317,10 @@ export class GraaoApp {
 
   setPhase(p: HudPhase): void {
     this.phase = p;
-    if (p !== 'MATCH') this.draftUi.show(false);
+    if (p !== 'MATCH') {
+      this.draftUi.show(false);
+      this.deploy.reset();
+    }
     this.menu.show(p === 'MENU');
     this.creator.show(p === 'CHARACTER_CREATOR');
     if (p === 'CHARACTER_CREATOR') this.creator.setAppearance(this.appearance);
@@ -335,6 +344,8 @@ export class GraaoApp {
     this.camera.reset(this.spawn, this.menuFacing);
     this.hud.setRoom(null);
     this.setPhase('MATCH');
+    // Solo starts like a match: from the UFO (?nodrop skips it).
+    if (!new URLSearchParams(location.search).has('nodrop')) this.deploy.startOffline();
   }
 
   private async online(kind: 'create' | 'join', code: string, name: string): Promise<void> {
@@ -379,30 +390,41 @@ export class GraaoApp {
 
     const feet = this.tmpPos;
     let facing = this.tmpFacing;
-    let anim = { moveState: MovementState.IDLE as MovementState, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE as ActionState };
+    let anim: AnimInput = { moveState: MovementState.IDLE as MovementState, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE as ActionState };
 
     if (this.phase === 'MATCH') {
       const look = this.input.takeLook();
-      this.camera.look(look.yaw, look.pitch);
-      this.camera.aim = this.input.isDown('aim') && this.combat.alive;
-      const frame = this.camera.frame;
-      const alpha = this.local.update(dt, this.input, frame, !!this.net, this.combat.frozen);
-      this.net?.update(dt);
-      this.local.renderPosition(alpha, feet);
-      facing = this.local.renderFacing(alpha, facing);
-      this.camera.update(dt, feet, this.world.physics);
+      const riding = this.deploy.riding;
+      if (riding) {
+        // Aboard the UFO: the ride owns the camera; the local player is not simulated (the server keeps it aboard).
+        this.deploy.rideCamera(dt, look);
+        this.net?.update(dt);
+        feet.copy(this.deploy.focus);
+      } else {
+        this.camera.look(look.yaw, look.pitch);
+        this.camera.aim = this.input.isDown('aim') && this.combat.alive && !this.deploy.diving;
+        const frame = this.camera.frame;
+        const alpha = this.local.update(dt, this.input, frame, !!this.net, this.combat.frozen);
+        this.net?.update(dt);
+        this.local.renderPosition(alpha, feet);
+        facing = this.local.renderFacing(alpha, facing);
+        this.camera.update(dt, feet, this.world.physics);
+      }
       this.combat.update(dt);
+      this.deploy.update(dt);
       const s = this.local.state;
       const up = this.tmpUp.copy(feet).normalize();
       anim = {
         moveState: s.moveState,
         speed: this.local.speed(),
         grounded: s.grounded,
-        aiming: this.combat.aimPose(s.aiming),
+        aiming: this.combat.aimPose(s.aiming) && !s.diving,
         aimPitch: Math.asin(THREE.MathUtils.clamp(s.aim.x * up.x + s.aim.y * up.y + s.aim.z * up.z, -1, 1)),
         action: this.combat.animAction(),
+        diving: s.diving,
+        groundDist: this.deploy.groundDist,
       };
-      this.obstruction.update(dt, this.r.camera.position, feet, up);
+      if (!riding) this.obstruction.update(dt, this.r.camera.position, feet, up);
       this.updatePlace(feet);
     } else {
       feet.copy(this.spawn);
@@ -424,6 +446,7 @@ export class GraaoApp {
     this.draftUi.update(this.net ? this.net.serverNow() : Date.now());
     this.r.updateSun(this.phase === 'MATCH' ? feet : this.spawn, this.time);
     this.planet.update(this.time, feet, this.r.sunDir);
+    this.planet.setOrbit(this.r.setAltitude(PLANET.radius), this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
     this.r.render();
     this.frameMs = performance.now() - t0;
     this.dev.frame();
@@ -499,7 +522,8 @@ export class GraaoApp {
       'props dissolvendo': this.obstruction.stats.fading,
       'VFX ativos': this.vfx.active,
       habilidades: this.combat.abilities.stats(),
-      fase: this.phase,
+      fase: this.deploy && this.deploy.mode !== 'none' ? `${this.phase} / ${this.deploy.mode}` : this.phase,
+      'tris OVNI': this.deploy?.ufo.triangles ?? 0,
       posição: s ? `lat ${lat.toFixed(1)} lon ${lon.toFixed(1)} r ${Math.hypot(s.pos.x, s.pos.y, s.pos.z).toFixed(2)}` : '-',
       movimento: s ? `${stateName(s.moveState)} ${this.local.speed().toFixed(2)} m/s ${s.grounded ? 'no chão' : 'no ar'}` : '-',
       planeta: `R ${PLANET.radius} m`,

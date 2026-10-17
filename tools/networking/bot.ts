@@ -5,6 +5,7 @@
  * Match flow: --ready marks the bot READY as soon as someone else is; in the Ability Draft it picks a random free
  * ability after a short think (--pick sun_orb,wind_step,... tries those first, round by round: handy to force a
  * conflict with a human); --idle-draft never picks (the server chooses for it when time runs out).
+ * UFO: --jump 2 leaves the ship 2 s after the hatch opens (without it the bot rides until it is dropped at the close).
  */
 import { Client } from '@colyseus/sdk';
 import { randomAppearance } from '@graao/game-data';
@@ -27,6 +28,7 @@ import {
   type DraftStateMsg,
   type InputCmd,
   type RoomStateMsg,
+  type UfoRouteMsg,
   type SnapshotMsg,
   type WelcomeMsg,
 } from '@graao/shared';
@@ -59,8 +61,18 @@ const autoReady = args.includes('--ready');
 const idleDraft = args.includes('--idle-draft');
 const wanted = arg('pick', '').split(',').filter(Boolean);
 let ready = false;
+const jumpAfter = args.includes('--jump') ? Number(arg('jump', '2')) : -1;
+let jumpRoute: UfoRouteMsg | null = null;
 room.onMessage(S2C.ROOM_STATE, (m: RoomStateMsg) => {
   const me = m.players.find((p) => p.index === index);
+  if (jumpAfter >= 0 && m.ufo && me?.deploy === 1 && m.ufo.t0 !== jumpRoute?.t0) {
+    jumpRoute = m.ufo;
+    // Server time ≈ local time on one machine; good enough for a test bot.
+    setTimeout(() => {
+      room.send(C2S.UFO_JUMP, {});
+      console.log('[bot] jump');
+    }, Math.max(0, m.ufo.open + jumpAfter * 1000 - Date.now()));
+  }
   ready = !!me?.ready;
   if (autoReady && !ready && m.phase === MatchPhase.FREE_ROAM && m.players.some((p) => p.index !== index && p.ready)) {
     room.send(C2S.READY, { r: 1 });

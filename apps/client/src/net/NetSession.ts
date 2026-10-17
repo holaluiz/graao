@@ -215,6 +215,8 @@ export class NetSession {
       const simDt = s[19] ?? 0;
       if (index === this.myIndex) {
         this.app.combat.onSelfSnapshot(health, shield, mana, (flags & SnapFlag.ALIVE) !== 0);
+        // Aboard the UFO nothing is simulated locally; the dive starts from the `jump` event, not from a snapshot.
+        if ((flags & SnapFlag.ON_SHIP) !== 0 || this.app.deploy.riding) continue;
         const st: CharacterState = createCharacterState({ x: px / POS_SCALE, y: py / POS_SCALE, z: pz / POS_SCALE }, { x: fx / FACING_SCALE, y: fy / FACING_SCALE, z: fz / FACING_SCALE });
         const len = Math.hypot(st.facing.x, st.facing.y, st.facing.z) || 1;
         st.facing.x /= len;
@@ -225,6 +227,7 @@ export class NetSession {
         st.vel.z = vz / VEL_SCALE;
         st.grounded = (flags & SnapFlag.GROUNDED) !== 0;
         st.aiming = (flags & SnapFlag.AIMING) !== 0;
+        st.diving = (flags & SnapFlag.DIVING) !== 0;
         st.airTime = st.grounded ? 0 : 1;
         st.moveState = move as CharacterState['moveState'];
         st.aim = { ...this.app.local.state.aim };
@@ -303,6 +306,10 @@ export class NetSession {
 
   sendDraftPick(round: number, id: string): void {
     if (!this.left) this.room.send(C2S.DRAFT_PICK, { r: round, a: id });
+  }
+
+  sendUfoJump(): void {
+    if (!this.left) this.room.send(C2S.UFO_JUMP, {});
   }
 
   sendReady(ready: boolean): void {

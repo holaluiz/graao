@@ -14,7 +14,7 @@ docs stay in English.
 | 4 · Abilities | Guns and magic | TESTING | 8 basics + 3 Ultimates from 8 primitives, executed by the server's GRAAbilitySystem. Integration test "abilities through the authoritative server" passes (ownership, phase, cooldown, Mana, server projectile hit, areas with warning → damage, slow, knockback, elimination by abilities only → A wins). In the browser against a bot: Orbe Solar hit confirmed (hitmarker with ability diamonds), Mana/cooldown sweep, Explosão de Pólen and Meteoro Solar ground warnings, Ultimate Marks on both players. Not yet played person vs person on two machines. |
 | 5 · Creator | Two visibly different avatars seen correctly by each other | TESTING | Creator UI works (tabs, instant parts/colors, drag/zoom); appearance replicates on join and on change. Supabase persistence TODO (localStorage today). |
 | 6 · Draft | Players enter with drafted abilities | TESTING | `AbilityDraft` rules unit-tested (7 tests); integration test "ability draft through the authoritative server" passes (hidden picks, a disputed ability kept by priority and the loser repicking, a timeout pick, the match starting with the drafted loadouts, ownership enforced). In the browser against the bot: READY → draft screen → picks by click, server picks on timeout, reveal → match with the drafted loadout in the HUD and the drafted Ultimate's mark. Not yet drafted person vs person. |
-| 7 · UFO | Creator → draft → UFO → drop → combat as one flow | TODO | |
+| 7 · UFO | Creator → draft → UFO → drop → combat as one flow | TESTING | Integration test "UFO deployment through the authoritative server (gate 7)" passes: READY boards both onto the UFO (route over the arena, riders not simulated, no fighting), a jump before the hatch opens is refused, A's jump starts exactly at the shared `diveStart(route, t)`, A dives under its own control and lands, B is dropped at the close and lands, the match starts where they landed, an opponent leaving mid-deployment hands the win. In the browser against the network bot (own server on 2569): READY → draft → world reveal → ride → jump → skydive (reconciliation error 0.1 cm) → landing → bot dropped and landed → countdown → fight, all seen; solo starts with the same ritual. Not yet played person vs person on two machines. See `docs/gameplay/UFO_DEPLOYMENT.md`. |
 | 8 · Complete match | Victory/Defeat/Lobby/summary | IN_PROGRESS | Results screen (VITÓRIA / DERROTA / EMPATE, eliminations, damage, accuracy) and automatic return to warmup work; Supabase summary and an explicit lobby are TODO. |
 | 9 · Public deploy | Public URL works | TODO | |
 | 10 · External test | Two PCs, two networks | TODO | |
@@ -23,7 +23,7 @@ docs stay in English.
 
 | System | Status | Notes |
 |---|---|---|
-| Monorepo (pnpm, TS strict, Vite, Vitest, ESLint) | DONE | `pnpm dev / build / test / lint / typecheck` pass; 91 tests. Test files run sequentially (`fileParallelism: false`) so the real-time integration suite is not starved by world generation in parallel workers |
+| Monorepo (pnpm, TS strict, Vite, Vitest, ESLint) | DONE | `pnpm dev / build / test / lint / typecheck` pass; 105 tests (the 60 Hz interpolation smoothness test is timing-sensitive and can fail under heavy machine load; it passes when rerun). Test files run sequentially (`fileParallelism: false`) so the real-time integration suite is not starved by world generation in parallel workers |
 | Spherical world (terrain, features, layout, colliders) | DONE | Deterministic; identical on client/server (tested). Spawn points are kept free of props (tested with a capsule overlap query) |
 | GraaoSphericalCharacterController | DONE | Radial gravity, Rapier KCC with per-step up; full-lap test passes |
 | Third-person camera on the sphere | DONE | Transported heading, terrain pull-in, aim FOV/shoulder, recoil kick and shake with FULL / REDUCED / OFF |
@@ -45,7 +45,7 @@ docs stay in English.
 | GRAAbilitySystem + Ultimate Marks | TESTING | See `docs/architecture/ABILITY_SYSTEM.md` |
 | Ability Draft (rules, server, screen) | TESTING | See `docs/gameplay/ABILITY_DRAFT.md`; the network bot drafts too (`--ready`, `--pick`) |
 | Camera obstruction near the camera | DONE | Props within 1.1 m of the camera fade (Rapier ball query), measured: 0.9 m → fades, 3 m → not |
-| UFO deployment | TODO | Next slice (Phase 7) |
+| UFO deployment (route, ride, jump, skydive, landing, reveal) | TESTING | Shared `deploy.ts` (9 unit tests) + room UFO phase (5 integration tests); client `DeployDirector`, code-authored `UfoModel`, dotted route, landmark labels, speed lines, orbit sky by altitude. Measured: reveal 79 draw calls / 313 k tris |
 | Supabase, R2, deploy | TODO | Credentials needed (see Blockers) |
 
 ## Known gaps

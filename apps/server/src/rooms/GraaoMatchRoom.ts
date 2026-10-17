@@ -14,8 +14,14 @@
  * host: Mana, cooldowns, wind-ups, server projectiles, areas, and dashes started on the movement stream.
  *
  * Match flow: warmup (FREE_ROAM, respawns on) → everyone READY → ABILITY_DRAFT (4 simultaneous rounds, the drafted
- * loadouts replace the warmup ones) → MATCH (countdown, then weapons unlock, no respawns) → last participant standing
- * wins → RESULTS → warmup again. Rules live in `@graao/game-core` (match.ts, draft.ts).
+ * loadouts replace the warmup ones) → UFO (the ship flies a route over the arena; each participant jumps when they
+ * like inside the window, or is dropped when it closes, and skydives down under their own control) → everyone
+ * landed → MATCH (countdown, then weapons unlock, no respawns) → last participant standing wins → RESULTS → warmup
+ * again. Rules live in `@graao/game-core` (match.ts, draft.ts, deploy.ts).
+ *
+ * UFO: riders are not simulated (their position follows the ship; inputs are acknowledged and dropped). A jump
+ * starts a dive from the exact state sent in the `jump` event, and from then on the rider's commands drive the
+ * shared controller like on the ground. Nobody can deal or take damage until the fight starts.
  */
 import { Room, ServerError, type Client } from '@colyseus/core';
 import {
@@ -35,7 +41,14 @@ import {
   createCharacterState,
   decideMatch,
   decodeInput,
+  diveStart,
+  everyoneLanded,
   everyoneReady,
+  jumpOpen,
+  makeUfoRoute,
+  ufoHeading,
+  ufoPosition,
+  ufoSpeed,
   falloff,
   latLonToDir,
   muzzlePoint,
@@ -49,13 +62,14 @@ import {
   type GameWorld,
   type PlayerHitTarget,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, SPAWNS, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, validateAppearance, type AbilityId } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, PLANET, SPAWNS, UFO, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, validateAppearance, type AbilityId } from '@graao/game-data';
 import {
   AbilityReject,
   ActionState,
   C2S,
   CLIENT_VERSION,
   DIR_SCALE,
+  DeployState,
   DraftReject,
   FACING_SCALE,
   INPUT_JITTER_BUFFER,
@@ -90,6 +104,7 @@ import {
   validatePing,
   validateReady,
   validateSwitch,
+  validateUfoJump,
   type AbilityResultMsg,
   type EventsMsg,
   type GameEvent,
@@ -98,6 +113,7 @@ import {
   type PlayerSnap,
   type RoomStateMsg,
   type SnapshotMsg,
+  type UfoRouteMsg,
   type Vec3,
   type WelcomeMsg,
 } from '@graao/shared';
@@ -132,6 +148,12 @@ export interface RoomCreateOptions {
   draftPickMs?: number;
   draftRepickMs?: number;
   draftRevealMs?: number;
+  /** Dev/tests: no UFO deployment; the match starts on the spawns right after the draft (or READY). */
+  skipUfo?: boolean;
+  /** Tests: UFO reveal and jump window lengths, and how long a diver may stay airborne after the window (ms). */
+  ufoRevealMs?: number;
+  ufoWindowMs?: number;
+  ufoLandTimeoutMs?: number;
 }
 
 /** Dev/tests may pick a loadout on join (JoinOptions.loadout); production always uses the server's (draft) loadout. */
@@ -169,6 +191,11 @@ export class GraaoMatchRoom extends Room {
   private skipDraft = false;
   private draftTimings: Partial<{ pickMs: number; repickMs: number; revealMs: number }> = {};
   private draft: AbilityDraft | null = null;
+  private skipUfo = false;
+  private ufoTimings: Partial<{ revealMs: number; windowMs: number }> = {};
+  private landTimeoutMs: number = UFO.landTimeoutMs;
+  /** The ship's route while the UFO phase runs. */
+  private ufo: UfoRouteMsg | null = null;
   private tick = 0;
   private lastTickAt = 0;
   private snapshotAcc = 0;
@@ -188,6 +215,10 @@ export class GraaoMatchRoom extends Room {
     for (const [k, v] of [['pickMs', options.draftPickMs], ['repickMs', options.draftRepickMs], ['revealMs', options.draftRevealMs]] as const) {
       if (typeof v === 'number' && Number.isFinite(v)) this.draftTimings[k] = clampMs(v, 0);
     }
+    this.skipUfo = options.skipUfo === true;
+    if (typeof options.ufoRevealMs === 'number') this.ufoTimings.revealMs = clampMs(options.ufoRevealMs, UFO.revealMs);
+    if (typeof options.ufoWindowMs === 'number') this.ufoTimings.windowMs = Math.max(1, clampMs(options.ufoWindowMs, UFO.windowMs));
+    this.landTimeoutMs = clampMs(options.ufoLandTimeoutMs, UFO.landTimeoutMs);
     this.world = await getWorld();
     this.motor = new CharacterMotor(this.world.physics);
     this.abilities = new GRAAbilitySystem(this.abilityHost());
@@ -200,6 +231,7 @@ export class GraaoMatchRoom extends Room {
     this.onMessage(C2S.READY, (c, m) => this.onReady(c, m));
     this.onMessage(C2S.ABILITY_REQUEST, (c, m) => this.onAbility(c, m));
     this.onMessage(C2S.DRAFT_PICK, (c, m) => this.onDraftPick(c, m));
+    this.onMessage(C2S.UFO_JUMP, (c, m) => this.onUfoJump(c, m));
     this.onMessage(C2S.PING, (c, m) => {
       const v = validatePing(m);
       if (v) c.send(S2C.PONG, { c: v.c, t: Date.now(), tick: Math.round(this.tickCost * 100) / 100 });
@@ -255,8 +287,11 @@ export class GraaoMatchRoom extends Room {
     log('leave', { code: this.roomId, id: client.sessionId });
     // The opponent leaving can end a match (the one still standing wins); in warmup the rest may now all be ready;
     // a draft goes on without the seat, or is called off when too few players are left.
-    if (this.phase === MatchPhase.MATCH) this.checkMatchEnd();
-    else if (this.phase === MatchPhase.ABILITY_DRAFT) this.onDraftLeave(p.index);
+    if (this.phase === MatchPhase.MATCH || this.phase === MatchPhase.UFO) {
+      this.checkMatchEnd();
+      // The one who left may have been the last one still in the air.
+      this.maybeBeginFight();
+    } else if (this.phase === MatchPhase.ABILITY_DRAFT) this.onDraftLeave(p.index);
     else this.maybeStartMatch();
   }
 
@@ -333,8 +368,9 @@ export class GraaoMatchRoom extends Room {
   private maybeStartMatch(): void {
     if (this.phase !== MatchPhase.FREE_ROAM) return;
     if (!everyoneReady([...this.players.values()])) return;
-    if (this.skipDraft) this.startMatch(false);
-    else this.startDraft();
+    if (!this.skipDraft) this.startDraft();
+    else if (this.skipUfo) this.startMatch(false);
+    else this.startDeploy(false);
   }
 
   // ------------------------------------------------------------------------------------------------ ability draft
@@ -403,13 +439,119 @@ export class GraaoMatchRoom extends Room {
     this.sendDraftStates();
     this.draft = null;
     log('draft done', { code: this.roomId, loadouts: [...this.players.values()].map((p) => `${p.name}: ${p.loadout.join(',')}`) });
-    this.startMatch(true);
+    if (this.skipUfo) this.startMatch(true);
+    else this.startDeploy(true);
   }
 
   private sendDraftStates(): void {
     const d = this.draft;
     if (!d) return;
     for (const p of this.players.values()) p.client.send(S2C.DRAFT_STATE, d.view(p.index));
+  }
+
+  // ------------------------------------------------------------------------------------------------ UFO deployment
+
+  /**
+   * The participants board the UFO (fresh vitals, ammo and abilities). After a draft only its seats take part
+   * (someone who joined meanwhile watches from the ground); without one every connected player does.
+   */
+  private startDeploy(afterDraft: boolean): void {
+    const now = Date.now();
+    this.phase = MatchPhase.UFO;
+    this.startsAt = 0;
+    this.phaseEndsAt = 0;
+    this.winner = -1;
+    this.abilities.clear();
+    const route = makeUfoRoute(Math.random, now, this.ufoTimings);
+    this.ufo = route;
+    for (const p of this.players.values()) {
+      p.ready = false;
+      p.inMatch = p.connected && (!afterDraft || p.inMatch);
+      p.kills = 0;
+      p.deaths = 0;
+      p.deploy = p.inMatch ? DeployState.SHIP : DeployState.NONE;
+      if (!p.inMatch) continue;
+      p.state = createCharacterState(ufoPosition(route, now), ufoHeading(route, now));
+      this.refresh(p, now);
+    }
+    this.broadcastRoomState();
+    log('ufo deploy', { code: this.roomId, riders: [...this.players.values()].filter((p) => p.inMatch).map((p) => p.name), opensIn: route.open - now, closesIn: route.close - now });
+  }
+
+  /** Full vitals, ammo and abilities, nothing pending (boarding, fight start). */
+  private refresh(p: ServerPlayer, now: number): void {
+    p.vitals = newVitals();
+    p.ammo.forEach((_, i) => (p.ammo[i] = WEAPONS[WEAPON_SLOTS[i]!].magazine));
+    p.reloading = -1;
+    p.respawnAt = 0;
+    p.queue.length = 0;
+    this.resetAbilities(p, now);
+  }
+
+  private onUfoJump(c: Client, m: unknown): void {
+    const p = this.players.get(c.sessionId);
+    if (!p || !validateUfoJump(m) || this.phase !== MatchPhase.UFO || !this.ufo || p.deploy !== DeployState.SHIP) return;
+    const now = Date.now();
+    if (!jumpOpen(this.ufo, now)) return;
+    this.jump(p, now, false);
+  }
+
+  /** Leaves the ship at server time `t`: the dive starts from exactly what the `jump` event carries. */
+  private jump(p: ServerPlayer, t: number, auto: boolean): void {
+    if (!this.ufo) return;
+    const d = diveStart(this.ufo, t);
+    p.state = createCharacterState(d.pos, d.facing);
+    p.state.vel = { ...d.vel };
+    p.state.diving = true;
+    this.motor.placeCollider(p.body.collider, p.state.pos);
+    p.queue.length = 0;
+    p.starvedFor = 0;
+    p.simTime = Date.now() - 60;
+    p.deploy = DeployState.DIVING;
+    const v: [number, number, number] = [Math.round(d.vel.x * 100), Math.round(d.vel.y * 100), Math.round(d.vel.z * 100)];
+    this.events.push({ e: 'jump', target: p.index, at: mm(d.pos), v, auto });
+    this.broadcastRoomState();
+    log('ufo jump', { code: this.roomId, name: p.name, auto, msAfterOpen: Math.round(t - this.ufo.open) });
+  }
+
+  /** First ground contact after a dive (the controller cleared `diving`). */
+  private land(p: ServerPlayer): void {
+    p.deploy = DeployState.LANDED;
+    const dir = v3normalize(p.state.pos);
+    const h = this.world.terrain.heightAt(dir);
+    const onTerrain = Math.hypot(p.state.pos.x, p.state.pos.y, p.state.pos.z) - (PLANET.radius + h) < 0.6;
+    this.events.push({ e: 'land', target: p.index, at: mm(p.state.pos), water: onTerrain && h < PLANET.seaLevel - 0.15 });
+    this.broadcastRoomState();
+    log('ufo land', { code: this.roomId, name: p.name });
+  }
+
+  /** A diver still in the air long after the window closed (stuck, or a client that stopped sending) is set down. */
+  private forceLand(p: ServerPlayer): void {
+    const dir = v3normalize(p.state.pos);
+    const g = this.world.terrain.surfaceAt(dir);
+    p.state = createCharacterState({ x: g.x + dir.x * 0.1, y: g.y + dir.y * 0.1, z: g.z + dir.z * 0.1 }, p.state.facing);
+    this.motor.placeCollider(p.body.collider, p.state.pos);
+    p.queue.length = 0;
+    p.simTime = Date.now() - 60;
+    // Clients snap to the new position like after a respawn.
+    this.events.push({ e: 'respawn', target: p.index });
+    this.land(p);
+  }
+
+  /** Everyone down: the fight starts where they landed, after the countdown (weapons locked meanwhile). */
+  private maybeBeginFight(): void {
+    if (this.phase !== MatchPhase.UFO || !everyoneLanded([...this.players.values()])) return;
+    const now = Date.now();
+    this.phase = MatchPhase.MATCH;
+    this.startsAt = now + this.countdownMs;
+    this.ufo = null;
+    this.abilities.clear();
+    for (const p of this.players.values()) {
+      p.deploy = DeployState.NONE;
+      if (p.inMatch && p.connected) this.refresh(p, now);
+    }
+    this.broadcastRoomState();
+    log('match start', { code: this.roomId, players: this.players.size, after: 'ufo' });
   }
 
   /**
@@ -436,12 +578,13 @@ export class GraaoMatchRoom extends Room {
   }
 
   private checkMatchEnd(): void {
-    if (this.phase !== MatchPhase.MATCH) return;
+    if (this.phase !== MatchPhase.MATCH && this.phase !== MatchPhase.UFO) return;
     const r = decideMatch([...this.players.values()].map((p) => ({ index: p.index, alive: p.vitals.alive, connected: p.connected, inMatch: p.inMatch })));
     if (!r.over) return;
     this.phase = MatchPhase.RESULTS;
     this.winner = r.winner;
     this.startsAt = 0;
+    this.ufo = null;
     this.phaseEndsAt = Date.now() + this.resultsMs;
     this.broadcastRoomState();
     log('match end', { code: this.roomId, winner: this.byIndex(r.winner)?.name ?? '-' });
@@ -453,10 +596,14 @@ export class GraaoMatchRoom extends Room {
     this.phaseEndsAt = 0;
     this.startsAt = 0;
     this.winner = -1;
+    this.ufo = null;
     for (const p of this.players.values()) {
       p.ready = false;
       p.inMatch = false;
-      if (!p.vitals.alive) this.respawn(p);
+      // Still aboard or in the air (the match ended during the deployment): back on a spawn.
+      const airborne = p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING;
+      p.deploy = DeployState.NONE;
+      if (!p.vitals.alive || airborne) this.respawn(p);
       else {
         p.vitals = newVitals();
         p.ammo.forEach((_, i) => (p.ammo[i] = WEAPONS[WEAPON_SLOTS[i]!].magazine));
@@ -468,7 +615,7 @@ export class GraaoMatchRoom extends Room {
 
   /** May this player deal or take damage right now? */
   private canFight(p: ServerPlayer, now: number): boolean {
-    if (this.phase === MatchPhase.RESULTS || this.phase === MatchPhase.ABILITY_DRAFT) return false;
+    if (this.phase === MatchPhase.RESULTS || this.phase === MatchPhase.ABILITY_DRAFT || this.phase === MatchPhase.UFO) return false;
     if (this.phase === MatchPhase.MATCH) return p.inMatch && now >= this.startsAt;
     return true;
   }
@@ -660,6 +807,12 @@ export class GraaoMatchRoom extends Room {
       this.sendDraftStates();
       this.checkDraftDone();
     }
+    if (this.phase === MatchPhase.UFO && this.ufo) {
+      // The window closed: whoever is still aboard is dropped; a diver still airborne long after is set down.
+      const close = this.ufo.close;
+      if (wall >= close) for (const p of this.players.values()) if (p.deploy === DeployState.SHIP) this.jump(p, close, true);
+      if (wall >= close + this.landTimeoutMs) for (const p of this.players.values()) if (p.deploy === DeployState.DIVING) this.forceLand(p);
+    }
 
     for (const p of this.players.values()) {
       p.budget = Math.min(p.budget + dt * SIM_HZ, MAX_INPUT_BACKLOG);
@@ -671,6 +824,19 @@ export class GraaoMatchRoom extends Room {
       if (!p.vitals.alive) {
         p.queue.length = 0;
         if (wall >= p.respawnAt) this.respawn(p);
+        continue;
+      }
+      if (p.deploy === DeployState.SHIP) {
+        // Riding the UFO: commands are acknowledged and dropped; the position follows the ship.
+        if (p.queue.length) p.lastSeq = p.queue[p.queue.length - 1]![0];
+        p.queue.length = 0;
+        if (this.ufo) {
+          ufoPosition(this.ufo, wall, p.state.pos);
+          const v = ufoHeading(this.ufo, wall);
+          const speed = ufoSpeed(this.ufo);
+          p.state.vel = { x: v.x * speed, y: v.y * speed, z: v.z * speed };
+        }
+        p.simTime = wall - 60;
         continue;
       }
       regenMana(p.vitals, dt);
@@ -702,7 +868,9 @@ export class GraaoMatchRoom extends Room {
           for (let i = 0; i < Math.round(dt * SIM_HZ); i++) this.motor.step(p.body, p.state, p.input, SIM_DT);
         }
       } else p.starvedFor = 0;
+      if (p.deploy === DeployState.DIVING && !p.state.diving) this.land(p);
     }
+    this.maybeBeginFight();
 
     this.abilities.update(wall, dt);
 
@@ -776,7 +944,11 @@ export class GraaoMatchRoom extends Room {
         Math.round(Math.asin(Math.max(-1, Math.min(1, sinPitch))) * PITCH_SCALE),
         s.moveState,
         action,
-        (s.grounded ? SnapFlag.GROUNDED : 0) | (p.vitals.alive ? SnapFlag.ALIVE : 0) | (s.aiming ? SnapFlag.AIMING : 0),
+        (s.grounded ? SnapFlag.GROUNDED : 0) |
+          (p.vitals.alive ? SnapFlag.ALIVE : 0) |
+          (s.aiming ? SnapFlag.AIMING : 0) |
+          (p.deploy === DeployState.SHIP ? SnapFlag.ON_SHIP : 0) |
+          (s.diving ? SnapFlag.DIVING : 0),
         p.lastSeq < 0 ? 0 : p.lastSeq,
         p.vitals.health,
         p.vitals.shield,
@@ -801,8 +973,9 @@ export class GraaoMatchRoom extends Room {
       kills: p.kills,
       deaths: p.deaths,
       loadout: [...p.loadout],
+      deploy: p.deploy,
     }));
-    const msg: RoomStateMsg = { code: this.roomId, phase: this.phase, phaseEndsAt: this.phaseEndsAt, startsAt: this.startsAt, winner: this.winner, players };
+    const msg: RoomStateMsg = { code: this.roomId, phase: this.phase, phaseEndsAt: this.phaseEndsAt, startsAt: this.startsAt, winner: this.winner, players, ufo: this.ufo };
     this.broadcast(S2C.ROOM_STATE, msg);
   }
 }

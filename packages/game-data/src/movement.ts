@@ -26,4 +26,14 @@ export const MOVEMENT = {
   turnRate: 13,
   /** Max fall speed (m/s). */
   terminalSpeed: 42,
+  /**
+   * Skydive after leaving the UFO (no glider): steer on the tangent plane while falling at a capped speed. Holding
+   * sprint dives head-first: faster down, less steering. Leaving a faster fall brakes smoothly (`diveBrake`, m/s²).
+   */
+  diveTerminalSpeed: 22,
+  diveFastTerminalSpeed: 38,
+  diveSpeed: 13,
+  diveFastSpeed: 6,
+  diveAccel: 16,
+  diveBrake: 30,
 } as const;

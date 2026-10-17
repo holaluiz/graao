@@ -52,7 +52,8 @@ export class Input {
       if (!a) return;
       // Typing a name or a room code is not gameplay (Enter would mark "ready", E/Q would switch weapons...).
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (a === 'debug' || (this.locked && ['jump', 'weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate'].includes(a))) e.preventDefault();
+      // Space never scrolls or presses a focused button (it jumps, also out of the UFO without pointer lock).
+      if (a === 'debug' || a === 'jump' || (this.locked && ['weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate'].includes(a))) e.preventDefault();
       if (!e.repeat) this.pressed.add(a);
       this.held.add(a);
     });

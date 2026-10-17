@@ -112,3 +112,8 @@ export function validateAbilityRequest(m: unknown): import('./protocol').Ability
   }
   return out;
 }
+
+/** UFO_JUMP carries no data (the server decides where and when the jump starts): any plain object is accepted. */
+export function validateUfoJump(m: unknown): Record<string, never> | null {
+  return m && typeof m === 'object' && !Array.isArray(m) ? {} : null;
+}

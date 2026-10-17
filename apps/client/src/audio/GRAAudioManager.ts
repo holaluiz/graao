@@ -54,7 +54,15 @@ export type Cue =
   | 'draft.lock'
   | 'draft.reveal'
   | 'draft.lost'
-  | 'draft.tick';
+  | 'draft.tick'
+  // UFO deployment: the hatch opening, a jump out, a landing on the ground or in water.
+  | 'ufo.open'
+  | 'ufo.jump'
+  | 'land'
+  | 'land.water';
+
+/** Continuous layers driven every frame by a level (0 = silent): the dive's wind and the UFO's hum. */
+export type AudioLoop = 'wind' | 'hum';
 
 const VOICE_LIMIT: Record<AudioCategory, number> = { threat: 8, weapons: 10, abilities: 8, match: 4, ui: 4, music: 2, environment: 6 };
 const CATEGORY_GAIN: Record<AudioCategory, number> = { threat: 0.9, weapons: 0.75, abilities: 0.8, match: 0.9, ui: 0.55, music: 0.5, environment: 0.5 };
@@ -101,6 +109,10 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   'ab.warn': 'threat',
   'ab.denied': 'ui',
   'ult.ready': 'match',
+  'ufo.open': 'match',
+  'ufo.jump': 'environment',
+  land: 'environment',
+  'land.water': 'environment',
 };
 
 export interface PlayOptions {
@@ -128,6 +140,7 @@ export class GRAAudioManager {
   private readonly buses = new Map<AudioCategory, GainNode>();
   private readonly voices = new Map<AudioCategory, Voice[]>();
   private noise: AudioBuffer | null = null;
+  private readonly loops = new Map<AudioLoop, { gain: GainNode; filter: BiquadFilterNode; base: number }>();
   state: AudioState = 'NORMAL';
   volume = 0.8;
 
@@ -187,7 +200,8 @@ export class GRAAudioManager {
     }
     this.state = s;
     const t = this.ctx.currentTime;
-    const freq = s === 'LOW_HEALTH' ? 900 : s === 'POST_MATCH' ? 2600 : 20000;
+    // Aboard the UFO the world is heard through the hull.
+    const freq = s === 'LOW_HEALTH' ? 900 : s === 'POST_MATCH' ? 2600 : s === 'UFO' ? 5200 : 20000;
     this.world.frequency.setTargetAtTime(freq, t, 0.12);
   }
 
@@ -233,6 +247,63 @@ export class GRAAudioManager {
         }
       },
     });
+  }
+
+  /**
+   * Sets a continuous layer's level (0..1) and tone (`tone` 0..1: the wind gets brighter with speed). The layer is
+   * built on first use and keeps running silently afterwards (no per-frame allocation).
+   */
+  setLoop(name: AudioLoop, level: number, tone = 0.5): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running') return;
+    let l = this.loops.get(name);
+    if (!l) {
+      if (level <= 0.001) return;
+      l = this.buildLoop(ctx, name);
+      this.loops.set(name, l);
+    }
+    const t = ctx.currentTime;
+    l.gain.gain.setTargetAtTime(Math.max(0, Math.min(1, level)) * l.base, t, 0.12);
+    if (name === 'wind') l.filter.frequency.setTargetAtTime(380 + tone * 1700, t, 0.15);
+  }
+
+  private buildLoop(ctx: AudioContext, name: AudioLoop): { gain: GainNode; filter: BiquadFilterNode; base: number } {
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const filter = ctx.createBiquadFilter();
+    filter.connect(gain).connect(this.buses.get('environment')!);
+    if (name === 'wind') {
+      // Rushing air: looping noise through a moving band-pass.
+      filter.type = 'bandpass';
+      filter.Q.value = 0.6;
+      filter.frequency.value = 600;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      src.loop = true;
+      src.connect(filter);
+      src.start();
+      return { gain, filter, base: 0.9 };
+    }
+    // The ship's hum: a low fifth with a slow wobble.
+    filter.type = 'lowpass';
+    filter.frequency.value = 700;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.45;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 4;
+    lfo.connect(lfoGain);
+    for (const [f, type, g] of [[62, 'sine', 0.6], [93, 'triangle', 0.22], [124.5, 'sine', 0.18]] as const) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = f;
+      lfoGain.connect(o.frequency);
+      const og = ctx.createGain();
+      og.gain.value = g;
+      o.connect(og).connect(filter);
+      o.start();
+    }
+    lfo.start();
+    return { gain, filter, base: 0.5 };
   }
 
   // ------------------------------------------------------------------------------------------------ synthesis
@@ -459,6 +530,27 @@ export class GRAAudioManager {
         this.osc(out, 'square', t, 150, 140, 0.07, 0.1);
         this.osc(out, 'square', t + 0.09, 130, 120, 0.09, 0.1);
         return 0.19;
+      case 'ufo.open':
+        // The hatch opens: an airy hiss and a bright rising fifth ("go now").
+        this.noiseBurst(out, t, 0.5, 0.25, 'highpass', 2500, 6000, 0.7);
+        this.osc(out, 'triangle', t + 0.05, 587.33, 587.33, 0.3, 0.18, 0.01);
+        this.osc(out, 'triangle', t + 0.2, 880, 880, 0.45, 0.18, 0.01);
+        return 0.65;
+      case 'ufo.jump':
+        // A hatch clunk, then air rushing past.
+        this.osc(out, 'square', t, 180 * p, 90 * p, 0.06, 0.12);
+        this.noiseBurst(out, t + 0.03, 0.7, 0.45, 'bandpass', 500 * p, 2400 * p, 0.8);
+        return 0.75;
+      case 'land':
+        // A soft heavy thump and a puff of dust.
+        this.osc(out, 'sine', t, 130 * p, 45 * p, 0.28, 0.75);
+        this.noiseBurst(out, t, 0.32, 0.35, 'lowpass', 1600, 300, 0.7);
+        return 0.33;
+      case 'land.water':
+        this.noiseBurst(out, t, 0.6, 0.5, 'bandpass', 1800 * p, 600 * p, 0.6);
+        this.osc(out, 'sine', t, 220 * p, 80 * p, 0.2, 0.35);
+        for (let k = 0; k < 4; k++) this.osc(out, 'sine', t + 0.08 + k * 0.07, (900 + k * 260) * p, (700 + k * 200) * p, 0.05, 0.06);
+        return 0.62;
       case 'ult.ready':
         [659.25, 830.61, 987.77, 1318.51].forEach((f, k) => this.osc(out, 'triangle', t + k * 0.075, f, f, 0.4, 0.17, 0.01));
         this.noiseBurst(out, t + 0.2, 0.4, 0.07, 'highpass', 6500);

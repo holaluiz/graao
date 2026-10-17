@@ -61,6 +61,18 @@ export const MatchPhase = {
 } as const;
 export type MatchPhase = (typeof MatchPhase)[keyof typeof MatchPhase];
 
+/**
+ * Where a match participant is in the UFO deployment: aboard (riding, not simulated), diving (radial fall under the
+ * player's control) or landed. NONE outside a deployment (warmup, late joiners, rooms that skip the UFO).
+ */
+export const DeployState = {
+  NONE: 0,
+  SHIP: 1,
+  DIVING: 2,
+  LANDED: 3,
+} as const;
+export type DeployState = (typeof DeployState)[keyof typeof DeployState];
+
 /** Semantic locomotion state; clients choose animation clips from it (never from streamed bones). */
 export const MovementState = {
   IDLE: 0,
@@ -144,7 +156,7 @@ export const AIM_SCALE = 1000;
  * `[index, px, py, pz, vx, vy, vz, fx, fy, fz, aimPitch, moveState, actionState, flags, ackSeq, health, shield, mana, weapon, simDt]`
  * - p: position in millimetres (ints).  v: velocity in cm/s (ints).
  * - f: facing tangent × 127.  aimPitch: radians × 100 relative to the local horizon.
- * - flags: bit 0 grounded, bit 1 alive, bit 2 aiming.
+ * - flags: bit 0 grounded, bit 1 alive, bit 2 aiming, bit 3 aboard the UFO, bit 4 diving.
  * - simDt: ms between the snapshot time and the moment this player's simulated state is valid (≤ 0). Each player is
  *   simulated in whole 1/60 s commands, so remotes interpolate on this per-player clock to move perfectly evenly.
  */
@@ -157,6 +169,10 @@ export const SnapFlag = {
   GROUNDED: 1 << 0,
   ALIVE: 1 << 1,
   AIMING: 1 << 2,
+  /** Riding the UFO: not simulated, drawn inside the ship (position = the ship's). */
+  ON_SHIP: 1 << 3,
+  /** Skydiving after the jump (until the first ground contact). */
+  DIVING: 1 << 4,
 } as const;
 
 export const POS_SCALE = 1000;
@@ -188,6 +204,28 @@ export interface PlayerPublic {
   deaths: number;
   /** Ability ids for keys 1, 2, 3 (basics) and 4 (Ultimate). Public like draft picks; the Ultimate drives the mark. */
   loadout: string[];
+  /** UFO deployment progress (aboard / diving / landed); NONE outside a deployment. */
+  deploy: DeployState;
+}
+
+/**
+ * The UFO's route for one deployment, chosen by the server. Clients only derive the ship's position from it; the
+ * jump-out state comes in the `jump` event. Integers only (micro-units, ms) so every side evaluates the same numbers.
+ *
+ * The route is a great circle of radius `r` (cm) around the planet centre. `c` is the closest approach (unit vector
+ * × 1e6, over the drop zone) and `h` the direction of travel there (unit tangent × 1e6). At server time t the ship
+ * is at angle θ = a0·1e-6 + w·1e-9·(t − t0) radians from `c` toward `h`. Jumps are accepted in [open, close];
+ * whoever is still aboard at `close` is dropped.
+ */
+export interface UfoRouteMsg {
+  c: [number, number, number];
+  h: [number, number, number];
+  r: number;
+  t0: number;
+  open: number;
+  close: number;
+  a0: number;
+  w: number;
 }
 
 /** Reliable, sent when something non-positional changes. */
@@ -201,6 +239,8 @@ export interface RoomStateMsg {
   /** RESULTS only: winner's player index, -1 for a draw / none. */
   winner: number;
   players: PlayerPublic[];
+  /** UFO phase only: the ship's route (null otherwise). */
+  ufo: UfoRouteMsg | null;
 }
 
 /** READY toggle (warmup): `{ r: 1 }` ready, `{ r: 0 }` not ready. */
@@ -424,7 +464,14 @@ export type GameEvent =
   | { e: 'fx'; by: number; target: number; k: StatusFx; v: number }
   | { e: 'elim'; by: number; target: number }
   | { e: 'respawn'; target: number }
-  | { e: 'reload'; by: number; w: number };
+  | { e: 'reload'; by: number; w: number }
+  /**
+   * `target` left the UFO (UFO_JUMP, or dropped when the window closed). `at` (mm) and `v` (cm/s) are the exact
+   * start of the dive the server simulates; the jumper's client starts predicting from them.
+   */
+  | { e: 'jump'; target: number; at: [number, number, number]; v: [number, number, number]; auto: boolean }
+  /** `target` touched the ground after a dive (`water` = in a lake or the sea). */
+  | { e: 'land'; target: number; at: [number, number, number]; water: boolean };
 
 export interface EventsMsg {
   t: number;
