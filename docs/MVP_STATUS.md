@@ -26,7 +26,7 @@ docs stay in English.
 | Monorepo (pnpm, TS strict, Vite, Vitest, ESLint) | DONE | `pnpm dev / build / test / lint / typecheck` pass; 105 tests (the 60 Hz interpolation smoothness test is timing-sensitive and can fail under heavy machine load; it passes when rerun). Test files run sequentially (`fileParallelism: false`) so the real-time integration suite is not starved by world generation in parallel workers |
 | Spherical world (terrain, features, layout, colliders) | DONE | Deterministic; identical on client/server (tested). Spawn points are kept free of props (tested with a capsule overlap query) |
 | GraaoSphericalCharacterController | DONE | Radial gravity, Rapier KCC with per-step up; full-lap test passes |
-| Third-person camera on the sphere | DONE | Transported heading, terrain pull-in, aim FOV/shoulder, recoil kick and shake with FULL / REDUCED / OFF |
+| Third-person camera on the sphere | DONE | Transported heading, terrain pull-in, aim FOV/shoulder, recoil kick and shake (always full for every player) |
 | Camera obstruction dissolve | TESTING | Implemented (Rapier ray queries → per-instance dither fade); needs a visual pass behind houses |
 | GRA_Rig_MixamoCompatible + MixamoBoneMap | DONE | 55 bones; normalizer handles `mixamorig:` variants and UE/UAL names |
 | Retargeter | DONE | Bone directions preserved within 4° (test) |

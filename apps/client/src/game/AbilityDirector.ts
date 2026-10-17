@@ -510,7 +510,7 @@ export class AbilityDirector {
     const enemy = by !== this.me;
     const at = who.pos.clone();
     this.play(`ab.${def.presentation.cue}` as Cue, mine ? null : at, enemy);
-    if (def.slotType === 'ultimate') this.app.camera.addShake(0.25 * this.app.combat.responseScale, 0.25);
+    if (def.slotType === 'ultimate') this.app.camera.addShake(0.25, 0.25);
     // A hand flash for every cast.
     const up = this.tmp.copy(at).normalize();
     const hand = at.clone().addScaledVector(up, 1.35);
@@ -703,7 +703,7 @@ export class AbilityDirector {
     // CAMERA: the closer the blast, the stronger the shake.
     const s = this.app.local.state.pos;
     const d = Math.hypot(center.x - s.x, center.y - s.y, center.z - s.z);
-    if (d < radius * 2.5) this.app.camera.addShake((def.slotType === 'ultimate' ? 0.9 : 0.4) * (1 - d / (radius * 2.5)) * this.app.combat.responseScale, 0.3);
+    if (d < radius * 2.5) this.app.camera.addShake((def.slotType === 'ultimate' ? 0.9 : 0.4) * (1 - d / (radius * 2.5)), 0.3);
   }
 
   /** Status effects landing on someone (shield, heal, slow, knockback, dash). */
@@ -733,7 +733,7 @@ export class AbilityDirector {
       }
       case 'knock':
         vfx.burst(chest, up, { color: '#ffffff', count: 14, speed: 6, size: 0.12, life: 0.4, spread: 1.6, drag: 4, shape: Shape.SPARK, category: 'GameplayCritical' });
-        if (target === this.me) this.app.camera.addShake(1.0 * this.app.combat.responseScale, 0.35);
+        if (target === this.me) this.app.camera.addShake(1.0, 0.35);
         break;
       case 'dash':
         if (target !== this.me) {

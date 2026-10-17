@@ -27,7 +27,7 @@ import { GRAVFXSystem } from '../render/vfx/GRAVFXSystem';
 import { Creator } from '../ui/Creator';
 import { DevOverlay } from '../ui/DevOverlay';
 import { Hud } from '../ui/Hud';
-import { Menu, type CameraResponse } from '../ui/Menu';
+import { Menu } from '../ui/Menu';
 import { DraftScreen } from '../ui/DraftScreen';
 import { PlanetView } from '../world/PlanetView';
 import { NetSession } from '../net/NetSession';
@@ -35,8 +35,7 @@ import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
 
 export type HudPhase = 'BOOT' | 'MENU' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
 
-const STORAGE = { appearance: 'graao.appearance', name: 'graao.name', quality: 'graao.quality', cameraResponse: 'graao.cameraResponse', fpsCap: 'graao.fpsCap' };
-const RESPONSE_SCALE: Record<CameraResponse, number> = { FULL: 1, REDUCED: 0.4, OFF: 0 };
+const STORAGE = { appearance: 'graao.appearance', name: 'graao.name', quality: 'graao.quality', fpsCap: 'graao.fpsCap' };
 
 function readStorage<T>(key: string, fallback: T, valid: (v: unknown) => v is T): T {
   try {
@@ -78,7 +77,6 @@ export class GraaoApp {
   phase: HudPhase = 'BOOT';
   appearance: CharacterAppearance;
   name: string;
-  private cameraResponse: CameraResponse;
   private dev!: DevOverlay;
   private menu!: Menu;
   private creator!: Creator;
@@ -108,7 +106,6 @@ export class GraaoApp {
     // Saves from older catalogs keep every piece that still exists; new slots start empty.
     this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (v): v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
-    this.cameraResponse = readStorage<CameraResponse>(STORAGE.cameraResponse, 'FULL', (v): v is CameraResponse => v === 'FULL' || v === 'REDUCED' || v === 'OFF');
     this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, 0, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
     window.addEventListener('resize', () => this.r.resize());
     for (const id of ['paper', 'vignette']) {
@@ -159,7 +156,6 @@ export class GraaoApp {
     this.character = new GraaoCharacter(this.parts, this.anims, this.appearance);
     this.r.scene.add(this.character.root);
     this.combat = new CombatDirector(this);
-    this.combat.responseScale = RESPONSE_SCALE[this.cameraResponse];
     this.deploy = new DeployDirector(this);
     if (new URLSearchParams(location.search).has('lineup')) this.spawnLineup(dir);
     this.buildUi();
@@ -221,11 +217,6 @@ export class GraaoApp {
           writeStorage(STORAGE.quality, q);
           this.menu.setNote(q === 'LOW' ? 'BAIXA mantém jogadores, tiros e avisos de combate; menos grama e sem flores após recarregar.' : `Qualidade ${q === 'HIGH' ? 'ALTA' : 'MÉDIA'}`);
         },
-        cameraResponse: (c) => {
-          this.cameraResponse = c;
-          this.combat.responseScale = RESPONSE_SCALE[c];
-          writeStorage(STORAGE.cameraResponse, c);
-        },
         fpsCap: (c) => {
           this.limiter.cap = c;
           writeStorage(STORAGE.fpsCap, c);
@@ -242,7 +233,6 @@ export class GraaoApp {
       },
       this.name,
       this.r.quality,
-      this.cameraResponse,
       this.limiter.cap,
     );
     this.creator = new Creator(
@@ -280,13 +270,10 @@ export class GraaoApp {
     });
   }
 
+  /** Only the "click to play" prompt while the pointer is free; nothing over the game while playing. */
   private updateHint(): void {
     if (this.phase !== 'MATCH') return;
-    this.hud.setHint(
-      this.input.locked
-        ? 'WASD mover · Espaço pular · Shift correr · Botão esq. atirar · Botão dir. mirar · E/Q armas · R recarregar · 1 2 3 magias · 4 suprema · F3 dados · Esc soltar'
-        : 'Clique para jogar · Esc de novo volta ao menu',
-    );
+    this.hud.setHint(this.input.locked ? '' : 'Clique para jogar · Esc de novo volta ao menu');
   }
 
   private applyAppearance(a: CharacterAppearance): void {

@@ -32,7 +32,7 @@ import { Shape } from '../render/vfx/GRAVFXSystem';
 import { AbilityDirector } from './AbilityDirector';
 import { WeaponController } from './WeaponController';
 
-/** Camera response presets (accessibility: FULL / REDUCED / OFF scale every shake and kick). */
+/** Camera response presets (shake and kick; always at full strength for every player). */
 const CAMERA_RESPONSE = {
   MICRO: { shake: 0.0, kick: 1 },
   HIT: { shake: 0.5, kick: 0 },
@@ -74,8 +74,6 @@ export class CombatDirector {
   private readonly tmp2 = new THREE.Vector3();
   private readonly muzzleW = new THREE.Vector3();
   private blocked = false;
-  /** Camera response accessibility scale (1 FULL, 0.4 REDUCED, 0 OFF). */
-  responseScale = 1;
 
   constructor(private readonly app: GraaoApp) {
     this.holder = new WeaponHolder();
@@ -227,7 +225,7 @@ export class CombatDirector {
     this.match.shots++;
     // Body, camera, audio.
     app.character.anim.playUpper('fire', 1.4);
-    app.camera.kick(w.cameraProfile.kick * 4 * CAMERA_RESPONSE.MICRO.kick * this.responseScale, (Math.random() - 0.5) * w.cameraProfile.kick * this.responseScale);
+    app.camera.kick(w.cameraProfile.kick * 4 * CAMERA_RESPONSE.MICRO.kick, (Math.random() - 0.5) * w.cameraProfile.kick);
     app.audio.play(w.id === 'sunbeam' ? 'fire.sunbeam' : 'fire.petal');
   }
 
@@ -531,7 +529,7 @@ export class CombatDirector {
         app.hud.damageFrom(angle, has(HitKind.SHIELD) || has(HitKind.SHIELD_BREAK));
       }
       const resp = has(HitKind.CRITICAL) || has(HitKind.SHIELD_BREAK) ? CAMERA_RESPONSE.HEAVY : CAMERA_RESPONSE.HIT;
-      app.camera.addShake(resp.shake * this.responseScale, 0.22);
+      app.camera.addShake(resp.shake, 0.22);
       app.audio.play(has(HitKind.SHIELD_BREAK) ? 'hurt.shieldBreak' : has(HitKind.BODY) || has(HitKind.CRITICAL) ? 'hurt.health' : 'hurt.shield');
       if (has(HitKind.SHIELD_BREAK)) app.hud.notice('SEU ESCUDO QUEBROU', 1.2);
       if (!has(HitKind.ELIMINATION)) app.character.anim.playOneShot('hit', { speed: 1.5 });
@@ -596,7 +594,7 @@ export class CombatDirector {
       this.alive = false;
       this.killerName = killer;
       app.audio.play('death');
-      app.camera.addShake(CAMERA_RESPONSE.HEAVY.shake * this.responseScale, 0.35);
+      app.camera.addShake(CAMERA_RESPONSE.HEAVY.shake, 0.35);
     }
   }
 
