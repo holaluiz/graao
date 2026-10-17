@@ -43,7 +43,22 @@ export const Slot = {
   HAIR_ACCENT: 13,
   MARK: 14,
   LIPS: 15,
+  HAT: 16,
+  HAT_ACCENT: 17,
+  EXTRA: 18,
+  EXTRA_ACCENT: 19,
+  EXTRA_DETAIL: 20,
+  /** Short facial hair: hair color pulled toward the skin. */
+  STUBBLE: 21,
+  /** Fixed detail colors shared by every piece: leaves and flower hearts. */
+  LEAF: 22,
+  POLLEN: 23,
+  /** Third color of a garment (plaid lines, side stripes, studs…), resolved per piece. */
+  TOP_DETAIL: 24,
+  BOTTOM_DETAIL: 25,
+  SHOES_DETAIL: 26,
 } as const;
+export { PALETTE_SIZE } from '../../render/materials/GRAStylizedMaterial';
 export type SlotId = (typeof Slot)[keyof typeof Slot];
 
 export type V3 = [number, number, number];
@@ -420,6 +435,130 @@ export class PartBuilder {
     return this;
   }
 
+  /**
+   * Closed thin sheet over a grid of points (rows × cols, no wrap): offset ±t/2 along the grid normal. Used for capes,
+   * hat brims and crests. Rows run along `i`, columns along `j`.
+   */
+  slab(grid: V3[][], t: number, opts: PrimitiveOpts): this {
+    this.begin(opts);
+    const R = grid.length;
+    const C = grid[0]!.length;
+    const at = (i: number, j: number) => new THREE.Vector3(...grid[Math.min(R - 1, Math.max(0, i))]![Math.min(C - 1, Math.max(0, j))]!);
+    const top: number[][] = [];
+    const bot: number[][] = [];
+    const n = new THREE.Vector3();
+    const last = new THREE.Vector3(0, 0, 1);
+    for (let i = 0; i < R; i++) {
+      const rt: number[] = [];
+      const rb: number[] = [];
+      for (let j = 0; j < C; j++) {
+        const du = at(i, j + 1).sub(at(i, j - 1));
+        const dv = at(i + 1, j).sub(at(i - 1, j));
+        n.crossVectors(du, dv);
+        if (n.lengthSq() < 1e-14) n.copy(last);
+        else last.copy(n.normalize());
+        const p = at(i, j);
+        rt.push(this.vertex(p.x + n.x * t * 0.5, p.y + n.y * t * 0.5, p.z + n.z * t * 0.5));
+        rb.push(this.vertex(p.x - n.x * t * 0.5, p.y - n.y * t * 0.5, p.z - n.z * t * 0.5));
+      }
+      top.push(rt);
+      bot.push(rb);
+    }
+    for (let i = 0; i < R - 1; i++) {
+      for (let j = 0; j < C - 1; j++) {
+        this.tri(top[i]![j]!, top[i]![j + 1]!, top[i + 1]![j + 1]!);
+        this.tri(top[i]![j]!, top[i + 1]![j + 1]!, top[i + 1]![j]!);
+        this.tri(bot[i]![j]!, bot[i + 1]![j + 1]!, bot[i]![j + 1]!);
+        this.tri(bot[i]![j]!, bot[i + 1]![j]!, bot[i + 1]![j + 1]!);
+      }
+    }
+    // Rim along the border, counter-clockwise seen from the top side.
+    const loop: [number, number][] = [];
+    for (let j = 0; j < C - 1; j++) loop.push([0, j]);
+    for (let i = 0; i < R - 1; i++) loop.push([i, C - 1]);
+    for (let j = C - 1; j > 0; j--) loop.push([R - 1, j]);
+    for (let i = R - 1; i > 0; i--) loop.push([i, 0]);
+    for (let k = 0; k < loop.length; k++) {
+      const [ai, aj] = loop[k]!;
+      const [bi, bj] = loop[(k + 1) % loop.length]!;
+      this.tri(top[ai]![aj]!, bot[ai]![aj]!, bot[bi]![bj]!);
+      this.tri(top[ai]![aj]!, bot[bi]![bj]!, top[bi]![bj]!);
+    }
+    this.end();
+    return this;
+  }
+
+  /**
+   * Flat flower (or frayed disk, or star with `sharp`) centered at `c` facing `n`: a squashed star surface whose rim
+   * has `petals` lobes cut `depth` deep (0 = disk). `t` is the thickness along `n`.
+   */
+  flower(c: V3, n: V3, R: number, t: number, petals: number, opts: PrimitiveOpts, depth = 0.4, spin = 0, nu = 0, sharp = false): this {
+    const { e1, e2, N } = frame(n);
+    const lobes = petals > 0 ? petals : 1;
+    return this.starSurface(
+      (d) => {
+        const a = Math.atan2(d.z, d.x) + spin;
+        const k = (lobes * a) / (Math.PI * 2);
+        // Round petals, or straight-edged star points (triangle wave).
+        const lobe = sharp ? 1 - Math.abs(2 * (k - Math.floor(k)) - 1) : Math.pow(Math.abs(Math.cos((lobes * a) / 2)), 0.6);
+        const r = R * (1 - depth * (1 - lobe));
+        return [
+          c[0] + e1.x * d.x * r + e2.x * d.z * r + N.x * d.y * t,
+          c[1] + e1.y * d.x * r + e2.y * d.z * r + N.y * d.y * t,
+          c[2] + e1.z * d.x * r + e2.z * d.z * r + N.z * d.y * t,
+        ];
+      },
+      nu || Math.max(16, lobes * 4),
+      5,
+      opts,
+    );
+  }
+
+  /** Closed tube along a closed polyline (belts, chains, hat bands). `rb` lies along the curve's plane normal side. */
+  loop(pts: V3[], ra: number, rb: number, opts: PrimitiveOpts, segments = 6, radius?: (i: number) => number): this {
+    this.begin(opts);
+    const P = pts.map((p) => new THREE.Vector3(...p));
+    const n = P.length;
+    // Plane normal of the loop (Newell's method) as the reference axis for `ra`.
+    const ref = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      const a = P[i]!;
+      const b = P[(i + 1) % n]!;
+      ref.x += (a.y - b.y) * (a.z + b.z);
+      ref.y += (a.z - b.z) * (a.x + b.x);
+      ref.z += (a.x - b.x) * (a.y + b.y);
+    }
+    if (ref.lengthSq() < 1e-12) ref.set(0, 1, 0);
+    ref.normalize();
+    const rings: number[][] = [];
+    for (let i = 0; i < n; i++) {
+      const tng = P[(i + 1) % n]!.clone().sub(P[(i - 1 + n) % n]!).normalize();
+      const e1 = ref.clone().addScaledVector(tng, -ref.dot(tng)).normalize();
+      const e2 = new THREE.Vector3().crossVectors(tng, e1);
+      const k = radius ? radius(i) : 1;
+      const ids: number[] = [];
+      for (let s = 0; s < segments; s++) {
+        const th = (s / segments) * Math.PI * 2;
+        const x = Math.cos(th) * ra * k;
+        const y = Math.sin(th) * rb * k;
+        const c = P[i]!;
+        ids.push(this.vertex(c.x + e1.x * x + e2.x * y, c.y + e1.y * x + e2.y * y, c.z + e1.z * x + e2.z * y));
+      }
+      rings.push(ids);
+    }
+    for (let i = 0; i < n; i++) {
+      const A = rings[i]!;
+      const B = rings[(i + 1) % n]!;
+      for (let s = 0; s < segments; s++) {
+        const s1 = (s + 1) % segments;
+        this.tri(A[s]!, A[s1]!, B[s]!);
+        this.tri(A[s1]!, B[s1]!, B[s]!);
+      }
+    }
+    this.end();
+    return this;
+  }
+
   // -------------------------------------------------------------------------------------------- output
 
   /** Builds an indexed BufferGeometry with skinning attributes for `rig`. */
@@ -448,6 +587,21 @@ export class PartBuilder {
     g.setIndex(this.index);
     return g;
   }
+}
+
+/** Orthonormal frame whose third axis is `n` (for decals and flat pieces). */
+export function frame(n: V3): { e1: THREE.Vector3; e2: THREE.Vector3; N: THREE.Vector3 } {
+  const N = new THREE.Vector3(...n).normalize();
+  const up = Math.abs(N.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const e1 = new THREE.Vector3().crossVectors(up, N).normalize();
+  const e2 = new THREE.Vector3().crossVectors(N, e1);
+  return { e1, e2, N };
+}
+
+/** Rotation that maps local +Z to `n` (local +Y stays as close to world up as possible). */
+export function facing(n: V3): THREE.Matrix3 {
+  const { e1, e2, N } = frame(n);
+  return new THREE.Matrix3().set(e1.x, e2.x, N.x, e1.y, e2.y, N.y, e1.z, e2.z, N.z);
 }
 
 // ---------------------------------------------------------------------------------------------- skinning

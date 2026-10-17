@@ -7,7 +7,7 @@
  */
 import * as THREE from 'three';
 import { createGameWorld, latLonToDir, mulberry32, type GameWorld } from '@graao/game-core';
-import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, randomAppearance, validateAppearance } from '@graao/game-data';
+import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance } from '@graao/game-data';
 import { ActionState, MatchPhase, MovementState, v3angle, type CharacterAppearance, type DraftStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
@@ -105,7 +105,8 @@ export class GraaoApp {
     this.r = new GRARenderer(canvas, quality);
     this.input = new Input(canvas);
     this.camera = new GraaoThirdPersonCamera(this.r.camera);
-    this.appearance = readStorage(STORAGE.appearance, DEFAULT_APPEARANCE, validateAppearance);
+    // Saves from older catalogs keep every piece that still exists; new slots start empty.
+    this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (v): v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
     this.cameraResponse = readStorage<CameraResponse>(STORAGE.cameraResponse, 'FULL', (v): v is CameraResponse => v === 'FULL' || v === 'REDUCED' || v === 'OFF');
     this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, 0, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
@@ -470,15 +471,20 @@ export class GraaoApp {
     }
   }
 
+  /** Creator framing: the character centered in the screen area the panel leaves free (measured, not guessed). */
   private placeCreatorCamera(dt: number): void {
     const up = this.spawn.clone().normalize();
     const f = this.menuFacing;
     const side = new THREE.Vector3().crossVectors(up, f).normalize();
-    const shift = this.creatorZoom * 0.32 * THREE.MathUtils.clamp(this.r.camera.aspect, 0.8, 1.8);
-    const want = this.spawn.clone().addScaledVector(up, 1.0).addScaledVector(f, this.creatorZoom).addScaledVector(side, shift);
+    // Sliding camera and target sideways by `shift` puts the character at NDC x = -shift / halfWidth.
+    const halfW = Math.tan(THREE.MathUtils.degToRad(40 / 2)) * this.creatorZoom * this.r.camera.aspect;
+    const shift = -this.creator.freeCenterX(this.r.canvas.getBoundingClientRect()) * halfW;
+    // Whole body at the default distance; zooming in rises toward the face (hats, beards, glasses).
+    const focus = THREE.MathUtils.clamp(THREE.MathUtils.mapLinear(this.creatorZoom, 3.1, 1.6, 0.9, 1.38), 0.9, 1.38);
+    const want = this.spawn.clone().addScaledVector(up, focus + 0.1).addScaledVector(f, this.creatorZoom).addScaledVector(side, shift);
     this.r.camera.position.lerp(want, 1 - Math.exp(-dt * 10));
     this.r.camera.up.copy(up);
-    this.r.camera.lookAt(this.spawn.clone().addScaledVector(up, 0.9).addScaledVector(side, shift));
+    this.r.camera.lookAt(this.spawn.clone().addScaledVector(up, focus).addScaledVector(side, shift));
     if (this.r.camera.fov !== 40) {
       this.r.camera.fov = 40;
       this.r.camera.updateProjectionMatrix();

@@ -8,6 +8,9 @@
  */
 import * as THREE from 'three';
 
+/** Character palette size: the uniform array in both shaders and the slots `buildPalette` fills. */
+export const PALETTE_SIZE = 32;
+
 export const GLSL_NOISE = /* glsl */ `
 float graHash3(vec3 p) {
   p = fract(p * 0.3183099 + 0.1);
@@ -40,7 +43,7 @@ const vertex = /* glsl */ `
 
 #ifdef USE_PALETTE
 attribute float aSlot;
-uniform vec3 uPalette[16];
+uniform vec3 uPalette[${PALETTE_SIZE}];
 #endif
 #ifdef USE_INSTANCE_FADE
 attribute float instanceFade;
@@ -239,7 +242,7 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
     THREE.UniformsLib.fog,
     {
       uBaseColor: { value: new THREE.Color(o.color ?? '#ffffff') },
-      uPalette: { value: Array.from({ length: 16 }, () => new THREE.Color('#ff00ff')) },
+      uPalette: { value: Array.from({ length: PALETTE_SIZE }, () => new THREE.Color('#ff00ff')) },
       uSunColor: { value: LOOK.sun.clone() },
       uShadowTint: { value: LOOK.shadowTint.clone() },
       uSkyFill: { value: LOOK.skyFill.clone() },
@@ -281,7 +284,7 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
 /** Writes a palette (linear colors) into a character material. */
 export function setPalette(m: THREE.ShaderMaterial, colors: THREE.Color[]): void {
   const pal = m.uniforms.uPalette!.value as THREE.Color[];
-  for (let i = 0; i < 16; i++) pal[i]!.copy(colors[i] ?? pal[i]!);
+  for (let i = 0; i < pal.length; i++) pal[i]!.copy(colors[i] ?? pal[i]!);
 }
 
 // ------------------------------------------------------------------------------------------------ outline
@@ -292,7 +295,7 @@ const outlineVertex = /* glsl */ `
 #include <fog_pars_vertex>
 attribute float aSlot;
 attribute float aOutline;
-uniform vec3 uPalette[16];
+uniform vec3 uPalette[${PALETTE_SIZE}];
 uniform float uWidth;
 varying vec3 vInk;
 void main() {

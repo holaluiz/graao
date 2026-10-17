@@ -14,7 +14,7 @@ PlayerRoot (aligned to localUp, at the capsule's feet)            ← gameplay c
 | `MixamoBoneMap` / normalizer | `character/rig/MixamoBoneMap.ts` | `mixamorig:` / `mixamorig1:` / `mixamorig_` / sanitized prefixes + UE/UAL names → canonical ids |
 | `PartBuilder` | `character/build/PartBuilder.ts` | Code-authored geometry: tubes (superellipse sweeps), star surfaces, tori, decals; palette slot, region, outline per vertex; shared skin-weight function |
 | Anatomy | `character/build/anatomy.ts` | Body ring specs and the head surface function shared by face decals and hair |
-| Parts | `character/parts/*.ts` | body, faces (3), hair (4), tops (4), bottoms (4), shoes (3), accessories (3) |
+| Parts | `character/parts/*.ts` | body, faces (6), beards (4), hair (13 + bald), tops (10), bottoms (8), shoes (7), hats (9), face accessories (5), body extras (5) |
 | `CharacterPartLibrary` (CharacterAppearanceController) | `character/CharacterAppearanceController.ts` | Builds/caches part geometry per body, hides covered body regions, merges one geometry, resolves the palette |
 | `GraaoCharacter` | `character/GraaoCharacter.ts` | Instance: skeleton, meshes, materials, attachments, pose on the planet |
 | `CharacterAnimationController` | `character/CharacterAnimationController.ts` | Semantic state → weighted actions (lower/upper split, upper actions, full-body one-shots) |
@@ -33,11 +33,14 @@ girth (+14 %) on the same skeleton topology.
   set, with left/right gating — so a garment point and the body point under it get the same weights.
 - Layering rule: tops sit outside bottoms (pelvis shells use a smaller offset than any top hem).
 - `hideBodyRegions` removes covered body triangles (all three corners hidden) before merging.
+- Pieces that depend on other pieces carry them in their cache key: hats sit over the hair (`hatSeat`, `hairOuter`),
+  hair drops buns and crests under a hat, side accessories move out with the hair, body extras sit just outside the
+  current top (`TOP_FIT`).
 
 ## Color
 
 Geometry never stores color: each vertex has a palette slot (skin, ink, eye white, hair, top, top accent, bottom,
-shoes, sole, accessory…). `buildPalette(appearance)` produces 16 linear colors; the character material and its outline
+shoes, sole, accessory…). `buildPalette(appearance)` produces 32 linear colors (`PALETTE_SIZE`); the character material and its outline
 share the palette array, so a color change is a uniform update.
 
 ## Cost

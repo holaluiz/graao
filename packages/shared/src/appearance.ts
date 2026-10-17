@@ -6,6 +6,8 @@
 export interface CharacterAppearance {
   bodyId: string;
   faceId: string;
+  /** Facial hair; takes the hair color. */
+  beardId: string;
   skinId: string;
   hairId: string;
   hairColorId: string;
@@ -15,12 +17,18 @@ export interface CharacterAppearance {
   bottomColorId: string;
   shoesId: string;
   shoesColorId: string;
+  hatId: string;
+  hatColorId: string;
+  /** Face/head accessory (glasses, earrings…). */
   accessoryId: string;
+  /** Body accessory (bags, chains, flag cape…). */
+  extraId: string;
 }
 
 export const APPEARANCE_KEYS: readonly (keyof CharacterAppearance)[] = [
   'bodyId',
   'faceId',
+  'beardId',
   'skinId',
   'hairId',
   'hairColorId',
@@ -30,7 +38,10 @@ export const APPEARANCE_KEYS: readonly (keyof CharacterAppearance)[] = [
   'bottomColorId',
   'shoesId',
   'shoesColorId',
+  'hatId',
+  'hatColorId',
   'accessoryId',
+  'extraId',
 ];
 
 /** Validates the *shape* of an appearance (all keys present, short safe strings). Catalog membership is checked by
