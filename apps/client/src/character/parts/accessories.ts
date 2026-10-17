@@ -1,17 +1,51 @@
-/** Accessories: rigid head pieces (glasses, headphones) and a skinned crossbody bag. Fixed colors per piece. */
+/**
+ * Face and head accessories, rigid on the Head bone, fixed colors per piece. Pieces at the sides of the head
+ * (headphones, the flower) move out with the hair volume (`hairOuter`).
+ */
 import * as THREE from 'three';
-import type { BoneName } from '../rig/GRARig';
-import { ringAt, type BodyShape } from '../build/anatomy';
-import { PartBuilder, Slot, type V3 } from '../build/PartBuilder';
+import type { BodyShape, HeadShape } from '../build/anatomy';
+import { PartBuilder, Slot, facing, frame, type V3 } from '../build/PartBuilder';
+import { dirOf, hairOuter } from './hair';
 
 export const ACCESSORY_COLORS: Record<string, { acc: string; accent: string }> = {
   'acc.none': { acc: '#2b2a33', accent: '#2b2a33' },
   'acc.glasses': { acc: '#2b2a33', accent: '#c9a45c' },
+  'acc.shades': { acc: '#2b2a33', accent: '#4cc3d9' },
   'acc.headphones': { acc: '#f1e8d6', accent: '#3a3a42' },
-  'acc.bag': { acc: '#e6b83c', accent: '#6b4a2f' },
+  'acc.hoops': { acc: '#e2b13c', accent: '#fff0a8' },
+  'acc.flor': { acc: '#e8475f', accent: '#ffd36e' },
 };
 
-export function buildAccessory(b: PartBuilder, s: BodyShape, accId: string): void {
+const BONES = ['Head' as const];
+
+/** Frame bridge and temple arms shared by both glasses. */
+function glassesFrame(b: PartBuilder, h: HeadShape, lens: V3[], halfW: number): void {
+  const c = h.center;
+  lens.forEach((p, i) => {
+    const sx = i === 0 ? 1 : -1;
+    b.tube(
+      [
+        { p: [p[0] + sx * halfW, p[1] + 0.004, p[2] - 0.004], ra: 0.003, rb: 0.003 },
+        { p: [sx * (h.a + 0.01), c[1] + 0.0, c[2] + 0.03], ra: 0.003, rb: 0.003 },
+        { p: [sx * (h.a + 0.006), c[1] - 0.008, c[2] - 0.03], ra: 0.003, rb: 0.003 },
+      ],
+      { slot: Slot.ACC, bones: BONES, ref: [0, 1, 0], segments: 6, outline: 0.5 },
+    );
+  });
+  if (lens.length === 2) {
+    const [l, r] = lens as [V3, V3];
+    b.tube(
+      [
+        { p: [l[0] - halfW, l[1] + 0.003, l[2]], ra: 0.003, rb: 0.003 },
+        { p: [0, (l[1] + r[1]) / 2 + 0.008, (l[2] + r[2]) / 2 + 0.004], ra: 0.003, rb: 0.003 },
+        { p: [r[0] + halfW, r[1] + 0.003, r[2]], ra: 0.003, rb: 0.003 },
+      ],
+      { slot: Slot.ACC, bones: BONES, ref: [0, 1, 0], segments: 6, outline: 0.5 },
+    );
+  }
+}
+
+export function buildAccessory(b: PartBuilder, s: BodyShape, accId: string, hairId: string): void {
   const h = s.head;
   const c = h.center;
   switch (accId) {
@@ -21,73 +55,84 @@ export function buildAccessory(b: PartBuilder, s: BodyShape, accId: string): voi
         const f = h.frontPoint(sx * 0.044, -0.006, 0.016);
         if (!f) continue;
         lens.push(f.p);
-        b.torus(f.p, f.n, 0.025, 0.0034, { slot: Slot.ACC, bones: ['Head'], outline: 0.6 }, 18, 6);
-        // Temple arm back to the ear.
-        b.tube(
-          [
-            { p: [f.p[0] + sx * 0.024, f.p[1] + 0.004, f.p[2] - 0.004], ra: 0.003, rb: 0.003 },
-            { p: [sx * (h.a + 0.01), c[1] + 0.0, c[2] + 0.03], ra: 0.003, rb: 0.003 },
-            { p: [sx * (h.a + 0.006), c[1] - 0.008, c[2] - 0.03], ra: 0.003, rb: 0.003 },
-          ],
-          { slot: Slot.ACC, bones: ['Head'], ref: [0, 1, 0], segments: 6, outline: 0.5 },
-        );
+        b.torus(f.p, f.n, 0.025, 0.0034, { slot: Slot.ACC, bones: BONES, outline: 0.6 }, 18, 6);
       }
-      if (lens.length === 2) {
-        const [l, r] = lens as [V3, V3];
-        b.tube(
-          [
-            { p: [l[0] - 0.024, l[1] + 0.003, l[2]], ra: 0.003, rb: 0.003 },
-            { p: [0, (l[1] + r[1]) / 2 + 0.008, (l[2] + r[2]) / 2 + 0.004], ra: 0.003, rb: 0.003 },
-            { p: [r[0] + 0.024, r[1] + 0.003, r[2]], ra: 0.003, rb: 0.003 },
-          ],
-          { slot: Slot.ACC, bones: ['Head'], ref: [0, 1, 0], segments: 6, outline: 0.5 },
-        );
+      glassesFrame(b, h, lens, 0.024);
+      break;
+    }
+    case 'acc.shades': {
+      // Mirrored sunglasses: wide oval lenses filled with the mirror color, thick frame.
+      const lens: V3[] = [];
+      for (const sx of [1, -1]) {
+        const f = h.frontPoint(sx * 0.046, -0.004, 0.016);
+        if (!f) continue;
+        lens.push(f.p);
+        const { e1, e2 } = frame(f.n);
+        const rim: V3[] = [];
+        for (let i = 0; i < 20; i++) {
+          const a = (i / 20) * Math.PI * 2;
+          // Slightly cat-eye: higher on the outer side.
+          const lift = 0.004 * Math.max(0, Math.cos(a) * sx) * Math.max(0, Math.sin(a));
+          const x = Math.cos(a) * 0.029;
+          const y = Math.sin(a) * 0.02 + lift;
+          rim.push([f.p[0] + e1.x * x + e2.x * y, f.p[1] + e1.y * x + e2.y * y, f.p[2] + e1.z * x + e2.z * y]);
+        }
+        b.loop(rim, 0.004, 0.004, { slot: Slot.ACC, bones: BONES, outline: 0.6 }, 6);
+        b.ellipsoid(f.p, [0.028, 0.019, 0.004], { slot: Slot.ACC_ACCENT, bones: BONES, outline: 0 }, 14, 6, facing(f.n));
       }
+      glassesFrame(b, h, lens, 0.029);
       break;
     }
     case 'acc.headphones': {
-      const cupX = h.a * 1.24 + 0.012;
+      // Cups clear the hair at ear height; the band clears the top of the hair.
       const cy = c[1] - 0.006;
       const cz = c[2] - 0.01;
+      const side = hairOuter(h, hairId, dirOf(Math.PI / 2, Math.PI / 2));
+      const top = hairOuter(h, hairId, dirOf(0, 0));
+      const cupX = Math.max(h.a * 1.24 + 0.012, side[0] - c[0] + 0.018);
+      const rise = Math.max(h.b * 1.26 - 0.01, top[1] - cy - 0.03 + 0.012);
       const band: { p: V3; ra: number; rb: number }[] = [];
       for (let i = 0; i <= 8; i++) {
         const t = (i / 8) * Math.PI;
-        const x = Math.cos(t) * (cupX - 0.004);
-        const y = cy + 0.03 + Math.sin(t) * (h.b * 1.26 - 0.01);
-        band.push({ p: [x, y, cz], ra: 0.011, rb: 0.017 });
+        band.push({ p: [c[0] + Math.cos(t) * (cupX - 0.004), cy + 0.03 + Math.sin(t) * rise, cz], ra: 0.011, rb: 0.017 });
       }
-      b.tube(band, { slot: Slot.ACC, bones: ['Head'], ref: [0, 0, 1], segments: 8, outline: 0.8 });
+      b.tube(band, { slot: Slot.ACC, bones: BONES, ref: [0, 0, 1], segments: 8, outline: 0.8 });
       for (const sx of [1, -1]) {
         const rot = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationZ(sx * 0.08));
-        b.roundedBox([sx * cupX, cy, cz], [0.024, 0.044, 0.04], { slot: Slot.ACC, bones: ['Head'] }, 3, 14, 10, rot);
-        b.ellipsoid([sx * (cupX - 0.022), cy, cz], [0.012, 0.038, 0.034], { slot: Slot.ACC_ACCENT, bones: ['Head'] }, 10, 6);
+        b.roundedBox([c[0] + sx * cupX, cy, cz], [0.024, 0.044, 0.04], { slot: Slot.ACC, bones: BONES }, 3, 14, 10, rot);
+        b.ellipsoid([c[0] + sx * (cupX - 0.022), cy, cz], [0.012, 0.038, 0.034], { slot: Slot.ACC_ACCENT, bones: BONES }, 10, 6);
       }
       break;
     }
-    case 'acc.bag': {
-      // Strap from the left shoulder across the chest to the right hip, and across the back.
-      const strapBones: BoneName[] = ['Hips', 'Spine', 'Spine1', 'Spine2', 'LeftShoulder', 'RightShoulder'];
-      const front: { p: V3; ra: number; rb: number }[] = [];
-      const back: { p: V3; ra: number; rb: number }[] = [];
-      const n = 8;
-      for (let i = 0; i <= n; i++) {
-        const t = i / n;
-        const y = 1.29 - t * 0.34;
-        const x = 0.1 - t * 0.24;
-        const r = ringAt(s.torso, 1, y);
-        const halfW = r.ra;
-        const ex = Math.min(1, Math.abs(x) / (halfW + 0.04));
-        const zf = r.p[2] + (r.rb + 0.04) * Math.sqrt(Math.max(0.05, 1 - ex * ex));
-        front.push({ p: [x, y, zf], ra: 0.016, rb: 0.005 });
-        back.push({ p: [x, y, r.p[2] - (r.rb + 0.04) * Math.sqrt(Math.max(0.05, 1 - ex * ex))], ra: 0.016, rb: 0.005 });
+    case 'acc.hoops': {
+      // Big gold hoops hanging from the earlobes (ears in body.ts: center x = ±0.93 a, 1.2 cm below the head center).
+      for (const sx of [1, -1]) {
+        const ear: V3 = [c[0] + sx * (h.a * 0.93 + 0.006), c[1] - 0.042, c[2] - 0.006];
+        b.torus([ear[0], ear[1] - 0.02, ear[2]], [1, 0, 0], 0.022, 0.0028, { slot: Slot.ACC, bones: BONES, outline: 0.5 }, 22, 6);
       }
-      b.tube(front, { slot: Slot.ACC_ACCENT, bones: strapBones, ref: [1, 1, 0], segments: 6, outline: 0.6 });
-      b.tube(back, { slot: Slot.ACC_ACCENT, bones: strapBones, ref: [1, 1, 0], segments: 6, outline: 0.6 });
-      // Pouch at the right hip.
-      const r = ringAt(s.torso, 1, 0.92);
-      const rot = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationY(-0.6));
-      b.roundedBox([-0.135, 0.915, r.p[2] + r.rb * 0.7 + 0.03], [0.07, 0.052, 0.03], { slot: Slot.ACC, bones: ['Hips', 'Spine'] }, 4, 14, 10, rot);
-      b.roundedBox([-0.135, 0.955, r.p[2] + r.rb * 0.7 + 0.052], [0.066, 0.016, 0.012], { slot: Slot.ACC_ACCENT, bones: ['Hips', 'Spine'], outline: 0.5 }, 4, 10, 6, rot);
+      break;
+    }
+    case 'acc.flor': {
+      // A hibiscus tucked over the left ear, with two leaves behind it.
+      const d = dirOf(76 * Math.PI / 180, 64 * Math.PI / 180);
+      const n: V3 = [d.x, d.y, d.z];
+      const p = hairOuter(h, hairId, d, 0.008);
+      const { e1, e2 } = frame(n);
+      for (const [u, v, a] of [[0.032, -0.02, 0.5], [-0.028, -0.026, -0.6]] as const) {
+        const lp: V3 = [p[0] + e1.x * u + e2.x * v - d.x * 0.004, p[1] + e1.y * u + e2.y * v - d.y * 0.004, p[2] + e1.z * u + e2.z * v - d.z * 0.004];
+        const rot = facing(n).multiply(new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationZ(a)));
+        b.ellipsoid(lp, [0.03, 0.013, 0.004], { slot: Slot.LEAF, bones: BONES, outline: 0.4 }, 10, 5, rot);
+      }
+      b.flower(p, n, 0.044, 0.01, 5, { slot: Slot.ACC, bones: BONES, outline: 0.6 }, 0.3, 0.3, 30);
+      const heart: V3 = [p[0] + d.x * 0.009, p[1] + d.y * 0.009, p[2] + d.z * 0.009];
+      b.ellipsoid(heart, [0.011, 0.011, 0.006], { slot: Slot.ACC_ACCENT, bones: BONES, outline: 0.3 }, 10, 5, facing(n));
+      b.tube(
+        [
+          { p: heart, ra: 0.0025, rb: 0.0025 },
+          { p: [heart[0] + d.x * 0.02 + e2.x * 0.01, heart[1] + d.y * 0.02 + e2.y * 0.01, heart[2] + d.z * 0.02 + e2.z * 0.01], ra: 0.0022, rb: 0.0022 },
+        ],
+        { slot: Slot.ACC_ACCENT, bones: BONES, ref: [0, 1, 0], segments: 5, capStart: 'flat', capEnd: 'round', outline: 0.3 },
+      );
       break;
     }
     default:

@@ -20,10 +20,22 @@
       "port": 5174
     },
     {
+      "name": "graao-client-bench",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@graao/client", "exec", "vite", "--config", "../../tools/profiling/vite.bench.config.mjs", "--port", "5176"],
+      "port": 5176
+    },
+    {
       "name": "graao-server-alt",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@graao/server", "exec", "tsx", "watch", "--clear-screen=false", "src/index.ts", "--port", "2568"],
       "port": 2568
+    },
+    {
+      "name": "graao-server-stable",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@graao/server", "exec", "tsx", "src/index.ts", "--port", "2569"],
+      "port": 2569
     }
   ]
 }

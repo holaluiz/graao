@@ -45,7 +45,7 @@ including the ink shells (≈ 2 k each; only the equipped one is visible).
 - Remote shots: tracer from the remote's rendered muzzle to the server's impact points, `fire` clip, panned and
   distance-attenuated sound on the Threat bus.
 - Blocked-shot marker (red ×) when the muzzle cannot see the aimed point.
-- Accessibility: camera shake/recoil FULL / REDUCED / OFF in the menu ("Tremor da câmera").
+- Camera shake/recoil is always at full strength for every player (no menu option).
 
 Response stack: BODY, WORLD, FX, CAMERA, AUDIO, UI at MICRO / COMBAT / MAJOR intensity. Hit kinds always differ by
 shape, not only color.

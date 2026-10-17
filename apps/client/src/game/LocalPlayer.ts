@@ -3,6 +3,9 @@
  * Every SIM step builds an input command (seq, world wish direction, aim, buttons), simulates it immediately (no round
  * trip before moving) and keeps it until the server acknowledges it. On each authoritative snapshot the state is reset
  * to the server's and unacknowledged commands are replayed; the visual error is decayed smoothly.
+ *
+ * Abilities that move the player are predicted the same way: a dash starts at an announced command sequence on both
+ * sides (`scheduleDash`), and the server's slow factor is mirrored (`slow`).
  */
 import * as THREE from 'three';
 import {
@@ -11,6 +14,7 @@ import {
   createCharacterState,
   decodeInput,
   newInput,
+  startDash,
   type CharacterBody,
   type CharacterState,
   type GamePhysics,
@@ -32,6 +36,10 @@ export class LocalPlayer {
   /** Visual-only correction offset (decays to zero). */
   private readonly correction = new THREE.Vector3();
   private readonly scratchInput = newInput();
+  /** The latest dash: starts before simulating command `seq` (same rule as the server). */
+  private dash: { seq: number; dir: Vec3; distance: number; duration: number } | null = null;
+  /** Mirrored speed multiplier while slowed by an ability (set every frame by the ability director). */
+  slow = 1;
   stats = { replayed: 0, lastCorrection: 0, pending: 0 };
 
   constructor(private readonly physics: GamePhysics, spawn: Vec3, facing: Vec3) {
@@ -46,6 +54,33 @@ export class LocalPlayer {
     this.prev = cloneCharacterState(this.state);
     this.pending.length = 0;
     this.correction.set(0, 0, 0);
+    this.dash = null;
+  }
+
+  /** Sequence number of the next movement command this player will simulate. */
+  get nextSeq(): number {
+    return (this.seq + 1) & 0x7fffffff;
+  }
+
+  /**
+   * Dash prediction: starts at the next command (whose sequence goes to the server in the ABILITY_REQUEST), with the
+   * network-quantized direction so both sides compute the same motion. Returns that command sequence.
+   */
+  scheduleDash(dir: Vec3, distance: number, duration: number): number {
+    const seq = this.nextSeq;
+    this.dash = { seq, dir: { ...dir }, distance, duration };
+    return seq;
+  }
+
+  /** The server refused the dash: stop predicting it (the next snapshot corrects any motion already shown). */
+  cancelDash(seq: number): void {
+    if (this.dash?.seq === seq) this.dash = null;
+  }
+
+  private stepCmd(s: CharacterState, cmd: InputCmd): void {
+    s.slow = this.slow;
+    if (this.dash && cmd[0] === this.dash.seq) startDash(s, this.dash.dir, this.dash.distance, this.dash.duration, SIM_DT);
+    this.motor.step(this.body, s, decodeInput(cmd, this.scratchInput), SIM_DT);
   }
 
   /** Builds the command for this step from input and the camera frame. */
@@ -88,7 +123,7 @@ export class LocalPlayer {
       this.acc -= SIM_DT;
       const cmd = this.buildCmd(input, cam, frozen);
       this.prev = cloneCharacterState(this.state);
-      this.motor.step(this.body, this.state, decodeInput(cmd, this.scratchInput), SIM_DT);
+      this.stepCmd(this.state, cmd);
       if (networked) {
         this.pending.push(cmd);
         this.outbox.push(cmd);
@@ -109,7 +144,17 @@ export class LocalPlayer {
     // The snapshot does not carry input edge state: rebuild it from the last acknowledged command.
     const s = cloneCharacterState(server);
     s.jumpHeld = acked ? (acked[7] & InputButton.JUMP) !== 0 : this.state.jumpHeld;
-    for (const cmd of this.pending) this.motor.step(this.body, s, decodeInput(cmd, this.scratchInput), SIM_DT);
+    // Snapshots do not carry dash state: rebuild it from the dash's start command (whole steps, exact).
+    const d = this.dash;
+    if (d && seqLE(d.seq, ackSeq)) {
+      const total = Math.max(1, Math.round(d.duration / SIM_DT));
+      const done = ((ackSeq - d.seq) & 0x7fffffff) + 1;
+      if (done < total) {
+        startDash(s, d.dir, d.distance, d.duration, SIM_DT);
+        s.dashSteps = total - done;
+      } else if (done > total + 240) this.dash = null;
+    }
+    for (const cmd of this.pending) this.stepCmd(s, cmd);
     const err = Math.hypot(s.pos.x - bx, s.pos.y - by, s.pos.z - bz);
     this.stats.replayed = this.pending.length;
     this.stats.lastCorrection = err;

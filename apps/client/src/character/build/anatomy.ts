@@ -155,6 +155,27 @@ export function ringAt(rings: RingSpec[], axis: 0 | 1, value: number): RingSpec 
   return { ...(before ? first : last) };
 }
 
+/**
+ * Point on the torso surface at height `y` and azimuth `theta` (0 = chest, +π/2 = the character's left, π = back),
+ * on the garment shell `inflate(ring, d, k)` with the exponent garments use. Returns the point and its outward normal.
+ */
+export function torsoPoint(s: BodyShape, y: number, theta: number, d: number, k = 1): { p: V3; n: V3 } {
+  const r = ringAt(s.torso, 1, y);
+  const ra = r.ra * k + d;
+  const rb = r.rb * k + d;
+  const n = Math.max(2.2, (r.n ?? 2) - 0.2);
+  const S = (v: number) => Math.sign(v) * Math.pow(Math.abs(v), 2 / n);
+  const sx = Math.sin(theta);
+  const cz = Math.cos(theta);
+  const x = S(sx) * ra;
+  const z = S(cz) * rb;
+  // Superellipse gradient: |x/ra|^(n-1) / ra.
+  const gx = Math.sign(x) * Math.pow(Math.abs(x / ra), n - 1) / ra;
+  const gz = Math.sign(z) * Math.pow(Math.abs(z / rb), n - 1) / rb;
+  const l = Math.hypot(gx, gz) || 1;
+  return { p: [r.p[0] + x, y, r.p[2] + z], n: [gx / l, 0, gz / l] };
+}
+
 /** Resamples a ring list between two axis values with `count` rings (keeps silhouettes smooth for garments). */
 export function sliceRings(rings: RingSpec[], axis: 0 | 1, from: number, to: number, count: number): RingSpec[] {
   const out: RingSpec[] = [];

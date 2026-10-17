@@ -2,7 +2,7 @@
  * GraaoCharacter: one visual character instance.
  *
  *   root (PlayerRoot visual, aligned to localUp on the planet)
- *   └── visualRoot (CharacterVisualRoot: turn lean, landing squash)
+ *   └── visualRoot (CharacterVisualRoot: the skydive tilt, belly-down while diving, feet-first near the ground)
  *         ├── Hips … (GRA_Rig_MixamoCompatible bones)
  *         ├── mesh     (merged SkinnedMesh: body + clothes + hair + accessory, palette material)
  *         └── outline  (same geometry, inverted-hull ink)
@@ -32,6 +32,10 @@ export class GraaoCharacter {
   private rig: GRARig | null = null;
   private geoKey = '';
   private readonly attachments = new Map<THREE.Object3D, BoneName>();
+  /** Current skydive tilt (rad, forward about the side axis) and its pivot height (hips). */
+  private tilt = 0;
+  private static readonly TILT_PIVOT = 0.95;
+  private static readonly TILT_DIVE = 1.3;
 
   constructor(
     private readonly parts: CharacterPartLibrary,
@@ -119,6 +123,14 @@ export class GraaoCharacter {
   }
 
   update(dt: number, s: AnimInput): void {
+    // Skydive: belly-down, flaring back to feet-first over the last metres so the landing reads.
+    const flare = s.groundDist === undefined ? 1 : THREE.MathUtils.smoothstep(s.groundDist, 2.5, 10);
+    const target = s.diving ? THREE.MathUtils.lerp(0.15, GraaoCharacter.TILT_DIVE, flare) : 0;
+    this.tilt += (target - this.tilt) * (1 - Math.exp(-dt * (s.diving ? 5 : 9)));
+    if (Math.abs(this.tilt) < 1e-4 && target === 0) this.tilt = 0;
+    const h = GraaoCharacter.TILT_PIVOT;
+    this.visualRoot.rotation.set(this.tilt, 0, 0);
+    this.visualRoot.position.set(0, h * (1 - Math.cos(this.tilt)), -h * Math.sin(this.tilt));
     this.anim.update(dt, s);
   }
 

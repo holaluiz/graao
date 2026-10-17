@@ -149,6 +149,11 @@ export class PlanetView {
   readonly instancedMeshes: THREE.InstancedMesh[] = [];
   private readonly fades = new Map<THREE.InstancedMesh, Float32Array>();
   stats = { terrainTris: 0, propInstances: 0, grassInstances: 0, drawGroups: 0 };
+  /** Grass and flower chunks: skipped from high up (grass collapses beyond uFadeDist anyway; flowers go sub-pixel). */
+  private readonly grassMeshes: THREE.InstancedMesh[] = [];
+  private readonly flowerMeshes: THREE.InstancedMesh[] = [];
+  /** Warm rim glow seen from orbit (additive fresnel shell, hidden on the ground). */
+  readonly atmosphere: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
 
   constructor(private readonly world: GameWorld, quality: Quality) {
     this.group.name = 'Planet';
@@ -157,6 +162,53 @@ export class PlanetView {
     this.water = this.buildWater();
     this.grassMaterial = this.buildGrassMaterial();
     this.buildProps(quality);
+    this.atmosphere = new THREE.Mesh(
+      new THREE.SphereGeometry(PLANET.radius + 9, 64, 32),
+      new THREE.ShaderMaterial({
+        name: 'GRAAtmosphere',
+        vertexShader: /* glsl */ `
+          varying vec3 vN;
+          varying vec3 vV;
+          void main() {
+            vec4 wp = modelMatrix * vec4(position, 1.0);
+            vN = normalize(wp.xyz);
+            vV = normalize(cameraPosition - wp.xyz);
+            gl_Position = projectionMatrix * viewMatrix * wp;
+          }`,
+        fragmentShader: /* glsl */ `
+          uniform float uOrbit;
+          uniform vec3 uColor;
+          uniform vec3 uSunDir;
+          varying vec3 vN;
+          varying vec3 vV;
+          void main() {
+            float rim = pow(1.0 - clamp(dot(vN, vV), 0.0, 1.0), 3.0);
+            float lit = 0.45 + 0.55 * smoothstep(-0.4, 0.6, dot(vN, uSunDir));
+            gl_FragColor = vec4(uColor * rim * lit * uOrbit, 1.0);
+          }`,
+        uniforms: { uOrbit: { value: 0 }, uColor: { value: new THREE.Color('#ffcf9a') }, uSunDir: { value: new THREE.Vector3(0, 1, 0) } },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    this.atmosphere.visible = false;
+    this.atmosphere.renderOrder = 5;
+    this.group.add(this.atmosphere);
+  }
+
+  /**
+   * Orbit blend from the renderer (0 on the ground → 1 from the UFO's reveal) and the camera's altitude (m): from
+   * high up the grass (fully shrunk past its fade distance) and the flowers are not drawn at all.
+   */
+  setOrbit(k: number, sunDir: THREE.Vector3, altitude: number): void {
+    const grass = altitude < 36;
+    const flowers = altitude < 70;
+    if (this.grassMeshes[0]?.visible !== grass) for (const m of this.grassMeshes) m.visible = grass;
+    if (this.flowerMeshes[0] && this.flowerMeshes[0].visible !== flowers) for (const m of this.flowerMeshes) m.visible = flowers;
+    this.atmosphere.visible = k > 0.01;
+    this.atmosphere.material.uniforms.uOrbit!.value = k * 0.85;
+    (this.atmosphere.material.uniforms.uSunDir!.value as THREE.Vector3).copy(sunDir);
   }
 
   private buildTerrain(): void {
@@ -382,6 +434,7 @@ export class PlanetView {
       mesh.computeBoundingSphere();
       mesh.receiveShadow = true;
       this.group.add(mesh);
+      (name === 'grass' ? this.grassMeshes : this.flowerMeshes).push(mesh);
       this.stats.grassInstances += ps.length;
     }
   }

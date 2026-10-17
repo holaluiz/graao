@@ -36,6 +36,9 @@ export class RemotePlayer {
   /** performance.now() of this player's last shot (holds the aim pose). */
   firedAt = -1e9;
   alive = true;
+  /** Riding the UFO (hidden inside the ship) / skydiving (from the latest snapshot). */
+  onShip = false;
+  diving = false;
 
   constructor(
     readonly index: number,
@@ -80,6 +83,14 @@ export class RemotePlayer {
     if (!r) return;
     const { a, b, alpha, extrapolateMs } = r;
     this.extrapolatedMs = extrapolateMs;
+    this.onShip = (b.flags & SnapFlag.ON_SHIP) !== 0;
+    this.diving = !this.onShip && (b.flags & SnapFlag.DIVING) !== 0;
+    this.character.root.visible = !this.onShip;
+    if (this.onShip) {
+      this.pos.copy(b.pos);
+      this.label.style.display = 'none';
+      return;
+    }
     if (extrapolateMs > 0) this.pos.copy(b.pos).addScaledVector(b.vel, Math.min(extrapolateMs, 100) / 1000);
     else this.pos.lerpVectors(a.pos, b.pos, alpha);
     this.facing.lerpVectors(a.facing, b.facing, alpha).normalize();
@@ -90,6 +101,11 @@ export class RemotePlayer {
     const speed = v.addScaledVector(up, -v.dot(up)).length();
     this.alive = (b.flags & SnapFlag.ALIVE) !== 0;
     this.label.classList.toggle('down', !this.alive);
+    let groundDist: number | undefined;
+    if (this.diving) {
+      const hit = physics.castRay({ x: this.pos.x + up.x * 0.3, y: this.pos.y + up.y * 0.3, z: this.pos.z + up.z * 0.3 }, { x: -up.x, y: -up.y, z: -up.z }, 400);
+      groundDist = hit ? Math.max(0, hit.toi - 0.3) : undefined;
+    }
     this.character.update(dt, {
       moveState: b.moveState,
       speed,
@@ -97,6 +113,8 @@ export class RemotePlayer {
       aiming: this.alive && ((b.flags & SnapFlag.AIMING) !== 0 || performance.now() - this.firedAt < 650),
       aimPitch: a.aimPitch + (b.aimPitch - a.aimPitch) * alpha,
       action: (b.flags & SnapFlag.ALIVE) === 0 ? ActionState.DEAD : b.action,
+      diving: this.diving,
+      groundDist,
     });
     this.placeLabel(up, camera, viewport, physics);
   }
@@ -115,7 +133,8 @@ export class RemotePlayer {
       const hit = physics.castRay(cam, dir, dist - 0.3, GROUPS_WORLD_QUERY);
       if (hit) visible = false;
     }
-    headW.addScaledVector(up, 0.3);
+    // Above the Ultimate Mark (which floats ~0.6 m over the head), so the label never covers it.
+    headW.addScaledVector(up, 0.95);
     let x = 0;
     let y = 0;
     if (visible) {

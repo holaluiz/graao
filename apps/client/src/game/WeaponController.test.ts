@@ -65,7 +65,7 @@ describe('WeaponController (local prediction)', () => {
     const local = w.ammo[0]!;
     const fired = WEAPONS.sunbeam.magazine - local;
     expect(fired).toBeGreaterThan(1);
-    const status = (ammo: number, shotSeq: number) => ({ weapon: 0, ammo: [ammo, WEAPONS.petal.magazine], reloading: false, reloadEndsAt: 0, alive: true, respawnAt: 0, shotSeq });
+    const status = (ammo: number, shotSeq: number) => ({ weapon: 0, ammo: [ammo, WEAPONS.petal.magazine], reloading: false, reloadEndsAt: 0, alive: true, respawnAt: 0, shotSeq, mana: 100, cd: [0, 0, 0, 0], castUntil: 0, abilitySeq: -1, slowUntil: 0, slow: 100 });
     // The server has handled only shot #1 so far: the others stay predicted.
     w.applyServer(status(WEAPONS.sunbeam.magazine - 1, 1), 1460, 60, (t) => t);
     expect(w.ammo[0]).toBe(local);

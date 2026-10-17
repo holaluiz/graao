@@ -7,17 +7,22 @@ Vite + TypeScript, Three.js r186 `WebGLRenderer` (WebGL2), DOM/CSS/SVG UI. Entry
 `index.html` paints the logo and a real progress bar inline (no script needed). `main.ts` (3.5 KB) dynamically imports
 the engine chunk, then `GraaoApp.load()` reports progress: world (terrain, layout, Rapier) → planet view → animation
 retargeting → local character → shader warm-up. **ENTER GRAAO** unlocks audio and starts a paper→world reveal.
-`?auto` skips ENTER (development and tests); `?quality=LOW|MEDIUM|HIGH`; `?lineup=N` spawns N random characters.
+`?auto` skips ENTER (development and tests); `?quality=LOW|MEDIUM|HIGH`; `?lineup=N` spawns N random characters;
+`?nodrop` starts solo play on the ground instead of from the UFO.
 
 ## Phases (GRAHudDirector, `app/GraaoApp.ts`)
 
 `MENU` (character framed on the plaza), `CHARACTER_CREATOR` (front framing, drag/zoom), `MATCH` (free roam or online).
-Each phase sets visible UI, input enablement and camera context. Later: ROOM, ABILITY_DRAFT, UFO, DROP, RESULTS.
+Each phase sets visible UI, input enablement and camera context. Inside MATCH the server's phases are presented by
+the CombatDirector (warmup, countdown, results), the DraftScreen (ABILITY_DRAFT) and the DeployDirector (UFO and DROP:
+reveal, ride, dive, landing; HUD modes `ufo` / `drop` hide the combat widgets). Later: ROOM.
 
 ## Frame (`GraaoApp.frame`)
 
 input → camera look → local fixed-step prediction (60 Hz accumulator) → net (send inputs, interpolate remotes) →
-camera (terrain pull-in) → character pose/animation → obstruction dissolve → sun rig → planet uniforms → render → F3.
+camera (terrain pull-in) → combat → deploy → character pose/animation → obstruction dissolve → sun rig → planet
+uniforms → atmosphere by camera altitude → render → F3. Aboard the UFO the ride camera replaces the prediction and the
+third-person camera (the local player is not simulated until the server's `jump`).
 
 ## Quality
 

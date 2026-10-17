@@ -38,6 +38,10 @@ uniform vec3 uSunColor;
 uniform vec3 uCloudLight;
 uniform vec3 uCloudShade;
 uniform float uTime;
+uniform float uOrbit;
+uniform float uLimb;
+uniform vec3 uSpace;
+uniform vec3 uSpaceDeep;
 varying vec3 vDir;
 ${GLSL_NOISE}
 void main() {
@@ -58,6 +62,19 @@ void main() {
   vec3 cc = mix(uCloudLight, uCloudShade, shade * 0.7);
   cc += uSunColor * pow(sd, 4.0) * 0.25;
   col = mix(col, cc, cloud * 0.92);
+  // From orbit (UFO): a painted dusk around the planet, a warm halo hugging its limb and a few soft stars.
+  if (uOrbit > 0.001) {
+    // Angle from the planet's centre as seen from the camera; uLimb is the planet's angular radius.
+    float ang = acos(clamp(dot(d, -uUp), -1.0, 1.0));
+    float halo = 1.0 - smoothstep(uLimb, uLimb * 1.5 + 0.02, ang);
+    vec3 space = mix(uSpaceDeep, uSpace, 1.0 - smoothstep(uLimb, uLimb * 3.5 + 0.3, ang));
+    vec3 cell = floor(d * 64.0);
+    float hsh = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float star = step(0.962, hsh) * smoothstep(0.24, 0.0, length(fract(d * 64.0) - 0.5)) * (1.0 - halo);
+    vec3 orbitCol = mix(space, uHorizon, pow(halo, 1.6) * 0.92) + vec3(star * 0.5);
+    orbitCol += uSunColor * (pow(sd, 8.0) * 0.22 + pow(sd, 90.0) * 0.55);
+    col = mix(col, orbitCol, uOrbit);
+  }
   gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
 }
@@ -72,6 +89,8 @@ export const SKY = {
   cloudLight: new THREE.Color('#fff4e6'),
   cloudShade: new THREE.Color('#c9b3d9'),
   fog: new THREE.Color('#e7cdb4'),
+  space: new THREE.Color('#7489c6'),
+  spaceDeep: new THREE.Color('#2e3a6b'),
 };
 
 export class GRARenderer {
@@ -127,6 +146,10 @@ export class GRARenderer {
         uCloudLight: { value: SKY.cloudLight },
         uCloudShade: { value: SKY.cloudShade },
         uTime: { value: 0 },
+        uOrbit: { value: 0 },
+        uLimb: { value: 1.57 },
+        uSpace: { value: SKY.space },
+        uSpaceDeep: { value: SKY.spaceDeep },
       },
       side: THREE.BackSide,
       depthWrite: false,
@@ -185,6 +208,27 @@ export class GRARenderer {
     u.uUp!.value.copy(this.camera.position).normalize();
     u.uSunDir!.value.copy(this.sunDir);
     u.uTime!.value = time;
+  }
+
+  /**
+   * Atmosphere by camera altitude: the warm ground haze thins as the camera climbs (the planet must read from the
+   * UFO) and the sky turns into the orbit dusk. Returns the orbit blend (0 on the ground, 1 in orbit).
+   */
+  setAltitude(planetRadius: number): number {
+    const dist = this.camera.position.length();
+    const alt = dist - planetRadius;
+    this.fog.density = THREE.MathUtils.lerp(0.0085, 0.0011, THREE.MathUtils.smoothstep(alt, 14, 140));
+    const orbit = THREE.MathUtils.smoothstep(alt, 30, 190);
+    const u = this.sky.material.uniforms;
+    u.uOrbit!.value = orbit;
+    u.uLimb!.value = Math.asin(Math.min(1, planetRadius / Math.max(dist, planetRadius)));
+    // Near plane: precise depth from afar, close-up framing on the ground.
+    const near = alt > 30 ? 0.5 : 0.05;
+    if (this.camera.near !== near) {
+      this.camera.near = near;
+      this.camera.updateProjectionMatrix();
+    }
+    return orbit;
   }
 
   render(): void {

@@ -104,17 +104,20 @@ export interface PlayerHitTarget {
   alive: boolean;
 }
 
-/** Nearest player hit along a ray: distance, index and whether it was the head. */
-export function rayPlayers(o: Vec3, d: Vec3, maxDist: number, players: PlayerHitTarget[], ignore: number): { t: number; index: number; head: boolean } | null {
+/**
+ * Nearest player hit along a ray: distance, index and whether it was the head. `inflate` grows every hitbox (a
+ * projectile's radius: a sphere swept along the ray).
+ */
+export function rayPlayers(o: Vec3, d: Vec3, maxDist: number, players: PlayerHitTarget[], ignore: number, inflate = 0): { t: number; index: number; head: boolean } | null {
   let best: { t: number; index: number; head: boolean } | null = null;
   for (const p of players) {
     if (p.index === ignore || !p.alive) continue;
     const up = v3normalize(p.feet);
     const head = v3addScaled(p.feet, up, HITBOX.headHeight);
-    const th = raySphere(o, d, head, HITBOX.headRadius);
+    const th = raySphere(o, d, head, HITBOX.headRadius + inflate);
     const a = v3addScaled(p.feet, up, HITBOX.bodyBottom);
     const b = v3addScaled(p.feet, up, HITBOX.bodyTop);
-    const tb = rayCapsule(o, d, a, b, HITBOX.bodyRadius);
+    const tb = rayCapsule(o, d, a, b, HITBOX.bodyRadius + inflate);
     let t = -1;
     let isHead = false;
     if (th >= 0 && (tb < 0 || th <= tb)) {

@@ -5,7 +5,7 @@
  * Layers (manual weights, smoothed every frame):
  *   - Locomotion LOWER (hips + legs): idle / walk / run / sprint / air / fall — always full weight.
  *   - Locomotion UPPER (spine, arms, head): same clips × (1 − upper action weight).
- *   - Upper actions: aim (pitch blend up/neutral/down), fire, reload, cast.
+ *   - Upper actions: aim (pitch blend up/neutral/down), fire, reload, cast, castEnter, castHold (channel), throw.
  *   - Full-body one-shots: jump start, land, hit, death, dash, victory (override both locomotion halves).
  */
 import * as THREE from 'three';
@@ -23,7 +23,7 @@ function split(clip: THREE.AnimationClip): { lower: THREE.AnimationClip; upper: 
   };
 }
 
-const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall'];
+const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall', 'skydive'];
 /** Ground speed (m/s) at which each locomotion clip plays at timeScale 1 (tuned by eye). */
 const NATIVE_SPEED: Partial<Record<ClipName, number>> = { walk: 1.5, run: 4.6, sprint: 7.2 };
 
@@ -41,6 +41,10 @@ export interface AnimInput {
   /** Aim pitch relative to the local horizon, radians (+ up). */
   aimPitch: number;
   action: ActionState;
+  /** Skydiving out of the UFO (box pose, no aiming). */
+  diving?: boolean;
+  /** Height above whatever is below (m), while diving: the body flares feet-first near the ground. */
+  groundDist?: number;
 }
 
 export class CharacterAnimationController {
@@ -65,7 +69,7 @@ export class CharacterAnimationController {
       this.lower.set(name, this.layer(lower, THREE.LoopRepeat));
       this.upper.set(name, this.layer(upper, THREE.LoopRepeat));
     }
-    for (const name of ['aim', 'aimUp', 'aimDown', 'fire', 'reload', 'cast', 'castHold'] as ClipName[]) {
+    for (const name of ['aim', 'aimUp', 'aimDown', 'fire', 'reload', 'cast', 'castEnter', 'castHold', 'throw'] as ClipName[]) {
       const clip = lib.get(name);
       if (!clip) continue;
       const loop = name === 'aim' || name === 'aimUp' || name === 'aimDown' || name === 'castHold' ? THREE.LoopRepeat : THREE.LoopOnce;
@@ -102,14 +106,17 @@ export class CharacterAnimationController {
     this.oneShot = { name, until: this.time + (opts.hold ? Infinity : dur), hold: opts.hold };
   }
 
-  /** Plays an upper-body one-shot (fire, reload, cast) over locomotion. */
-  playUpper(name: ClipName, speed = 1): void {
+  /**
+   * Plays an upper-body action (fire, reload, cast, throw) over locomotion. `hold` keeps it for that many seconds
+   * instead of the clip length (looping channels such as castHold during an ability wind-up).
+   */
+  playUpper(name: ClipName, speed = 1, hold?: number): void {
     const l = this.upperActions.get(name);
     if (!l) return;
     l.action.reset();
     l.action.timeScale = speed;
     l.action.play();
-    this.upperShot = { name, until: this.time + l.action.getClip().duration / speed };
+    this.upperShot = { name, until: this.time + (hold ?? l.action.getClip().duration / speed) };
   }
 
   /** Duration (s) of a clip at timeScale 1, or 0 when missing. */
@@ -133,7 +140,7 @@ export class CharacterAnimationController {
 
     // Jump / land transitions.
     if (!s.grounded) this.airTime += dt;
-    if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP) this.playOneShot('jumpStart', { speed: 1.6 });
+    if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP && !s.diving) this.playOneShot('jumpStart', { speed: 1.6 });
     if (!this.wasGrounded && s.grounded && this.airTime > 0.35) this.playOneShot('land', { speed: 2.2 });
     if (s.grounded) this.airTime = 0;
     this.wasGrounded = s.grounded;
@@ -157,6 +164,7 @@ export class CharacterAnimationController {
         loco = this.airTime > 0.9 ? 'fall' : 'air';
         break;
     }
+    if (s.diving) loco = 'skydive';
     for (const [name, l] of this.lower) l.target = name === loco ? 1 : 0;
     const native = NATIVE_SPEED[loco];
     const scale = native ? THREE.MathUtils.clamp(s.speed / native, 0.65, 1.45) : 1;
@@ -171,7 +179,7 @@ export class CharacterAnimationController {
     if (this.upperShot && this.time < this.upperShot.until) {
       this.upperActions.get(this.upperShot.name)!.target = 1;
       upperW = 1;
-    } else if (s.aiming) {
+    } else if (s.aiming && !s.diving) {
       const p = THREE.MathUtils.clamp(s.aimPitch / 0.9, -1, 1);
       this.upperActions.get('aim')!.target = 1 - Math.abs(p);
       if (p > 0) this.upperActions.get('aimUp')!.target = p;

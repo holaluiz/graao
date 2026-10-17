@@ -20,7 +20,10 @@ import {
   S2C,
   SnapFlag,
   VEL_SCALE,
+  type AbilityRequestMsg,
+  type AbilityResultMsg,
   type CharacterAppearance,
+  type DraftStateMsg,
   type EventsMsg,
   type FireMsg,
   type InputMsg,
@@ -133,6 +136,8 @@ export class NetSession {
       room.onMessage(S2C.PONG, (m: PongMsg) => this.onPong(m));
       room.onMessage(S2C.EVENTS, (m: EventsMsg) => this.app.combat.onEvents(m.ev));
       room.onMessage(S2C.SELF, (m: SelfStatusMsg) => this.app.combat.onSelf(m));
+      room.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => this.app.combat.abilities.onResult(m));
+      room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => this.app.onDraftState(m));
       room.onMessage(S2C.NOTICE, (m: { text: string }) => console.info('[graao] notice', m.text));
       room.onLeave((codeNum: number) => {
         if (!this.left) {
@@ -210,6 +215,8 @@ export class NetSession {
       const simDt = s[19] ?? 0;
       if (index === this.myIndex) {
         this.app.combat.onSelfSnapshot(health, shield, mana, (flags & SnapFlag.ALIVE) !== 0);
+        // Aboard the UFO nothing is simulated locally; the dive starts from the `jump` event, not from a snapshot.
+        if ((flags & SnapFlag.ON_SHIP) !== 0 || this.app.deploy.riding) continue;
         const st: CharacterState = createCharacterState({ x: px / POS_SCALE, y: py / POS_SCALE, z: pz / POS_SCALE }, { x: fx / FACING_SCALE, y: fy / FACING_SCALE, z: fz / FACING_SCALE });
         const len = Math.hypot(st.facing.x, st.facing.y, st.facing.z) || 1;
         st.facing.x /= len;
@@ -220,6 +227,7 @@ export class NetSession {
         st.vel.z = vz / VEL_SCALE;
         st.grounded = (flags & SnapFlag.GROUNDED) !== 0;
         st.aiming = (flags & SnapFlag.AIMING) !== 0;
+        st.diving = (flags & SnapFlag.DIVING) !== 0;
         st.airTime = st.grounded ? 0 : 1;
         st.moveState = move as CharacterState['moveState'];
         st.aim = { ...this.app.local.state.aim };
@@ -284,12 +292,24 @@ export class NetSession {
     if (!this.left) this.room.send(C2S.FIRE, m);
   }
 
+  sendAbility(m: AbilityRequestMsg): void {
+    if (!this.left) this.room.send(C2S.ABILITY_REQUEST, m);
+  }
+
   sendReload(): void {
     if (!this.left) this.room.send(C2S.RELOAD, {});
   }
 
   sendSwitch(slot: number): void {
     if (!this.left) this.room.send(C2S.SWITCH_WEAPON, { w: slot });
+  }
+
+  sendDraftPick(round: number, id: string): void {
+    if (!this.left) this.room.send(C2S.DRAFT_PICK, { r: round, a: id });
+  }
+
+  sendUfoJump(): void {
+    if (!this.left) this.room.send(C2S.UFO_JUMP, {});
   }
 
   sendReady(ready: boolean): void {

@@ -112,6 +112,44 @@ export function buildFace(b: PartBuilder, h: HeadShape, faceId: string): void {
       ellipse(b, h, 0, -0.07, 0.0055, 0.0045, 0, Slot.INK, L, 10);
       break;
     }
+    case 'face.wink': {
+      // Left eye open (almond), right eye a closed smile-curve; lopsided grin and blush.
+      ellipse(b, h, eyeU, eyeV, 0.0125, 0.0165, 0.12, Slot.INK, L, 16, (t) => (Math.sin(t) > 0 ? 0.82 : 1));
+      ellipse(b, h, eyeU + 0.004, eyeV + 0.006, 0.0036, 0.0036, 0, Slot.EYE_WHITE, L + 0.0008, 8);
+      stroke(b, h, arc(-eyeU, eyeV - 0.002, 0.026, 0.007, 9), 0.0052, Slot.INK, L, false);
+      for (const s of [1, -1]) {
+        stroke(b, h, arc(s * (eyeU + 0.001), eyeV + 0.034 + (s < 0 ? -0.003 : 0), 0.03, 0.003, 6, s * -0.002), 0.0058, Slot.HAIR, L);
+        ellipse(b, h, s * 0.066, -0.042, 0.013, 0.007, 0, Slot.BLUSH, L * 0.6, 10);
+      }
+      stroke(b, h, arc(0.004, -0.066, 0.026, -0.007, 8, 0.004), 0.0045, Slot.INK, L);
+      break;
+    }
+    case 'face.grin': {
+      // Big open smile: a half-moon mouth with teeth and tongue; round, bright eyes.
+      for (const s of [1, -1]) {
+        ellipse(b, h, s * eyeU, eyeV, 0.013, 0.0165, 0, Slot.INK, L);
+        ellipse(b, h, s * eyeU + 0.0045, eyeV + 0.0065, 0.0042, 0.0042, 0, Slot.EYE_WHITE, L + 0.0008, 8);
+        stroke(b, h, arc(s * (eyeU + 0.002), eyeV + 0.037, 0.03, 0.007, 8, s * -0.004), 0.0055, Slot.HAIR, L);
+      }
+      ellipse(b, h, 0, -0.066, 0.021, 0.015, 0, Slot.INK, L, 18, (t) => (Math.sin(t) > 0 ? 0.18 : 1));
+      ellipse(b, h, 0, -0.0645, 0.016, 0.0035, 0, Slot.EYE_WHITE, L + 0.0008, 12);
+      ellipse(b, h, 0, -0.0755, 0.0095, 0.0045, 0, Slot.BLUSH, L + 0.0008, 10);
+      break;
+    }
+    case 'face.freckles': {
+      for (const s of [1, -1]) {
+        ellipse(b, h, s * eyeU, eyeV, 0.0125, 0.0165, s * 0.12, Slot.INK, L, 16, (t) => (Math.sin(t) > 0 ? 0.82 : 1));
+        ellipse(b, h, s * eyeU + 0.004, eyeV + 0.006, 0.0036, 0.0036, 0, Slot.EYE_WHITE, L + 0.0008, 8);
+        stroke(b, h, arc(s * (eyeU + 0.001), eyeV + 0.034, 0.03, 0.004, 6, s * -0.002), 0.0058, Slot.HAIR, L);
+        // Freckles: a loose cluster over each cheek and the bridge of the nose.
+        for (const [u, v] of [[0.052, -0.03], [0.064, -0.036], [0.058, -0.045], [0.073, -0.044], [0.046, -0.039], [0.069, -0.027]] as const) {
+          ellipse(b, h, s * u, v, 0.0033, 0.0033, 0, Slot.LIPS, L * 0.8, 7);
+        }
+        ellipse(b, h, s * 0.02, -0.024, 0.0022, 0.0022, 0, Slot.LIPS, L * 0.8, 6);
+      }
+      stroke(b, h, arc(0, -0.067, 0.022, -0.004, 7), 0.0042, Slot.INK, L);
+      break;
+    }
     case 'face.calm':
     default: {
       for (const s of [1, -1]) {

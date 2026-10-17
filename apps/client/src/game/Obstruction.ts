@@ -10,10 +10,14 @@ import type { PlanetView, PropInstanceRef } from '../world/PlanetView';
 export class Obstruction {
   private readonly active = new Map<number, { ref: PropInstanceRef; target: number }>();
   private readonly ray;
+  /** Props whose collider is within this distance of the camera fade even off the sight lines (posts, trunks). */
+  private readonly nearBall;
+  private static readonly IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
   stats = { fading: 0, rays: 0 };
 
   constructor(private readonly physics: GamePhysics, private readonly view: PlanetView) {
     this.ray = new physics.R.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    this.nearBall = new physics.R.Ball(1.1);
   }
 
   update(dt: number, camera: THREE.Vector3, feet: THREE.Vector3, up: THREE.Vector3): void {
@@ -41,6 +45,18 @@ export class Obstruction {
         GROUPS_PROP_QUERY,
       );
     }
+    this.physics.world.intersectionsWithShape(
+      camera,
+      Obstruction.IDENTITY,
+      this.nearBall,
+      (c) => {
+        const p = this.physics.propByCollider.get(c.handle);
+        if (p) this.mark(p.id, 0.7);
+        return true;
+      },
+      undefined,
+      GROUPS_PROP_QUERY,
+    );
     // Animate fades.
     for (const [id, a] of this.active) {
       const cur = this.view.getInstanceFade(a.ref);

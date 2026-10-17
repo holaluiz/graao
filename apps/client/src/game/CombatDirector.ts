@@ -1,7 +1,8 @@
 /**
  * CombatDirector (client): turns local input into FIRE / RELOAD / SWITCH / READY intents, predicts the cosmetic
  * part of a shot so it feels instant (tracer, flash, recoil, sound, animation), and presents server-confirmed
- * results (hitmarkers, damage numbers, damage direction, eliminations, match phases).
+ * results (hitmarkers, damage numbers, damage direction, eliminations, match phases). Abilities (keys 1–4) live in
+ * its AbilityDirector; both share the hit presentation here.
  *
  * It never decides gameplay: damage, ammo, eliminations and the winner come from the server. Predicted tracers use
  * the same deterministic spread (`shotSeed`) and hitscan rules as the server, so what you see is what it resolves.
@@ -28,9 +29,10 @@ import type { GraaoApp } from '../app/GraaoApp';
 import type { Cue } from '../audio/GRAAudioManager';
 import { WeaponHolder } from '../character/WeaponModels';
 import { Shape } from '../render/vfx/GRAVFXSystem';
+import { AbilityDirector } from './AbilityDirector';
 import { WeaponController } from './WeaponController';
 
-/** Camera response presets (accessibility: FULL / REDUCED / OFF scale every shake and kick). */
+/** Camera response presets (shake and kick; always at full strength for every player). */
 const CAMERA_RESPONSE = {
   MICRO: { shake: 0.0, kick: 1 },
   HIT: { shake: 0.5, kick: 0 },
@@ -49,6 +51,7 @@ const mmToV = (p: [number, number, number], out = new THREE.Vector3()) => out.se
 
 export class CombatDirector {
   readonly weapon = new WeaponController();
+  readonly abilities: AbilityDirector;
   readonly holder: WeaponHolder;
   alive = true;
   health: number = ATTRIBUTES.maxHealth;
@@ -71,12 +74,21 @@ export class CombatDirector {
   private readonly tmp2 = new THREE.Vector3();
   private readonly muzzleW = new THREE.Vector3();
   private blocked = false;
-  /** Camera response accessibility scale (1 FULL, 0.4 REDUCED, 0 OFF). */
-  responseScale = 1;
 
   constructor(private readonly app: GraaoApp) {
     this.holder = new WeaponHolder();
     this.holder.attachTo(app.character);
+    this.abilities = new AbilityDirector(app);
+  }
+
+  /** MATCH only: server time when fighting starts. */
+  get matchStartsAt(): number {
+    return this.startsAt;
+  }
+
+  /** The local player takes part in the running match. */
+  get inMatch(): boolean {
+    return !!this.me()?.inMatch;
   }
 
   /** Entering the in-world phase (solo or online). */
@@ -91,9 +103,10 @@ export class CombatDirector {
     this.startsAt = 0;
     this.winner = -1;
     this.weapon.reset();
+    this.abilities.enter(online);
     this.app.hud.setDeath(false);
     this.app.hud.setResults(null);
-    this.app.hud.setStatus(online ? '' : 'EXPLORANDO SOZINHO · tiros de treino');
+    this.app.hud.setStatus(online ? '' : 'EXPLORANDO SOZINHO · tiros e magias de treino');
     this.app.audio.setState('NORMAL');
   }
 
@@ -101,7 +114,7 @@ export class CombatDirector {
     return this.app.net?.myIndex ?? 0;
   }
 
-  private nameOf(index: number): string {
+  nameOf(index: number): string {
     return this.players.find((p) => p.index === index)?.name ?? `Jogador ${index + 1}`;
   }
 
@@ -116,8 +129,10 @@ export class CombatDirector {
 
   private canFire(): boolean {
     if (!this.alive || !this.app.input.locked) return false;
-    if (!this.online) return true;
-    if (this.phase === MatchPhase.RESULTS) return false;
+    // Hands are busy while an ability winds up (the server refuses shots then too).
+    if (this.abilities.casting()) return false;
+    if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
+    if (this.phase === MatchPhase.RESULTS || this.phase === MatchPhase.UFO) return false;
     if (this.phase === MatchPhase.MATCH) return this.serverNow() >= this.startsAt && !!this.me()?.inMatch;
     return true;
   }
@@ -169,6 +184,7 @@ export class CombatDirector {
       app.hud.notice('SEM MUNIÇÃO');
     }
     if (r.fire) this.fire(r.fire.seq, r.fire.slot, r.fire.weapon);
+    this.abilities.update(dt);
 
     this.updateBlocked();
     this.updateHud(dt);
@@ -209,7 +225,7 @@ export class CombatDirector {
     this.match.shots++;
     // Body, camera, audio.
     app.character.anim.playUpper('fire', 1.4);
-    app.camera.kick(w.cameraProfile.kick * 4 * CAMERA_RESPONSE.MICRO.kick * this.responseScale, (Math.random() - 0.5) * w.cameraProfile.kick * this.responseScale);
+    app.camera.kick(w.cameraProfile.kick * 4 * CAMERA_RESPONSE.MICRO.kick, (Math.random() - 0.5) * w.cameraProfile.kick);
     app.audio.play(w.id === 'sunbeam' ? 'fire.sunbeam' : 'fire.petal');
   }
 
@@ -276,7 +292,7 @@ export class CombatDirector {
     const hud = app.hud;
     const now = performance.now();
     const w = this.weapon.weapon;
-    hud.setVitals(this.health, this.shield, this.mana, ATTRIBUTES.maxHealth, ATTRIBUTES.maxShield, ATTRIBUTES.maxMana);
+    hud.setVitals(this.health, this.shield, this.abilities.ctl.manaShown, ATTRIBUTES.maxHealth, ATTRIBUTES.maxShield, ATTRIBUTES.maxMana);
     hud.setWeapons(
       this.weapon.slot,
       WEAPON_SLOTS.map((id, i) => ({ key: i === 0 ? 'E' : 'Q', name: WEAPONS[id].name, ammo: this.weapon.ammo[i]!, magazine: WEAPONS[id].magazine })),
@@ -363,8 +379,16 @@ export class CombatDirector {
     this.phaseEndsAt = m.phaseEndsAt;
     this.winner = m.winner;
     if (prev !== m.phase) {
-      if (m.phase === MatchPhase.MATCH) {
+      // The Ability Draft is a screen over the world; leaving it (match start, or called off) gives the world back.
+      this.app.setDraft(m.phase === MatchPhase.ABILITY_DRAFT);
+      if (m.phase === MatchPhase.UFO) {
+        // Boarding: fresh weapons and abilities arrive with SELF; nothing to fight with until everyone has landed.
         this.weapon.reset();
+        this.abilities.onRespawn();
+        this.app.hud.setResults(null);
+      } else if (m.phase === MatchPhase.MATCH) {
+        this.weapon.reset();
+        this.abilities.onRespawn();
         this.match.shots = this.match.hits = this.match.damage = this.match.kills = 0;
         this.eliminatedInMatch.clear();
         this.countdownShown = -1;
@@ -375,9 +399,12 @@ export class CombatDirector {
         this.app.hud.setDeath(false);
       } else if (m.phase === MatchPhase.FREE_ROAM) {
         this.app.hud.setResults(null);
-        this.app.hud.banner('AQUECIMENTO', 'Treine à vontade · ENTER quando estiver pronto', 2.2);
+        if (prev === MatchPhase.ABILITY_DRAFT) this.app.hud.banner('DRAFT CANCELADO', 'Faltaram jogadores · de volta ao aquecimento', 2.4, 'bad');
+        else this.app.hud.banner('AQUECIMENTO', 'Treine à vontade · ENTER quando estiver pronto', 2.2);
       }
     }
+    this.abilities.onRoomState(m);
+    this.app.deploy.onRoomState(m);
   }
 
   onSelf(s: SelfStatusMsg): void {
@@ -386,6 +413,7 @@ export class CombatDirector {
     this.weapon.applyServer(s, performance.now(), net.rtt, (t) => performance.now() + (t - net.serverNow()));
     this.holder.setSlot(this.weapon.slot);
     if (!s.alive) this.respawnAt = s.respawnAt;
+    this.abilities.onSelf(s);
   }
 
   /** Authoritative vitals from my own snapshot entry. */
@@ -393,6 +421,7 @@ export class CombatDirector {
     this.health = health;
     this.shield = shield;
     this.mana = mana;
+    this.abilities.ctl.mana = mana;
     if (alive !== this.alive && alive) this.revive();
     this.alive = alive;
   }
@@ -407,6 +436,7 @@ export class CombatDirector {
   private revive(): void {
     this.alive = true;
     this.weapon.reset();
+    this.abilities.onRespawn();
     this.app.hud.setDeath(false);
   }
 
@@ -431,6 +461,17 @@ export class CombatDirector {
             this.shield = ATTRIBUTES.maxShield;
           } else this.app.net?.remote(e.target)?.onRespawn();
           this.eliminatedInMatch.delete(e.target);
+          break;
+        case 'cast':
+        case 'proj':
+        case 'projEnd':
+        case 'area':
+        case 'fx':
+          this.abilities.onEvent(e);
+          break;
+        case 'jump':
+        case 'land':
+          this.app.deploy.onEvent(e);
           break;
         case 'reload':
           if (e.by !== me) {
@@ -488,7 +529,7 @@ export class CombatDirector {
         app.hud.damageFrom(angle, has(HitKind.SHIELD) || has(HitKind.SHIELD_BREAK));
       }
       const resp = has(HitKind.CRITICAL) || has(HitKind.SHIELD_BREAK) ? CAMERA_RESPONSE.HEAVY : CAMERA_RESPONSE.HIT;
-      app.camera.addShake(resp.shake * this.responseScale, 0.22);
+      app.camera.addShake(resp.shake, 0.22);
       app.audio.play(has(HitKind.SHIELD_BREAK) ? 'hurt.shieldBreak' : has(HitKind.BODY) || has(HitKind.CRITICAL) ? 'hurt.health' : 'hurt.shield');
       if (has(HitKind.SHIELD_BREAK)) app.hud.notice('SEU ESCUDO QUEBROU', 1.2);
       if (!has(HitKind.ELIMINATION)) app.character.anim.playOneShot('hit', { speed: 1.5 });
@@ -523,6 +564,10 @@ export class CombatDirector {
     if (has(HitKind.BODY) || has(HitKind.CRITICAL)) {
       vfx.burst(chest, up, { color: has(HitKind.CRITICAL) ? '#ffd36e' : '#ffb08a', count: has(HitKind.CRITICAL) ? 8 : 5, speed: 2.8, size: 0.1, life: 0.3, gravity: 6, drag: 3, shape: Shape.DOT, category: 'GameplayCritical' });
     }
+    if (has(HitKind.ABILITY)) {
+      // Magic hits: lilac diamonds spinning off, on top of the shield/health shape.
+      vfx.burst(chest, up, { color: '#d8c8ff', count: 7, speed: 3.2, size: 0.12, life: 0.4, gravity: 3, drag: 3, shape: Shape.SHARD, category: 'GameplayCritical' });
+    }
   }
 
   private onElimination(by: number, target: number): void {
@@ -549,7 +594,7 @@ export class CombatDirector {
       this.alive = false;
       this.killerName = killer;
       app.audio.play('death');
-      app.camera.addShake(CAMERA_RESPONSE.HEAVY.shake * this.responseScale, 0.35);
+      app.camera.addShake(CAMERA_RESPONSE.HEAVY.shake, 0.35);
     }
   }
 

@@ -19,12 +19,21 @@ APPEARANCE_UPDATE      ─► validated against the catalog, rebroadcast in ROOM
 READY {r}              ─► warmup only; everyone ready (≥ 2) starts the match
 FIRE {s, w, o, d, a}   ─► validated (phase, slot, seq, fire rate, ammo, origin near head) → hitscan → damage
 RELOAD / SWITCH_WEAPON ─► validated
-                       ◄─ EVENTS {t, ev: shot | dmg | elim | respawn | reload}   (broadcast per tick when any)
+UFO_JUMP {}            ─► UFO phase, aboard, inside the jump window → the dive starts on the server
+                       ◄─ EVENTS {t, ev: shot | dmg | elim | respawn | reload | cast | proj | projEnd | area | fx
+                                  | jump | land}   (broadcast per tick when any)
                        ◄─ SELF {weapon, ammo[], reloading, reloadEndsAt, alive, respawnAt, shotSeq}  (private, on change)
 ```
 
 Protocol version 2 (0.2.0): adds READY, match fields in ROOM_STATE and `shotSeq` in SELF. Clients on version 1 are
 refused with `VERSION_MISMATCH`.
+
+Protocol version 5 (0.5.0): the UFO deployment. ROOM_STATE gains `ufo` (the ship's route, integers only, null outside
+the UFO phase) and a per-player `deploy` state (NONE / SHIP / DIVING / LANDED); snapshot flags gain ON_SHIP and DIVING;
+`UFO_JUMP` (no payload: the server decides when and from where); events `jump {target, at mm, v cm/s, auto}` — the
+exact start of the dive the server simulates, which the jumper's client predicts from — and
+`land {target, at, water}`. Riders are not simulated: their commands are acknowledged and dropped (see
+`docs/gameplay/UFO_DEPLOYMENT.md`).
 
 ## Authority and anti-abuse
 
@@ -52,7 +61,7 @@ consumption. Measured: 0.5 % extrapolated frames in a 60 Hz replay of real arriv
 ## Snapshot tuple
 
 `[index, px, py, pz (mm), vx, vy, vz (cm/s), fx, fy, fz (×127), aimPitch (×100 rad), moveState, actionState, flags,
-ackSeq, health, shield, mana, weapon, simDt]` — flags: grounded, alive, aiming.
+ackSeq, health, shield, mana, weapon, simDt]` — flags: grounded, alive, aiming, aboard the UFO, diving.
 
 ## Testing
 

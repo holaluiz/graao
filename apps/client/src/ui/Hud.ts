@@ -1,16 +1,21 @@
 /**
  * Combat HUD (DOM/CSS/SVG, never rendered into Three.js). Driven by the CombatDirector; it never decides gameplay.
  *
- *   bottom-left   Escudo / Vida / Mana
+ *   bottom-left   Escudo / Vida / Mana (+ status chips such as LENTO)
+ *   bottom-centre ability slots 1 2 3 + Ultimate 4: icon (shape per ability), Mana cost, cooldown sweep
  *   bottom-right  E / Q weapon slots with ammo and reload progress
  *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs
  *   top           place name, match status chip, room code, kill feed
  *   overlays      countdown / banners, elimination screen, results
+ *   deploy        UFO / drop panel (bottom-centre): what to do, the jump key, the window bar, the altitude; combat
+ *                 widgets hide while aboard and falling (`setMode`)
  *
  * Attention: QUIET (static), RELEVANT (brief motion), URGENT (pulse once), CRITICAL (low health, persistent).
  * Every hit kind has its own shape, not only a color.
  */
+import type { AbilityIcon } from '@graao/game-data';
 import { HitKind } from '@graao/shared';
+import { ABILITY_ICONS } from './abilityIcons';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -45,6 +50,20 @@ export interface WeaponSlotView {
   magazine: number;
 }
 
+export interface AbilitySlotView {
+  key: string;
+  name: string;
+  icon: AbilityIcon;
+  color: string;
+  cost: number;
+  ultimate: boolean;
+  /** 0..1 of the cooldown still to run. */
+  cd: number;
+  secondsLeft: number;
+  /** Mirror of the server state (the HUD only displays it). */
+  state: 'ready' | 'cooldown' | 'nomana' | 'casting' | 'locked';
+}
+
 export interface ResultsView {
   victory: boolean;
   draw: boolean;
@@ -54,6 +73,20 @@ export interface ResultsView {
   shots: number;
   hits: number;
   secondsLeft: number;
+}
+
+/** UFO deployment panel (aboard, falling, landed). */
+export interface DeployView {
+  title: string;
+  line: string;
+  /** Key cap and what it does (the jump while aboard). */
+  key?: string;
+  keyLabel?: string;
+  /** 0..1 of the jump window still open. */
+  progress?: number;
+  /** Metres above the ground (falling). */
+  altitude?: number;
+  tone: 'quiet' | 'relevant' | 'urgent';
 }
 
 export class Hud {
@@ -85,7 +118,9 @@ export class Hud {
       '<path class="hm-hex" d="M0 -21 L18 -10.5 L18 10.5 L0 21 L-18 10.5 L-18 -10.5 Z"/>' +
       '<path class="hm-break" d="M0 -21 L18 -10.5 L9 -3 M18 10.5 L0 21 L-6 9 M-18 10.5 L-18 -10.5 L-8 -14"/>' +
       '<path class="hm-diamond" d="M0 -6 L6 0 L0 6 L-6 0 Z"/>' +
-      '<circle class="hm-ring" r="24"/>',
+      '<circle class="hm-ring" r="24"/>' +
+      // Ability hits add four small diamonds around the base shape (whatever it is).
+      '<path class="hm-ab" d="M0 -31 L3 -27 L0 -23 L-3 -27 Z M31 0 L27 3 L23 0 L27 -3 Z M0 31 L-3 27 L0 23 L3 27 Z M-31 0 L-27 -3 L-23 0 L-27 3 Z"/>',
   );
   private readonly dmgDirs = el('div', 'dmg-dirs', this.el);
   private readonly numbers = el('div', 'dmg-numbers', this.el);
@@ -95,6 +130,13 @@ export class Hud {
   private readonly shieldRow = this.bar('shield', 'Escudo');
   private readonly healthRow = this.bar('health', 'Vida');
   private readonly manaRow = this.bar('mana', 'Mana');
+
+  private readonly effectsEl = el('div', 'fx-chips', this.vitals);
+  private readonly slowChip = el('div', 'fx-chip slow', this.effectsEl);
+
+  // Abilities.
+  private readonly abilitiesEl = el('div', 'abilities', this.el);
+  private readonly abSlots: { root: HTMLElement; icon: SVGSVGElement; sweep: HTMLElement; time: HTMLElement; cost: HTMLElement; name: HTMLElement; key: HTMLElement; last: string }[] = [];
 
   // Weapons.
   private readonly weaponsEl = el('div', 'weapons', this.el);
@@ -107,6 +149,17 @@ export class Hud {
   private readonly deathSub = el('div', 'death-sub', this.deathEl);
   private readonly resultsEl = el('div', 'results', this.el);
   private readonly lowHealthEl = el('div', 'low-health', this.el);
+  private readonly deployEl = el('div', 'deploy', this.el);
+  private readonly deployTitle = el('div', 'deploy-title', this.deployEl);
+  private readonly deployRow = el('div', 'deploy-row', this.deployEl);
+  private readonly deployKey = el('div', 'deploy-key', this.deployRow);
+  private readonly deployKeyLabel = el('div', 'deploy-key-label', this.deployRow);
+  private readonly deployLine = el('div', 'deploy-line', this.deployEl);
+  private readonly deployBar = el('div', 'deploy-bar', this.deployEl);
+  private readonly deployFill = el('i', '', this.deployBar);
+  private readonly altimeter = el('div', 'altimeter', this.el);
+  private readonly altFill = el('i', '', this.altimeter);
+  private lastDeploy = '';
 
   private placeTimer = 0;
   private noticeTimer = 0;
@@ -123,6 +176,10 @@ export class Hud {
     this.resultsEl.hidden = true;
     this.noticeEl.hidden = true;
     this.ammoHint.hidden = true;
+    this.slowChip.hidden = true;
+    this.deployEl.hidden = true;
+    this.altimeter.hidden = true;
+    this.el.dataset.mode = 'combat';
     for (let i = 0; i < 2; i++) {
       const root = el('div', 'slot', this.weaponsEl);
       const key = el('div', 'slot-key', root);
@@ -146,6 +203,37 @@ export class Hud {
 
   show(v: boolean): void {
     this.el.hidden = !v;
+  }
+
+  /** Combat widgets (vitals, weapons, abilities, reticle) hide aboard the UFO and during the drop. */
+  setMode(mode: 'combat' | 'ufo' | 'drop'): void {
+    this.el.dataset.mode = mode;
+  }
+
+  /** The UFO / drop panel; null hides it. */
+  setDeploy(v: DeployView | null): void {
+    this.deployEl.hidden = !v;
+    this.altimeter.hidden = !v || v.altitude === undefined;
+    if (!v) {
+      this.lastDeploy = '';
+      return;
+    }
+    const key = `${v.title}|${v.line}|${v.key ?? ''}|${v.tone}`;
+    if (key !== this.lastDeploy) {
+      const titleChanged = !this.lastDeploy.startsWith(`${v.title}|`);
+      this.lastDeploy = key;
+      this.deployTitle.textContent = v.title;
+      this.deployLine.textContent = v.line;
+      this.deployRow.hidden = !v.key;
+      this.deployKey.textContent = v.key ?? '';
+      this.deployKeyLabel.textContent = v.keyLabel ?? '';
+      this.deployEl.dataset.tone = v.tone;
+      if (titleChanged && v.tone !== 'quiet') replay(this.deployEl, 'pop');
+    }
+    this.deployBar.hidden = v.progress === undefined;
+    if (v.progress !== undefined) this.deployFill.style.width = `${Math.max(0, Math.min(1, v.progress)) * 100}%`;
+    // Altimeter: a vertical gauge on the right, 100 m full scale.
+    if (v.altitude !== undefined) this.altFill.style.height = `${Math.max(0, Math.min(1, v.altitude / 100)) * 100}%`;
   }
 
   // ------------------------------------------------------------------------------------------------ top
@@ -186,9 +274,10 @@ export class Hud {
     while (this.feedEl.children.length > 5) this.feedEl.firstElementChild?.remove();
   }
 
-  /** Brief URGENT message under the reticle ("Sem munição", "Escudo quebrado!"). */
+  /** Brief URGENT message under the reticle ("Sem munição", "Escudo quebrado!", "Sem mana"). */
   notice(text: string, seconds = 1.4): void {
     this.noticeEl.hidden = false;
+    delete this.noticeEl.dataset.tone;
     this.noticeEl.textContent = text;
     replay(this.noticeEl, 'pop');
     this.noticeTimer = seconds;
@@ -215,11 +304,12 @@ export class Hud {
     this.reticleCircle.style.setProperty('--ring', `${1 + s / 18}`);
   }
 
-  /** Server-confirmed hit by the local player. The strongest kind decides the shape. */
+  /** Server-confirmed hit by the local player. The strongest kind decides the shape; abilities add their diamonds. */
   hit(kinds: HitKind[]): void {
     const has = (k: HitKind) => kinds.includes(k);
     const kind = has(HitKind.ELIMINATION) ? 'elim' : has(HitKind.SHIELD_BREAK) ? 'break' : has(HitKind.CRITICAL) ? 'crit' : has(HitKind.SHIELD) ? 'shield' : 'body';
     this.hitmarker.dataset.kind = kind;
+    this.hitmarker.dataset.ability = has(HitKind.ABILITY) ? '1' : '0';
     replay(this.hitmarker, 'show');
     if (kind === 'break') this.notice('ESCUDO QUEBRADO', 1.1);
   }
@@ -228,7 +318,9 @@ export class Hud {
   damageNumber(x: number, y: number, amount: number, kinds: HitKind[]): void {
     const crit = kinds.includes(HitKind.CRITICAL);
     const shield = kinds.includes(HitKind.SHIELD) || kinds.includes(HitKind.SHIELD_BREAK);
-    const n = el('div', `dmg-num${crit ? ' crit' : ''}${shield && !kinds.includes(HitKind.BODY) && !crit ? ' shield' : ''}`, this.numbers, `${amount}${crit ? '!' : ''}`);
+    const ability = kinds.includes(HitKind.ABILITY);
+    const cls = `dmg-num${crit ? ' crit' : ''}${shield && !kinds.includes(HitKind.BODY) && !crit ? ' shield' : ''}${ability ? ' ability' : ''}`;
+    const n = el('div', cls, this.numbers, `${ability ? '✦' : ''}${amount}${crit ? '!' : ''}`);
     const drift = (Math.random() - 0.5) * 40;
     n.style.left = `${x + drift}px`;
     n.style.top = `${y}px`;
@@ -281,6 +373,61 @@ export class Hud {
     const dry = !!a && a.ammo === 0 && reload < 0;
     this.ammoHint.hidden = !(dry || reload >= 0);
     this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : 'SEM MUNIÇÃO · R';
+  }
+
+  /** Ability slots 1–4. The views mirror the server (cooldowns, Mana, wind-up); the HUD never decides. */
+  setAbilities(slots: AbilitySlotView[]): void {
+    while (this.abSlots.length < slots.length) {
+      const root = el('div', 'ab-slot', this.abilitiesEl);
+      const icon = svg('ab-icon', '-16 -16 32 32', '');
+      root.appendChild(icon);
+      const sweep = el('div', 'ab-sweep', root);
+      const time = el('div', 'ab-time', root);
+      const key = el('div', 'ab-key', root);
+      const cost = el('div', 'ab-cost', root);
+      const name = el('div', 'ab-name', root);
+      this.abSlots.push({ root, icon, sweep, time, cost, name, key, last: '' });
+    }
+    slots.forEach((v, i) => {
+      const s = this.abSlots[i]!;
+      const ident = `${v.name}|${v.icon}|${v.color}|${v.cost}|${v.key}|${v.ultimate}`;
+      if (s.last !== ident) {
+        s.last = ident;
+        s.icon.innerHTML = ABILITY_ICONS[v.icon];
+        s.root.style.setProperty('--ab-color', v.color);
+        s.root.classList.toggle('ult', v.ultimate);
+        s.key.textContent = v.key;
+        s.cost.textContent = String(v.cost);
+        s.name.textContent = v.name;
+      }
+      if (s.root.dataset.state !== v.state) s.root.dataset.state = v.state;
+      s.sweep.style.setProperty('--p', v.cd.toFixed(3));
+      const t = v.secondsLeft > 0 ? (v.secondsLeft >= 10 ? String(Math.ceil(v.secondsLeft)) : v.secondsLeft.toFixed(1).replace('.', ',')) : '';
+      if (s.time.textContent !== t) s.time.textContent = t;
+      if (v.ultimate && v.state !== 'cooldown' && v.state !== 'locked') s.root.classList.add('charged');
+      else s.root.classList.remove('charged');
+    });
+  }
+
+  /** The server refused a cast (or the mirror expects it to): shake that slot. */
+  abilityDenied(slot: number): void {
+    const s = this.abSlots[slot];
+    if (s) replay(s.root, 'denied');
+  }
+
+  /** Ultimate charged: URGENT once (pop + notice), then RELEVANT (a short shimmer), then a quiet golden rim. */
+  ultimateReady(name: string): void {
+    const s = this.abSlots.find((x) => x.root.classList.contains('ult'));
+    if (s) replay(s.root, 'ult-pop');
+    this.notice(`SUPREMA PRONTA · ${name.toUpperCase()}`, 1.6);
+    this.noticeEl.dataset.tone = 'ult';
+  }
+
+  /** Status effects on the local player (slow seconds left, 0 = none). */
+  setEffects(slowSeconds: number, slowFactor: number): void {
+    const on = slowSeconds > 0;
+    this.slowChip.hidden = !on;
+    if (on) this.slowChip.textContent = `LENTO −${Math.round((1 - slowFactor) * 100)}% · ${slowSeconds.toFixed(1).replace('.', ',')} s`;
   }
 
   // ------------------------------------------------------------------------------------------------ overlays

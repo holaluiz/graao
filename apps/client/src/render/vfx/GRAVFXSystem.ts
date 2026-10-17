@@ -1,15 +1,23 @@
 /**
- * GRAVFXSystem: graao's small effect toolkit (not a Niagara). Two pooled GPU primitives, one draw call each:
+ * GRAVFXSystem: graao's small effect toolkit (not a Niagara). Three pooled GPU primitives, one draw call each:
  *
- *   - Beams: camera-facing ribbons between two points (tracers, sunbeams, ability beams). Fade and thin over life.
+ *   - Beams: camera-facing ribbons between two points (tracers, ability lanes) with a travelling bright head, or a
+ *     plain fading Trail (projectile wakes, dash streaks). Fade and thin over life.
  *   - Particles: billboards with drag and radial gravity, animated entirely in the vertex shader (muzzle flashes,
- *     impact puffs, shield shards, petals, rings).
+ *     impact puffs, shield shards, petals, rings, projectile cores).
+ *   - Ground decals: discs laid on the terrain (a small grid conformed to the height field when spawned) for ability
+ *     telegraphs (dashed rotating rim + filling disc), Shockwaves (expanding ring) and pigment splashes.
+ *
+ * Plus PersistentMark objects (Ultimate Marks, see UltimateMarks.ts): two meshes per marked player.
  *
  * Spawning writes one slot of a ring buffer; nothing is allocated per effect and no Object3D is created.
- * Categories decide what quality levels may drop: GameplayCritical effects are never reduced.
+ * Categories decide what quality levels may drop: GameplayCritical and PersistentMark effects are never reduced.
  */
 import * as THREE from 'three';
+import type { UltimateMarkId } from '@graao/game-data';
+import type { Vec3 } from '@graao/shared';
 import type { Quality } from '../GRARenderer';
+import { UltimateMark } from './UltimateMarks';
 
 export type VFXCategory = 'GameplayCritical' | 'CombatBurst' | 'PersistentMark' | 'Environment' | 'CinematicOnly' | 'DeploymentTrail';
 
@@ -30,6 +38,7 @@ uniform float uTime;
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vAge;
+varying float vTrail;
 #include <fog_pars_vertex>
 void main() {
   float age = (uTime - aTime.x) / aTime.y;
@@ -41,7 +50,9 @@ void main() {
   float len = length(axis);
   axis = len > 1e-5 ? axis / len : vec3(0.0, 1.0, 0.0);
   vec3 side = normalize(cross(axis, normalize(cameraPosition - p)) + 1e-6);
-  float w = aTime.z * (1.0 - 0.65 * clamp(age, 0.0, 1.0));
+  // Negative width = trail style (no travelling head, thins to nothing).
+  float w = abs(aTime.z) * (1.0 - (aTime.z < 0.0 ? 0.9 : 0.65) * clamp(age, 0.0, 1.0));
+  vTrail = aTime.z < 0.0 ? 1.0 : 0.0;
   p += side * (uv.y - 0.5) * w;
   // Dead or unborn slots collapse to a point (zero-area triangles).
   if (age < 0.0 || age > 1.0) p = vec3(0.0);
@@ -55,12 +66,13 @@ const BEAM_FRAGMENT = /* glsl */ `
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vAge;
+varying float vTrail;
 #include <fog_pars_fragment>
 void main() {
   float across = 1.0 - abs(vUv.y - 0.5) * 2.0;
   float core = smoothstep(0.55, 0.95, across);
-  // A bright head travels along the beam in the first part of its life.
-  float head = 1.0 - smoothstep(0.0, 0.18, abs(vUv.x - clamp(vAge * 2.6, 0.0, 1.0)));
+  // A bright head travels along the beam in the first part of its life (tracers); trails have none.
+  float head = (1.0 - vTrail) * (1.0 - smoothstep(0.0, 0.18, abs(vUv.x - clamp(vAge * 2.6, 0.0, 1.0))));
   float fade = pow(1.0 - clamp(vAge, 0.0, 1.0), 1.4);
   float a = smoothstep(0.0, 0.35, across) * fade * (0.55 + head * 0.45);
   // Soft ends so the ribbon never shows a hard cut at the muzzle or the impact.
@@ -149,6 +161,90 @@ void main() {
 }
 `;
 
+// ------------------------------------------------------------------------------------------------ ground decals
+
+const DECAL_VERTEX = /* glsl */ `
+attribute vec3 aColor;
+attribute vec4 aDecal; // birth, life, mode, seed
+uniform float uTime;
+varying vec2 vUv;
+varying vec3 vColor;
+varying float vAge;
+varying float vMode;
+varying float vSeed;
+#include <fog_pars_vertex>
+void main() {
+  float age = (uTime - aDecal.x) / aDecal.y;
+  vAge = age;
+  vUv = uv;
+  vColor = aColor;
+  vMode = aDecal.z;
+  vSeed = aDecal.w;
+  vec3 p = position;
+  if (age < 0.0 || age > 1.0) p = vec3(0.0);
+  vec4 mvPosition = viewMatrix * vec4(p, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}
+`;
+
+const DECAL_FRAGMENT = /* glsl */ `
+uniform float uTime;
+varying vec2 vUv;
+varying vec3 vColor;
+varying float vAge;
+varying float vMode;
+varying float vSeed;
+#include <fog_pars_fragment>
+void main() {
+  float r = length(vUv);
+  if (r > 1.0) discard;
+  float ang = atan(vUv.y, vUv.x);
+  float age = clamp(vAge, 0.0, 1.0);
+  int mode = int(vMode + 0.5);
+  float a = 0.0;
+  vec3 col = vColor;
+  if (mode <= 1) {
+    // Telegraph: rim + a disc filling from the centre to the rim exactly when the effect lands.
+    float rim = smoothstep(0.86, 0.9, r) * (1.0 - smoothstep(0.965, 1.0, r));
+    float fill = 1.0 - smoothstep(age - 0.02, age, r);
+    float front = smoothstep(age - 0.07, age, r) * (1.0 - smoothstep(age, age + 0.02, r));
+    if (mode == 0) {
+      // Someone else's: dashed rotating rim and an inner ring (shape, not only color).
+      float dashes = step(0.42, fract(ang / 6.28318 * 16.0 + uTime * 0.45));
+      float inner = smoothstep(0.66, 0.69, r) * (1.0 - smoothstep(0.71, 0.74, r));
+      a = rim * (0.45 + 0.55 * dashes) + inner * 0.55 + fill * 0.2 + front * 0.65 + 0.07;
+    } else {
+      // Mine: a calm solid rim.
+      a = rim * 0.5 + fill * 0.12 + front * 0.35 + 0.03;
+    }
+    a *= smoothstep(0.0, 0.06, age) * (1.0 + smoothstep(0.82, 1.0, age) * 0.7);
+    col = mix(vColor, vec3(1.0, 0.98, 0.92), front * 0.55 + rim * 0.15);
+  } else if (mode == 2) {
+    // Shockwave: a ring racing to the rim.
+    float rr = 0.12 + 0.88 * (1.0 - pow(1.0 - age, 2.6));
+    float w = 0.13 * (1.0 - age) + 0.03;
+    a = (1.0 - smoothstep(0.0, w, abs(r - rr))) * (1.0 - age) * 0.95;
+    col = mix(vec3(1.0, 0.98, 0.92), vColor, smoothstep(0.0, 0.5, age));
+  } else {
+    // Pigment splash: a soft blotch with a wobbly edge that fades in its second half.
+    float n = sin(ang * 7.0 + vSeed) * 0.07 + sin(ang * 13.0 - vSeed * 2.0) * 0.035;
+    a = (1.0 - smoothstep(0.5 + n, 0.82 + n, r)) * 0.55 * (1.0 - smoothstep(0.45, 1.0, age)) * smoothstep(0.0, 0.05, age);
+  }
+  if (a < 0.01) discard;
+  gl_FragColor = vec4(col, min(a, 1.0));
+  #include <colorspace_fragment>
+  #include <fog_fragment>
+}
+`;
+
+/** GroundDecal modes. */
+export const DecalMode = { TELEGRAPH_ENEMY: 0, TELEGRAPH_OWN: 1, SHOCKWAVE: 2, SPLASH: 3 } as const;
+export type DecalMode = (typeof DecalMode)[keyof typeof DecalMode];
+
+/** Grid resolution of one decal (vertices per side). */
+const DECAL_GRID = 11;
+
 function quadGeometry(): THREE.InstancedBufferGeometry {
   const plane = new THREE.PlaneGeometry(1, 1, 1, 1);
   plane.translate(0.5, 0.5, 0); // uv == position.xy in [0,1]
@@ -190,7 +286,7 @@ export class GRAVFXSystem {
   private time = 0;
   private scale: number;
 
-  private readonly beamN = 96;
+  private readonly beamN = 192;
   private beamCursor = 0;
   private readonly beamGeo = quadGeometry();
   private readonly bStart: THREE.InstancedBufferAttribute;
@@ -210,6 +306,19 @@ export class GRAVFXSystem {
   private readonly pShape: THREE.InstancedBufferAttribute;
   private readonly partExpiry: Float32Array;
   private partDirty = false;
+
+  private readonly decalN = 20;
+  private decalCursor = 0;
+  private readonly decalGeo = new THREE.BufferGeometry();
+  private readonly dPos: THREE.BufferAttribute;
+  private readonly dColor: THREE.BufferAttribute;
+  private readonly dParams: THREE.BufferAttribute;
+  private readonly decalExpiry: Float32Array;
+  private decalDirty = false;
+  /** Terrain surface for a direction (set by the app once the world exists). */
+  private ground: ((dir: Vec3) => Vec3) | null = null;
+
+  private readonly marks = new Set<UltimateMark>();
 
   private readonly tmpColor = new THREE.Color();
   private readonly tmpA = new THREE.Vector3();
@@ -266,7 +375,59 @@ export class GRAVFXSystem {
     parts.frustumCulled = false;
     parts.renderOrder = 11;
 
-    this.group.add(beams, parts);
+    // Ground decals: N slots × a G×G grid, one draw call. Unused slots collapse in the vertex shader.
+    const G = DECAL_GRID;
+    const per = G * G;
+    const total = per * this.decalN;
+    this.dPos = new THREE.BufferAttribute(new Float32Array(total * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    this.dColor = new THREE.BufferAttribute(new Float32Array(total * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    this.dParams = new THREE.BufferAttribute(new Float32Array(total * 4), 4).setUsage(THREE.DynamicDrawUsage);
+    const uvs = new Float32Array(total * 2);
+    const index: number[] = [];
+    for (let k = 0; k < this.decalN; k++) {
+      for (let j = 0; j < G; j++)
+        for (let i = 0; i < G; i++) {
+          const v = k * per + j * G + i;
+          uvs[v * 2] = (i / (G - 1)) * 2 - 1;
+          uvs[v * 2 + 1] = (j / (G - 1)) * 2 - 1;
+          this.dParams.setXYZW(v, 1e9, 1, 0, 0);
+        }
+      for (let j = 0; j < G - 1; j++)
+        for (let i = 0; i < G - 1; i++) {
+          const a = k * per + j * G + i;
+          index.push(a, a + 1, a + G, a + 1, a + G + 1, a + G);
+        }
+    }
+    this.decalGeo.setAttribute('position', this.dPos);
+    this.decalGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    this.decalGeo.setAttribute('aColor', this.dColor);
+    this.decalGeo.setAttribute('aDecal', this.dParams);
+    this.decalGeo.setIndex(index);
+    this.decalExpiry = new Float32Array(this.decalN);
+    const decalMat = new THREE.ShaderMaterial({
+      name: 'GRAVFX/GroundDecal',
+      vertexShader: DECAL_VERTEX,
+      fragmentShader: DECAL_FRAGMENT,
+      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {}]),
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    decalMat.uniforms.uTime = this.uniforms.uTime;
+    const decals = new THREE.Mesh(this.decalGeo, decalMat);
+    decals.frustumCulled = false;
+    decals.renderOrder = 9;
+
+    this.group.add(beams, parts, decals);
+  }
+
+  /** Where ground decals land (terrain height field). */
+  setGround(surfaceAt: (dir: Vec3) => Vec3): void {
+    this.ground = surfaceAt;
   }
 
   setQuality(q: Quality): void {
@@ -284,6 +445,84 @@ export class GRAVFXSystem {
     this.bTime.setXYZ(i, this.time, life, width);
     this.beamExpiry[i] = this.time + life;
     this.beamDirty = true;
+  }
+
+  /** A plain fading ribbon (projectile wakes, dash streaks). GameplayCritical: it shows where a shot travels. */
+  trail(from: THREE.Vector3, to: THREE.Vector3, color: THREE.ColorRepresentation, width = 0.08, life = 0.22): void {
+    this.beam(from, to, color, -Math.abs(width), life);
+  }
+
+  /**
+   * A projectile's body for this frame (re-spawned every frame while it flies): a hot white core inside a halo of
+   * its own color (older halo sprites have already turned to the color; the shader starts every sprite white).
+   */
+  orb(at: THREE.Vector3, color: THREE.ColorRepresentation, size: number, core: THREE.ColorRepresentation = '#fff8e0'): void {
+    this.burst(at, this.tmpA.set(0, 1, 0), { color: core, count: 1, speed: 0, speedJitter: 0, size: size * 0.7, sizeJitter: 0.05, life: 0.05, shape: Shape.DOT, category: 'GameplayCritical' });
+    this.burst(at, this.tmpA.set(0, 1, 0), { color, count: 1, speed: 0, speedJitter: 0, size: size * 1.7, sizeJitter: 0, life: 0.14, shape: Shape.DOT, category: 'GameplayCritical' });
+  }
+
+  /**
+   * A disc on the ground around `center` (radius m) living `life` s. The grid is conformed to the terrain when
+   * spawned; on a roof or a rock top (centre well above the terrain) it stays a flat disc at the centre's height.
+   * Telegraphs and shockwaves are GameplayCritical (never reduced); splashes are Environment.
+   */
+  decal(center: Vec3, radius: number, color: THREE.ColorRepresentation, life: number, mode: DecalMode): void {
+    if (mode === DecalMode.SPLASH && this.scale < 0.5) return;
+    const k = this.decalCursor;
+    this.decalCursor = (k + 1) % this.decalN;
+    const G = DECAL_GRID;
+    const per = G * G;
+    const up = this.tmpA.set(center.x, center.y, center.z).normalize();
+    const t1 = this.tmpB.set(Math.abs(up.y) < 0.9 ? 0 : 1, Math.abs(up.y) < 0.9 ? 1 : 0, 0).cross(up).normalize();
+    const t2 = this.tmpC.crossVectors(up, t1);
+    const cr = Math.hypot(center.x, center.y, center.z);
+    const g0 = this.ground?.({ x: up.x, y: up.y, z: up.z });
+    const onTerrain = !!g0 && cr - Math.hypot(g0.x, g0.y, g0.z) < 0.6;
+    const c = this.tmpColor.set(color);
+    const lift = 0.07;
+    for (let j = 0; j < G; j++)
+      for (let i = 0; i < G; i++) {
+        const v = k * per + j * G + i;
+        const u = (i / (G - 1)) * 2 - 1;
+        const w = (j / (G - 1)) * 2 - 1;
+        let x = center.x + (t1.x * u + t2.x * w) * radius;
+        let y = center.y + (t1.y * u + t2.y * w) * radius;
+        let z = center.z + (t1.z * u + t2.z * w) * radius;
+        const l = Math.hypot(x, y, z);
+        const d = { x: x / l, y: y / l, z: z / l };
+        if (onTerrain && this.ground) {
+          const g = this.ground(d);
+          x = g.x + d.x * lift;
+          y = g.y + d.y * lift;
+          z = g.z + d.z * lift;
+        } else {
+          x = d.x * (cr + lift);
+          y = d.y * (cr + lift);
+          z = d.z * (cr + lift);
+        }
+        this.dPos.setXYZ(v, x, y, z);
+        this.dColor.setXYZ(v, c.r, c.g, c.b);
+        this.dParams.setXYZW(v, this.time, life, mode, k * 1.7);
+      }
+    this.decalExpiry[k] = this.time + life;
+    this.decalDirty = true;
+  }
+
+  /** Floats an Ultimate Mark over a character (`parent` = its root, local +Y = up). PersistentMark: always drawn. */
+  attachMark(parent: THREE.Object3D, id: UltimateMarkId): UltimateMark {
+    const m = new UltimateMark(id);
+    parent.add(m.group);
+    this.marks.add(m);
+    return m;
+  }
+
+  detachMark(m: UltimateMark): void {
+    m.dispose();
+    this.marks.delete(m);
+  }
+
+  get markCount(): number {
+    return this.marks.size;
   }
 
   /** A burst of particles around `dir` (unit) at `at`. */
@@ -341,6 +580,11 @@ export class GRAVFXSystem {
       for (const a of [this.pPos, this.pVel, this.pColor, this.pParams, this.pShape]) a.needsUpdate = true;
       this.partDirty = false;
     }
+    if (this.decalDirty) {
+      for (const a of [this.dPos, this.dColor, this.dParams]) a.needsUpdate = true;
+      this.decalDirty = false;
+    }
+    for (const m of this.marks) m.update(dt);
   }
 
   /** Live effect slots (F3 overlay). */
@@ -348,6 +592,7 @@ export class GRAVFXSystem {
     let n = 0;
     for (let i = 0; i < this.beamN; i++) if (this.beamExpiry[i]! > this.time) n++;
     for (let i = 0; i < this.partN; i++) if (this.partExpiry[i]! > this.time) n++;
-    return n;
+    for (let i = 0; i < this.decalN; i++) if (this.decalExpiry[i]! > this.time) n++;
+    return n + this.marks.size;
   }
 }
