@@ -223,6 +223,8 @@ export class AbilityDirector {
   /** Can this player fight right now (phase rule mirror; the server decides). */
   private canFight(): boolean {
     const c = this.app.combat;
+    // Hands are stroking while swimming (the server refuses casts then too).
+    if (this.app.local.state.swimming) return false;
     if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
     if (c.phase === MatchPhase.RESULTS || c.phase === MatchPhase.UFO) return false;
     if (c.phase === MatchPhase.MATCH) return this.serverNow() >= c.matchStartsAt && c.inMatch;
@@ -232,6 +234,12 @@ export class AbilityDirector {
   private press(slot: number): void {
     const app = this.app;
     if (!app.input.locked) return;
+    if (app.local.state.swimming && app.combat.alive) {
+      app.hud.notice('NADANDO · SEM MAGIAS NA ÁGUA', 1.1);
+      app.hud.abilityDenied(slot);
+      app.audio.play('ab.denied');
+      return;
+    }
     const now = performance.now();
     const p = this.ctl.press(slot, now, app.combat.alive, this.canFight());
     const def = p.def;

@@ -26,6 +26,11 @@ export class GraaoThirdPersonCamera {
   aim = false;
   /** Extra field of view (degrees), e.g. the speed of a dive. */
   fovBoost = 0;
+  /**
+   * Sea surface radius (0 = none). While the pivot is above the water the camera stays above it too (a swimmer looking
+   * up does not dunk the view); it only goes under with the player (a plunge).
+   */
+  waterRadius = 0;
   private aimBlend = 0;
   private distance = 4.4;
   private readonly baseDistance = 4.4;
@@ -101,6 +106,11 @@ export class GraaoThirdPersonCamera {
     this.distance = want < this.distance ? want : THREE.MathUtils.damp(this.distance, want, 3.5, dt);
 
     const pos = this.pivot.clone().addScaledVector(view, -this.distance);
+    if (this.waterRadius > 0 && this.pivot.length() > this.waterRadius) {
+      const min = this.waterRadius + 0.3;
+      const r = pos.length();
+      if (r < min) pos.multiplyScalar(min / r);
+    }
     if (this.shakeT > 0) {
       this.shakeT -= dt;
       const s = this.shake * Math.max(0, this.shakeT) * 6;

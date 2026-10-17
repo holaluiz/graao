@@ -5,9 +5,10 @@
  *
  * Route: a great circle at radius r around the planet centre, closest approach `c` (near the arena), direction of
  * travel `h` there. The ship is at angle θ(t) from `c` toward `h`, moving at constant angular speed; the jump window
- * is centred on θ = 0. Every route field is an integer (see UfoRouteMsg), so both sides evaluate the same numbers.
+ * opens at θ = `windowStartDeg` and spans `windowArcDeg` (a full lap). Every route field is an integer (see
+ * UfoRouteMsg), so both sides evaluate the same numbers.
  */
-import { ARENA_CENTER, UFO } from '@graao/game-data';
+import { ARENA_CENTER, PLANET, UFO } from '@graao/game-data';
 import {
   DeployState,
   v3,
@@ -19,7 +20,9 @@ import {
   type UfoRouteMsg,
   type Vec3,
 } from '@graao/shared';
+import { waterDepth } from './character';
 import { latLonToDir } from './sphere';
+import type { Terrain } from './terrain';
 
 const DEG = Math.PI / 180;
 const U = 1e6;
@@ -40,7 +43,7 @@ export function makeUfoRoute(rng: () => number, now: number, timings: Partial<Uf
   const c = v3rotateAxis(arena, nudgeAxis, Math.sqrt(rng()) * UFO.approachJitterDeg * DEG);
   const h = v3rotateAxis(v3normalize(v3projectOnPlane(tan, c)), c, rng() * Math.PI * 2);
   const w = (UFO.windowArcDeg * DEG) / windowMs; // rad per ms
-  const a0 = -(UFO.windowArcDeg * DEG) / 2 - w * revealMs;
+  const a0 = UFO.windowStartDeg * DEG - w * revealMs;
   const int3 = (v: Vec3): [number, number, number] => [Math.round(v.x * U), Math.round(v.y * U), Math.round(v.z * U)];
   return {
     c: int3(c),
@@ -110,6 +113,14 @@ export function diveStart(r: UfoRouteMsg, t: number): DiveStart {
   const pos = { x: q(p.x - up.x * UFO.exitDrop, 1000), y: q(p.y - up.y * UFO.exitDrop, 1000), z: q(p.z - up.z * UFO.exitDrop, 1000) };
   const vel = { x: q(head.x * UFO.exitSpeed, 100), y: q(head.y * UFO.exitSpeed, 100), z: q(head.z * UFO.exitSpeed, 100) };
   return { pos, vel, facing: dirFromVelocity(pos, vel) };
+}
+
+/**
+ * Did a dive end in water? A dive ends on the first contact with the ground or the sea surface, so a landing is wet
+ * when the terrain under it lies below the sea and the feet are (about) at or below the surface.
+ */
+export function landedInWater(terrain: Terrain, feet: Vec3): boolean {
+  return terrain.heightAt(v3normalize(feet)) < PLANET.seaLevel - 0.15 && waterDepth(feet) > -0.6;
 }
 
 /** Facing tangent for a dive start (the course, flattened onto the local ground plane). */

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ARENA_CENTER, MOVEMENT, PLANET, UFO } from '@graao/game-data';
 import { DeployState, InputButton, MovementState, v3angle, v3dot, v3len, v3normalize, v3projectOnPlane, type UfoRouteMsg } from '@graao/shared';
 import { CharacterMotor, createCharacterState, newInput } from './character';
-import { diveStart, everyoneLanded, jumpOpen, makeUfoRoute, ufoHeading, ufoPosition, ufoSpeed } from './deploy';
+import { diveStart, everyoneLanded, jumpOpen, makeUfoRoute, ufoAngle, ufoHeading, ufoPosition, ufoSpeed } from './deploy';
 import { mulberry32 } from './rng';
 import { latLonToDir } from './sphere';
 import { createGameWorld } from './world';
@@ -13,17 +13,28 @@ const arena = latLonToDir(ARENA_CENTER.lat, ARENA_CENTER.lon);
 describe('UFO route', () => {
   const routes = Array.from({ length: 20 }, (_, i) => makeUfoRoute(mulberry32(i * 31 + 7), 1_000_000));
 
-  it('flies 100 m above the sea and passes over the arena in the middle of the jump window', () => {
+  it('flies 100 m above the sea and passes over the arena just after the hatch opens', () => {
     for (const r of routes) {
-      const mid = (r.open + r.close) / 2;
-      const p = ufoPosition(r, mid);
+      // Closest approach: the moment the ship's angle along the route is 0.
+      const tc = r.t0 + (-r.a0 * 1e-6) / (r.w * 1e-9);
+      expect(tc).toBeGreaterThan(r.open);
+      const p = ufoPosition(r, tc);
       expect(v3len(p)).toBeCloseTo(UFO.orbitRadius, 3);
       expect(v3angle(v3normalize(p), arena) / DEG).toBeLessThanOrEqual(UFO.approachJitterDeg + 0.01);
-      // The window spans the configured arc, centred on the closest approach.
-      const a = ufoPosition(r, r.open);
-      const b = ufoPosition(r, r.close);
-      expect(v3angle(v3normalize(a), v3normalize(b)) / DEG).toBeCloseTo(UFO.windowArcDeg, 1);
-      expect(v3angle(v3normalize(a), v3normalize(p)) / DEG).toBeCloseTo(UFO.windowArcDeg / 2, 1);
+      // The window opens a little before the arena and spans the configured arc.
+      expect(ufoAngle(r, r.open) / DEG).toBeCloseTo(UFO.windowStartDeg, 2);
+      expect((ufoAngle(r, r.close) - ufoAngle(r, r.open)) / DEG).toBeCloseTo(UFO.windowArcDeg, 1);
+    }
+  });
+
+  it('flies one full lap during the window: any point under the route can be the jump point', () => {
+    for (const r of routes) {
+      expect(ufoAngle(r, r.close) - ufoAngle(r, r.open)).toBeGreaterThanOrEqual(Math.PI * 2 - 1e-4);
+      // Back where the hatch opened (near the arena) when it closes: an automatic drop lands by the village.
+      const a = v3normalize(ufoPosition(r, r.open));
+      const b = v3normalize(ufoPosition(r, r.close));
+      expect(v3angle(a, b) / DEG).toBeLessThan(0.5);
+      expect(v3angle(b, arena) / DEG).toBeLessThanOrEqual(Math.abs(UFO.windowStartDeg) + UFO.approachJitterDeg + 0.5);
     }
   });
 
@@ -38,8 +49,8 @@ describe('UFO route', () => {
 
   it('moves at a steady, readable speed along its own heading', () => {
     for (const r of routes.slice(0, 5)) {
-      expect(ufoSpeed(r)).toBeGreaterThan(15);
-      expect(ufoSpeed(r)).toBeLessThan(30);
+      expect(ufoSpeed(r)).toBeGreaterThan(30);
+      expect(ufoSpeed(r)).toBeLessThan(60);
       const t = r.open + 3000;
       const p0 = ufoPosition(r, t);
       const p1 = ufoPosition(r, t + 100);

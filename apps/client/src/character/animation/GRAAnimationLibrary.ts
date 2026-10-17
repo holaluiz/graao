@@ -41,6 +41,8 @@ export type ClipName =
   | 'victory'
   | 'cheer'
   | 'emote'
+  | 'swim'
+  | 'swimIdle'
   | 'skydive';
 
 type UalClip = Exclude<ClipName, 'skydive'>;
@@ -73,6 +75,8 @@ const UAL_SOURCES: Record<UalClip, { pack: 1 | 2; clip: string }> = {
   victory: { pack: 1, clip: 'Dance_Loop' },
   cheer: { pack: 2, clip: 'Yes' },
   emote: { pack: 2, clip: 'Idle_FoldArms_Loop' },
+  swim: { pack: 1, clip: 'Swim_Fwd_Loop' },
+  swimIdle: { pack: 1, clip: 'Swim_Idle_Loop' },
 };
 
 export interface LibraryReport {

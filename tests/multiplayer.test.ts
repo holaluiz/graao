@@ -5,10 +5,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, type Room } from '@colyseus/sdk';
 import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, PLANET, UFO, WEAPONS, randomAppearance } from '@graao/game-data';
-import { castOrigin, chestOf, diveStart, ufoPosition } from '@graao/game-core';
+import { castOrigin, chestOf, diveStart, ufoPosition, ufoSpeed } from '@graao/game-core';
 import { SnapshotInterpolator } from '../apps/client/src/net/SnapshotInterpolator';
-import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MatchPhase, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
+import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
+import type { RecordMatchPayload } from '@graao/database';
 import { createGraaoServer } from '../apps/server/src/app';
+import { setAuthVerifier } from '../apps/server/src/auth/SupabaseAuth';
+import { setMatchStore } from '../apps/server/src/persistence/MatchStore';
 import { getWorld } from '../apps/server/src/world';
 
 const PORT = 2600 + Math.floor(Math.random() * 300);
@@ -16,6 +19,9 @@ const server = createGraaoServer();
 const url = `ws://127.0.0.1:${PORT}`;
 
 beforeAll(async () => {
+  // Never the real database from tests: guests only and nothing persisted, unless a suite installs fakes.
+  setAuthVerifier(null);
+  setMatchStore({ name: 'none', record: async () => null });
   await getWorld();
   await server.listen(PORT);
 }, 30000);
@@ -222,6 +228,48 @@ describe('two clients in one graao room', () => {
     expect((await left).players[0]!.name).toBe('A');
     await a.leave(true);
   });
+});
+
+describe('double jump through the authoritative server', () => {
+  it('grants one jump in the air, flags it in snapshots and gives it back on landing', async () => {
+    // A fresh room: its first player stands on the first spawn, in the open (where the unit tests jump too).
+    const a = await new Client(url).create(ROOM_NAME, opts('A'));
+    const ia = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+    const isA = (p: number[]) => p[0] === ia;
+    let seq = 1;
+    const send = async (buttons: number[]) => {
+      for (let k = 0; k < buttons.length; k += 2) {
+        a.send(C2S.PLAYER_INPUT, { i: buttons.slice(k, k + 2).map((bt) => [seq++, 0, 0, 0, 0, 0, AIM_SCALE, bt] as InputCmd) });
+        await new Promise((r) => setTimeout(r, 33));
+      }
+    };
+    // Settle on the ground first (players are only simulated while their commands arrive).
+    await send(Array<number>(40).fill(0));
+    const start = await waitFor<SnapshotMsg>(a, S2C.SNAPSHOT, (m) => m.p.some((p) => isA(p) && (p[13]! & SnapFlag.GROUNDED) !== 0));
+    const p0 = start.p.find(isA)!;
+    const r0 = Math.hypot(p0[1], p0[2], p0[3]) / 1000;
+    let peak = 0;
+    let spent = false;
+    let back = false;
+    const off = a.onMessage(S2C.SNAPSHOT, (m: SnapshotMsg) => {
+      const p = m.p.find(isA);
+      if (!p) return;
+      peak = Math.max(peak, Math.hypot(p[1], p[2], p[3]) / 1000 - r0);
+      if ((p[13] & SnapFlag.AIR_JUMPED) !== 0) spent = true;
+      else if (spent && (p[13] & SnapFlag.GROUNDED) !== 0) back = true;
+    });
+    // Jump, release, jump again near the top, then a third press in the same flight (ignored), then land.
+    const J = InputButton.JUMP;
+    await send([J, J, J, ...Array<number>(18).fill(0), J, J, J, ...Array<number>(12).fill(0), J, J, J, ...Array<number>(90).fill(0)]);
+    await new Promise((r) => setTimeout(r, 400));
+    off();
+    await a.leave(true);
+    expect(spent).toBe(true);
+    expect(back).toBe(true);
+    // One jump peaks at ≈ 1.3 m and the double jump adds ≈ 1.1 m; a third jump would have passed 3 m.
+    expect(peak).toBeGreaterThan(2);
+    expect(peak).toBeLessThan(2.7);
+  }, 15000);
 });
 
 describe('combat through the authoritative server (gate 3)', () => {
@@ -666,7 +714,8 @@ describe('UFO deployment through the authoritative server (gate 7: draft → UFO
     // Riders are where the ship is: on its orbit, 100 m above the sea.
     expect(radius(snapOf(s, ia))).toBeCloseTo(UFO.orbitRadius, 0);
     const ship = ufoPosition(route, s.t);
-    expect(Math.hypot(snapOf(s, ia)[1] / 1000 - ship.x, snapOf(s, ia)[2] / 1000 - ship.y, snapOf(s, ia)[3] / 1000 - ship.z)).toBeLessThan(3);
+    // A few ms may pass between the tick placing riders and the snapshot stamp (the short test window flies fast).
+    expect(Math.hypot(snapOf(s, ia)[1] / 1000 - ship.x, snapOf(s, ia)[2] / 1000 - ship.y, snapOf(s, ia)[3] / 1000 - ship.z)).toBeLessThan(3 + ufoSpeed(route) * 0.005);
     // Inputs aboard are acknowledged, never simulated.
     a.send(C2S.PLAYER_INPUT, { i: [[1, WISH_SCALE, 0, 0, 0, 0, AIM_SCALE, InputButton.JUMP] as InputCmd] });
     // No fighting aboard.
@@ -769,4 +818,111 @@ describe('UFO deployment through the authoritative server (gate 7: draft → UFO
     expect(warm.players.every((p) => p.deploy === DeployState.NONE)).toBe(true);
     await c.leave(true);
   }, 20000);
+});
+
+describe('a complete match loop (gate 8: summary, persistence, return to the lobby)', () => {
+  const ID_A = '6f1c1a8e-1234-4abc-8def-0123456789ab';
+  const saved: RecordMatchPayload[] = [];
+  let a: Room;
+  let b: Room;
+  let ia = -1;
+  let ib = -1;
+  let ra: ReturnType<typeof inbox<RoomStateMsg>>;
+  let summaryA: Promise<MatchSummaryMsg>;
+  let summaryB: Promise<MatchSummaryMsg>;
+  let noticesA: ReturnType<typeof inbox<NoticeMsg>>;
+  let noticesB: ReturnType<typeof inbox<NoticeMsg>>;
+  const events: GameEvent[] = [];
+
+  beforeAll(() => {
+    // Only a token the (fake) Supabase verifier accepts carries an identity; the store records what the room sends.
+    setAuthVerifier({ verify: async (t) => (t === 'token-a' ? { id: ID_A, anonymous: true } : null) });
+    setMatchStore({ name: 'test', record: async (p) => (saved.push(p), 'match-1') });
+  });
+  afterAll(() => {
+    setAuthVerifier(null);
+    setMatchStore({ name: 'none', record: async () => null });
+  });
+
+  it('plays to an elimination; everyone gets the server-counted summary and the room score', async () => {
+    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), token: 'token-a', countdownMs: 300, resultsMs: 15000, closeSpawns: true, skipDraft: true, skipUfo: true });
+    ra = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+    noticesA = inbox<NoticeMsg>(a, S2C.NOTICE);
+    ia = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+    // B claims an identity with a token nobody signed: it plays as a guest.
+    b = await new Client(url).joinById((await ra.until((m) => m.players.length === 1)).code, { ...opts('B'), token: 'forged' });
+    noticesB = inbox<NoticeMsg>(b, S2C.NOTICE);
+    ib = (await waitFor<WelcomeMsg>(b, S2C.WELCOME)).index;
+    b.onMessage(S2C.EVENTS, (m: EventsMsg) => events.push(...m.ev));
+    summaryA = waitFor<MatchSummaryMsg>(a, S2C.MATCH_SUMMARY, () => true, 30000);
+    summaryB = waitFor<MatchSummaryMsg>(b, S2C.MATCH_SUMMARY, () => true, 30000);
+    await ra.until((m) => m.players.length === 2);
+    a.send(C2S.READY, { r: 1 });
+    b.send(C2S.READY, { r: 1 });
+    const st = await ra.until((m) => m.phase === MatchPhase.MATCH);
+    expect(st.players.every((p) => p.wins === 0 && !p.back)).toBe(true);
+    await sleep(Math.max(0, st.startsAt - Date.now()) + 250);
+    events.length = 0;
+    const shoot = shooter(a, () => ia, () => ib);
+    let seq = 100;
+    const deadline = Date.now() + 10000;
+    while (!events.some((e) => e.e === 'elim') && Date.now() < deadline) {
+      await shoot(seq++);
+      await sleep(160);
+    }
+    const [sa, sb] = await Promise.all([summaryA, summaryB]);
+    expect(sb).toEqual(sa);
+    expect(sa.winner).toBe(ia);
+    expect(sa.durationMs).toBeGreaterThan(0);
+    const la = sa.players.find((p) => p.index === ia)!;
+    const lb = sa.players.find((p) => p.index === ib)!;
+    expect(sa.players[0]).toBe(la);
+    expect(la).toMatchObject({ name: 'A', placement: 1, won: true, kills: 1, deaths: 0, left: false });
+    expect(lb).toMatchObject({ name: 'B', placement: 2, won: false, kills: 0, deaths: 1 });
+    // The server's own counts: exactly the shots and damage it announced in its events.
+    const shots = events.filter((e): e is Extract<GameEvent, { e: 'shot' }> => e.e === 'shot' && e.by === ia);
+    const dealt = events.filter((e): e is Extract<GameEvent, { e: 'dmg' }> => e.e === 'dmg' && e.by === ia).reduce((n, e) => n + e.amount, 0);
+    expect(la.shots).toBe(shots.length);
+    expect(la.hits).toBe(shots.filter((e) => e.t.includes(ib)).length);
+    expect(la.damageDealt).toBe(Math.round(dealt));
+    expect(lb.damageTaken).toBe(Math.round(dealt));
+    const res = await ra.until((m) => m.phase === MatchPhase.RESULTS);
+    expect(res.players.find((p) => p.index === ia)!.wins).toBe(1);
+    expect(res.players.find((p) => p.index === ib)!.wins).toBe(0);
+  }, 30000);
+
+  it('persists the summary once, with the verified identity only; only the signed-in player hears it was saved', async () => {
+    const n = await noticesA.until((m) => m.code === NoticeCode.MATCH_SAVED);
+    expect(n.kind).toBe('info');
+    expect(saved).toHaveLength(1);
+    const p = saved[0]!;
+    expect(p.winner_index).toBe(ia);
+    expect(p.players.find((x) => x.player_index === ia)).toMatchObject({ profile_id: ID_A, won: true, kills: 1, display_name: 'A' });
+    expect(p.players.find((x) => x.player_index === ib)).toMatchObject({ profile_id: null, won: false, deaths: 1 });
+    expect(p.players.find((x) => x.player_index === ia)!.appearance).toEqual(DEFAULT_APPEARANCE);
+    await sleep(150);
+    expect(noticesB.all.some((m) => m.code === NoticeCode.MATCH_SAVED)).toBe(false);
+  });
+
+  it('RETURN_LOBBY: the room waits for everyone, then goes straight back to the warmup lobby', async () => {
+    a.send(C2S.RETURN_LOBBY, {});
+    const one = await ra.until((m) => m.phase === MatchPhase.RESULTS && m.players.some((p) => p.back));
+    expect(one.players.find((p) => p.index === ia)!.back).toBe(true);
+    expect(one.players.find((p) => p.index === ib)!.back).toBe(false);
+    const t0 = Date.now();
+    const from = ra.all.length;
+    b.send(C2S.RETURN_LOBBY, {});
+    const warm = await ra.until((m) => m.phase === MatchPhase.FREE_ROAM && ra.all.indexOf(m) >= from);
+    // Long before the 15 s results timer.
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(warm.players.every((p) => !p.back && !p.ready && !p.inMatch)).toBe(true);
+    // The room score survives the return to the lobby.
+    expect(warm.players.find((p) => p.index === ia)!.wins).toBe(1);
+    // Outside the results the vote means nothing.
+    a.send(C2S.RETURN_LOBBY, {});
+    await sleep(150);
+    expect(ra.latest()!.players.every((p) => !p.back)).toBe(true);
+    await a.leave(true);
+    await b.leave(true);
+  });
 });

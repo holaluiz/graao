@@ -23,9 +23,9 @@ function split(clip: THREE.AnimationClip): { lower: THREE.AnimationClip; upper: 
   };
 }
 
-const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall', 'skydive'];
+const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall', 'skydive', 'swim', 'swimIdle'];
 /** Ground speed (m/s) at which each locomotion clip plays at timeScale 1 (tuned by eye). */
-const NATIVE_SPEED: Partial<Record<ClipName, number>> = { walk: 1.5, run: 4.6, sprint: 7.2 };
+const NATIVE_SPEED: Partial<Record<ClipName, number>> = { walk: 1.5, run: 4.6, sprint: 7.2, swim: 3.1 };
 
 interface Layer {
   action: THREE.AnimationAction;
@@ -43,8 +43,12 @@ export interface AnimInput {
   action: ActionState;
   /** Skydiving out of the UFO (box pose, no aiming). */
   diving?: boolean;
+  /** The double jump of this flight is spent (its rising edge plays the flip, see GraaoCharacter). */
+  airJumped?: boolean;
   /** Height above whatever is below (m), while diving: the body flares feet-first near the ground. */
   groundDist?: number;
+  /** How deep the feet are under the sea surface (m, negative above it): wading, swimming, drying off afterwards. */
+  waterDepth?: number;
 }
 
 export class CharacterAnimationController {
@@ -138,11 +142,12 @@ export class CharacterAnimationController {
       this.oneShot = null;
     }
 
-    // Jump / land transitions.
+    // Jump / land transitions (the water carries a swimmer: wading out of it is not a landing).
+    const swimming = s.moveState === MovementState.SWIM;
     if (!s.grounded) this.airTime += dt;
     if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP && !s.diving) this.playOneShot('jumpStart', { speed: 1.6 });
     if (!this.wasGrounded && s.grounded && this.airTime > 0.35) this.playOneShot('land', { speed: 2.2 });
-    if (s.grounded) this.airTime = 0;
+    if (s.grounded || swimming) this.airTime = 0;
     this.wasGrounded = s.grounded;
 
     // Locomotion targets.
@@ -162,6 +167,9 @@ export class CharacterAnimationController {
         break;
       case MovementState.FALL:
         loco = this.airTime > 0.9 ? 'fall' : 'air';
+        break;
+      case MovementState.SWIM:
+        loco = s.speed > 0.7 ? 'swim' : 'swimIdle';
         break;
     }
     if (s.diving) loco = 'skydive';

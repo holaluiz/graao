@@ -40,6 +40,8 @@ export interface CharacterState {
   /** Seconds left in which a buffered jump fires on landing. */
   jumpBuffer: number;
   jumpHeld: boolean;
+  /** The double jump was used in this flight (recharged on the ground or in the water). Replicated as SnapFlag.AIR_JUMPED. */
+  airJumped: boolean;
   aiming: boolean;
   moveState: MovementState;
   /** Dash (ability primitive): fixed steps left, world direction (re-projected every step) and speed (m/s). */
@@ -48,8 +50,10 @@ export interface CharacterState {
   dashSpeed: number;
   /** Movement speed multiplier (1 = normal; < 1 while slowed by an ability). */
   slow: number;
-  /** Skydiving out of the UFO: capped fall, wide steering, no jumps; cleared on the first ground contact. */
+  /** Skydiving out of the UFO: capped fall, wide steering, no jumps; cleared on the first ground or water contact. */
   diving: boolean;
+  /** Floating in deep water (see MOVEMENT.swim*). Replicated as MovementState.SWIM. */
+  swimming: boolean;
 }
 
 export interface CharacterInput {
@@ -68,6 +72,7 @@ export function createCharacterState(pos: Vec3, facing: Vec3): CharacterState {
     airTime: 0,
     jumpBuffer: 0,
     jumpHeld: false,
+    airJumped: false,
     aiming: false,
     moveState: MovementState.FALL,
     dashSteps: 0,
@@ -75,7 +80,34 @@ export function createCharacterState(pos: Vec3, facing: Vec3): CharacterState {
     dashSpeed: 0,
     slow: 1,
     diving: false,
+    swimming: false,
   };
+}
+
+const SEA_RADIUS = PLANET.radius + PLANET.seaLevel;
+
+/**
+ * How deep (m) a point lies under the sea surface (negative above it). The water is one sphere, so wherever the
+ * terrain dips below it (lakes, the sea, the fissure floor) a character's feet at depth > 0 stand in water.
+ */
+export function waterDepth(p: Vec3): number {
+  return SEA_RADIUS - v3len(p);
+}
+
+/** Speed fraction while wading with the feet `depth` m under the surface (knee deep → chest deep). */
+export function wadeFactor(depth: number): number {
+  const t = Math.min(1, Math.max(0, (depth - 0.15) / (MOVEMENT.swimEnterDepth - 0.15)));
+  return 1 - (1 - MOVEMENT.wadeSlow) * t * t * (3 - 2 * t);
+}
+
+/** The head is under the water: only diving or plunging gets the feet that deep (wading turns into swimming first). */
+export function headUnderWater(feet: Vec3): boolean {
+  return waterDepth(feet) > MOVEMENT.breathDepth;
+}
+
+/** Air left (s) after `dt`: drains with the head under water, refills `breathRefill`× faster above it. */
+export function stepBreath(breath: number, feet: Vec3, dt: number): number {
+  return headUnderWater(feet) ? Math.max(0, breath - dt) : Math.min(MOVEMENT.breathTime, breath + dt * MOVEMENT.breathRefill);
 }
 
 export function cloneCharacterState(s: CharacterState): CharacterState {
@@ -129,6 +161,7 @@ export class CharacterMotor {
   private readonly tmpDesired = v3();
   private readonly tmpCenter = v3();
   private readonly tmpNewUp = v3();
+  private snapping = true;
 
   constructor(private readonly physics: GamePhysics) {
     const c = physics.world.createCharacterController(MOVEMENT.skin);
@@ -164,12 +197,21 @@ export class CharacterMotor {
   /** Advances `s` by one fixed step `dt` with input `inp`. Deterministic for the same state, input and world. */
   step(body: CharacterBody, s: CharacterState, inp: CharacterInput, dt: number): void {
     const up = v3normalize(s.pos, this.tmpUp);
+    // Water: touching the surface ends a dive; deep enough the character swims until the bottom lifts the feet near
+    // the surface again (hysteresis, so wading at chest depth does not flicker in and out of swimming).
+    const depth = waterDepth(s.pos);
+    if (s.diving && depth > 0) s.diving = false;
+    if (!s.swimming && depth > MOVEMENT.swimEnterDepth) s.swimming = true;
+    else if (s.swimming && depth < MOVEMENT.swimExitDepth) s.swimming = false;
     const diving = s.diving;
+    const swimming = s.swimming;
+    if (swimming) s.airJumped = false;
     const jumpDown = !diving && (inp.buttons & InputButton.JUMP) !== 0;
     const sprint = (inp.buttons & InputButton.SPRINT) !== 0;
-    // Hands are spread while skydiving: no aiming, no firing pose.
-    s.aiming = !diving && (inp.buttons & InputButton.AIM) !== 0;
-    const firing = !diving && (inp.buttons & InputButton.FIRE) !== 0;
+    // Hands are spread while skydiving and stroking while swimming: no aiming, no firing pose.
+    const handsFree = !diving && !swimming;
+    s.aiming = handsFree && (inp.buttons & InputButton.AIM) !== 0;
+    const firing = handsFree && (inp.buttons & InputButton.FIRE) !== 0;
     if (v3len(inp.aim) > 0.5) v3normalize(inp.aim, s.aim);
 
     // Wish direction on the tangent plane, length ≤ 1.
@@ -183,12 +225,14 @@ export class CharacterMotor {
     const h = v3projectOnPlane(s.vel, up, this.tmpH);
 
     const forwardish = wishLen > 0.1 ? v3dot(wish, s.facing) / Math.max(wishLen, 1e-6) : 0;
-    const canSprint = !diving && sprint && !s.aiming && !firing && forwardish > 0.3;
+    const canSprint = handsFree && sprint && !s.aiming && !firing && forwardish > 0.3;
     const maxSpeed = diving
       ? sprint
         ? MOVEMENT.diveFastSpeed
         : MOVEMENT.diveSpeed
-      : (s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed) * s.slow;
+      : swimming
+        ? MOVEMENT.swimSpeed * s.slow
+        : (s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed) * s.slow * (depth > 0 ? wadeFactor(depth) : 1);
     const dashing = s.dashSteps > 0;
     if (dashing) {
       // Dash: a fixed ground-plane velocity along the dash direction; no steering.
@@ -197,7 +241,17 @@ export class CharacterMotor {
     } else {
       const target = v3set(this.tmpTarget, wish.x * maxSpeed, wish.y * maxSpeed, wish.z * maxSpeed);
       // Accelerate horizontal velocity toward the target.
-      const accel = diving ? MOVEMENT.diveAccel : s.grounded ? (wishLen > 0.05 ? MOVEMENT.groundAccel : MOVEMENT.groundDecel) : MOVEMENT.airAccel;
+      // A swimmer whose feet touch the bottom pushes off it like on land (climbing the shore slope out of a lake
+      // would otherwise bleed the weak swim acceleration away).
+      const accel = diving
+        ? MOVEMENT.diveAccel
+        : swimming && !s.grounded
+          ? MOVEMENT.swimAccel
+          : s.grounded
+            ? wishLen > 0.05
+              ? MOVEMENT.groundAccel
+              : MOVEMENT.groundDecel
+            : MOVEMENT.airAccel;
       const dx = target.x - h.x, dy = target.y - h.y, dz = target.z - h.z;
       const dl = Math.hypot(dx, dy, dz);
       const maxDv = accel * dt;
@@ -205,22 +259,51 @@ export class CharacterMotor {
       else v3addScaled(h, { x: dx, y: dy, z: dz }, maxDv / dl, h);
     }
 
-    // Jump: rising edge buffered, coyote time after leaving ground (not while dashing).
+    // Jump: rising edge buffered, coyote time after leaving ground (not while dashing); then one double jump in the air.
     if (jumpDown && !s.jumpHeld) s.jumpBuffer = MOVEMENT.jumpBuffer;
     s.jumpHeld = jumpDown;
     let jumped = false;
-    if (!dashing && s.jumpBuffer > 0 && (s.grounded || s.airTime < MOVEMENT.coyoteTime) && vs <= 0.5) {
-      vs = MOVEMENT.jumpSpeed;
-      s.jumpBuffer = 0;
-      s.grounded = false;
-      s.airTime = MOVEMENT.coyoteTime;
-      jumped = true;
+    if (!dashing && s.jumpBuffer > 0) {
+      if (swimming) {
+        // A hop out of the water, only from the surface (not while still sinking from a plunge).
+        if (depth < MOVEMENT.swimFloatDepth + 0.25 && vs > -1) {
+          vs = MOVEMENT.swimJumpSpeed;
+          s.swimming = false;
+          jumped = true;
+        }
+      } else if ((s.grounded || s.airTime < MOVEMENT.coyoteTime) && vs <= 0.5) {
+        vs = MOVEMENT.jumpSpeed;
+        jumped = true;
+      } else if (!s.grounded && !s.airJumped) {
+        // Double jump: a fresh hop whatever the fall, and WASD swings the momentum toward where the player steers.
+        vs = MOVEMENT.airJumpSpeed;
+        if (wishLen > 0.1) {
+          const k = MOVEMENT.airJumpSteer;
+          v3set(h, h.x + (wish.x * maxSpeed - h.x) * k, h.y + (wish.y * maxSpeed - h.y) * k, h.z + (wish.z * maxSpeed - h.z) * k);
+        }
+        s.airJumped = true;
+        jumped = true;
+      }
+      if (jumped) {
+        s.jumpBuffer = 0;
+        s.grounded = false;
+        s.airTime = MOVEMENT.coyoteTime;
+      }
     }
     s.jumpBuffer = Math.max(0, s.jumpBuffer - dt);
 
-    // Radial gravity (an air dash glides flat).
+    // Radial gravity (an air dash glides flat); buoyancy in deep water.
     if (dashing) vs = s.grounded ? -0.5 : 0;
-    else if (!s.grounded || jumped) vs -= PLANET.gravity * dt;
+    else if (s.swimming) {
+      // Float with the feet swimFloatDepth under the surface; the water brakes any vertical speed (a plunge). Sprint
+      // held dives; jump held under water climbs back up fast.
+      const target = sprint
+        ? -MOVEMENT.swimDiveSpeed
+        : jumpDown && depth > MOVEMENT.swimFloatDepth + 0.25
+          ? MOVEMENT.swimMaxRise
+          : Math.max(-MOVEMENT.swimMaxRise, Math.min(MOVEMENT.swimFloatRise, (depth - MOVEMENT.swimFloatDepth) * MOVEMENT.swimBuoyancy));
+      vs += (target - vs) * Math.min(1, MOVEMENT.swimDrag * dt);
+    } else if (!s.grounded || jumped) vs -= PLANET.gravity * dt;
     else vs = -0.5; // keep contact; snap-to-ground does the rest
     if (diving) {
       // Skydive: the fall is capped (head-first with sprint is faster); slowing down from a faster fall brakes smoothly.
@@ -230,6 +313,13 @@ export class CharacterMotor {
 
     const desired = v3set(this.tmpDesired, (h.x + up.x * vs) * dt, (h.y + up.y * vs) * dt, (h.z + up.z * vs) * dt);
 
+    // A floating body must not be pulled down onto the lake bed (the controller is shared: set it every step).
+    const snap = !s.swimming;
+    if (snap !== this.snapping) {
+      if (snap) this.controller.enableSnapToGround(MOVEMENT.snapToGround);
+      else this.controller.disableSnapToGround();
+      this.snapping = snap;
+    }
     this.controller.setUp(up);
     this.placeCollider(body.collider, s.pos);
     this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS);
@@ -256,6 +346,7 @@ export class CharacterMotor {
       vs = 0;
       s.grounded = true;
       s.airTime = 0;
+      s.airJumped = false;
       // First ground contact ends the dive (landing).
       s.diving = false;
     } else {
@@ -291,7 +382,8 @@ export class CharacterMotor {
 
     // Semantic movement state for animation and replication.
     const speed = v3len(actualH);
-    if (!s.grounded) s.moveState = vs > 0.5 ? MovementState.JUMP : MovementState.FALL;
+    if (s.swimming) s.moveState = MovementState.SWIM;
+    else if (!s.grounded) s.moveState = vs > 0.5 ? MovementState.JUMP : MovementState.FALL;
     else if (speed < 0.35) s.moveState = MovementState.IDLE;
     else if (speed < MOVEMENT.walkThreshold) s.moveState = MovementState.WALK;
     else if (canSprint && speed > MOVEMENT.runSpeed * 1.05) s.moveState = MovementState.SPRINT;

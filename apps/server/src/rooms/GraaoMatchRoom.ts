@@ -16,21 +16,30 @@
  * Match flow: warmup (FREE_ROAM, respawns on) → everyone READY → ABILITY_DRAFT (4 simultaneous rounds, the drafted
  * loadouts replace the warmup ones) → UFO (the ship flies a route over the arena; each participant jumps when they
  * like inside the window, or is dropped when it closes, and skydives down under their own control) → everyone
- * landed → MATCH (countdown, then weapons unlock, no respawns) → last participant standing wins → RESULTS → warmup
- * again. Rules live in `@graao/game-core` (match.ts, draft.ts, deploy.ts).
+ * landed → MATCH (countdown, then weapons unlock, no respawns) → last participant standing wins → RESULTS (the
+ * MatchLedger's summary goes to everyone and, once, to Supabase) → back to the warmup lobby when everyone asks
+ * (RETURN_LOBBY) or the results time runs out. Rules live in `@graao/game-core` (match.ts, draft.ts, deploy.ts).
+ *
+ * Identity: `onAuth` verifies the Supabase access token (JWKS); a player without a valid one is a guest (or is
+ * refused when GRAAO_REQUIRE_AUTH=1). Names and appearance are display data; only the verified id is identity.
  *
  * UFO: riders are not simulated (their position follows the ship; inputs are acknowledged and dropped). A jump
  * starts a dive from the exact state sent in the `jump` event, and from then on the rider's commands drive the
  * shared controller like on the ground. Nobody can deal or take damage until the fight starts.
  */
-import { Room, ServerError, type Client } from '@colyseus/core';
+import { Room, ServerError, type AuthContext, type Client } from '@colyseus/core';
+import { recordMatchPayload, type ParticipantInfo } from '@graao/database';
 import {
   AbilityDraft,
   CharacterMotor,
   GRAAbilitySystem,
   MATCH_RULES,
+  MatchLedger,
   applyAbilityDamage,
   applyDamage,
+  applyDrowning,
+  headUnderWater,
+  stepBreath,
   currentSlow,
   defaultLoadout,
   manaShown,
@@ -45,6 +54,7 @@ import {
   everyoneLanded,
   everyoneReady,
   jumpOpen,
+  landedInWater,
   makeUfoRoute,
   ufoHeading,
   ufoPosition,
@@ -62,7 +72,7 @@ import {
   type GameWorld,
   type PlayerHitTarget,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, PLANET, SPAWNS, UFO, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, validateAppearance, type AbilityId } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, MOVEMENT, PLANET, SPAWNS, UFO, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, validateAppearance, type AbilityId } from '@graao/game-data';
 import {
   AbilityReject,
   ActionState,
@@ -79,6 +89,7 @@ import {
   MAX_PLAYERS,
   MVP_PLAYERS,
   MatchPhase,
+  NoticeCode,
   PITCH_SCALE,
   POS_SCALE,
   PROTOCOL_VERSION,
@@ -103,12 +114,15 @@ import {
   validateInputMsg,
   validatePing,
   validateReady,
+  validateReturnLobby,
   validateSwitch,
   validateUfoJump,
   type AbilityResultMsg,
   type EventsMsg,
   type GameEvent,
   type JoinOptions,
+  type MatchSummaryMsg,
+  type NoticeMsg,
   type PlayerPublic,
   type PlayerSnap,
   type RoomStateMsg,
@@ -117,9 +131,17 @@ import {
   type Vec3,
   type WelcomeMsg,
 } from '@graao/shared';
+import { authVerifier } from '../auth/SupabaseAuth';
+import { serverConfig } from '../config';
+import { matchStore } from '../persistence/MatchStore';
 import { ServerPlayer } from '../sim/ServerPlayer';
 import { getWorld } from '../world';
 import { log } from '../log';
+
+/** What `onAuth` hands to `onJoin` (as `client.auth`). */
+interface PlayerAuth {
+  profileId: string | null;
+}
 
 const activeCodes = new Set<string>();
 
@@ -196,6 +218,10 @@ export class GraaoMatchRoom extends Room {
   private landTimeoutMs: number = UFO.landTimeoutMs;
   /** The ship's route while the UFO phase runs. */
   private ufo: UfoRouteMsg | null = null;
+  /** The running match's own record (boarding → end); null outside a match. */
+  private ledger: MatchLedger | null = null;
+  /** Who each participant of the running match is (identity and look at the start), for persistence. */
+  private roster = new Map<number, ParticipantInfo>();
   private tick = 0;
   private lastTickAt = 0;
   private snapshotAcc = 0;
@@ -232,6 +258,7 @@ export class GraaoMatchRoom extends Room {
     this.onMessage(C2S.ABILITY_REQUEST, (c, m) => this.onAbility(c, m));
     this.onMessage(C2S.DRAFT_PICK, (c, m) => this.onDraftPick(c, m));
     this.onMessage(C2S.UFO_JUMP, (c, m) => this.onUfoJump(c, m));
+    this.onMessage(C2S.RETURN_LOBBY, (c, m) => this.onReturnLobby(c, m));
     this.onMessage(C2S.PING, (c, m) => {
       const v = validatePing(m);
       if (v) c.send(S2C.PONG, { c: v.c, t: Date.now(), tick: Math.round(this.tickCost * 100) / 100 });
@@ -241,6 +268,20 @@ export class GraaoMatchRoom extends Room {
     this.lastTickAt = performance.now();
     this.setSimulationInterval(() => this.update(), SERVER_TICK_MS);
     log('room created', { code: this.roomId, maxClients: this.maxClients });
+  }
+
+  /**
+   * Identity comes only from a verified Supabase access token (Colyseus auth token, or `JoinOptions.token`). Without a
+   * valid one the player is a guest, unless the server requires sign-in. Runs before `onJoin`; the result is
+   * `client.auth`.
+   */
+  override async onAuth(_client: Client, options: Partial<JoinOptions> | undefined, context: AuthContext | undefined): Promise<PlayerAuth> {
+    const token = context?.token || (typeof options?.token === 'string' ? options.token : '');
+    const verifier = authVerifier();
+    const user = token && verifier ? await verifier.verify(token) : null;
+    if (!user && serverConfig().requireAuth) throw new ServerError(4004, `${JoinError.AUTH_FAILED}: sign in to play on this server`);
+    if (token && verifier && !user) log('auth: token refused, joining as guest', { code: this.roomId });
+    return { profileId: user?.id ?? null };
   }
 
   override onJoin(client: Client, options?: JoinOptions): void {
@@ -256,6 +297,7 @@ export class GraaoMatchRoom extends Room {
     const body = this.motor.createBody(state);
     const loadout = (DEV && validateLoadout(options.loadout)) || defaultLoadout(index);
     const p = new ServerPlayer(client, index, name, { ...options.appearance }, state, body, loadout);
+    p.profileId = (client.auth as PlayerAuth | undefined)?.profileId ?? null;
     resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
     this.players.set(client.sessionId, p);
     const welcome: WelcomeMsg & { spawn: [number, number, number] } = {
@@ -274,7 +316,7 @@ export class GraaoMatchRoom extends Room {
     this.broadcastRoomState();
     // Joining mid-draft: watch it (not a seat; plays from the next match).
     if (this.draft) client.send(S2C.DRAFT_STATE, this.draft.view(index));
-    log('join', { code: this.roomId, id: client.sessionId, index, name, client: options.client });
+    log('join', { code: this.roomId, id: client.sessionId, index, name, client: options.client, signedIn: !!p.profileId });
   }
 
   override onLeave(client: Client): void {
@@ -288,10 +330,12 @@ export class GraaoMatchRoom extends Room {
     // The opponent leaving can end a match (the one still standing wins); in warmup the rest may now all be ready;
     // a draft goes on without the seat, or is called off when too few players are left.
     if (this.phase === MatchPhase.MATCH || this.phase === MatchPhase.UFO) {
+      this.ledger?.left(p.index, Date.now());
       this.checkMatchEnd();
       // The one who left may have been the last one still in the air.
       this.maybeBeginFight();
     } else if (this.phase === MatchPhase.ABILITY_DRAFT) this.onDraftLeave(p.index);
+    else if (this.phase === MatchPhase.RESULTS) this.maybeEndResults();
     else this.maybeStartMatch();
   }
 
@@ -474,6 +518,7 @@ export class GraaoMatchRoom extends Room {
       p.state = createCharacterState(ufoPosition(route, now), ufoHeading(route, now));
       this.refresh(p, now);
     }
+    this.beginLedger(now);
     this.broadcastRoomState();
     log('ufo deploy', { code: this.roomId, riders: [...this.players.values()].filter((p) => p.inMatch).map((p) => p.name), opensIn: route.open - now, closesIn: route.close - now });
   }
@@ -514,13 +559,10 @@ export class GraaoMatchRoom extends Room {
     log('ufo jump', { code: this.roomId, name: p.name, auto, msAfterOpen: Math.round(t - this.ufo.open) });
   }
 
-  /** First ground contact after a dive (the controller cleared `diving`). */
+  /** First ground or water contact after a dive (the controller cleared `diving`). */
   private land(p: ServerPlayer): void {
     p.deploy = DeployState.LANDED;
-    const dir = v3normalize(p.state.pos);
-    const h = this.world.terrain.heightAt(dir);
-    const onTerrain = Math.hypot(p.state.pos.x, p.state.pos.y, p.state.pos.z) - (PLANET.radius + h) < 0.6;
-    this.events.push({ e: 'land', target: p.index, at: mm(p.state.pos), water: onTerrain && h < PLANET.seaLevel - 0.15 });
+    this.events.push({ e: 'land', target: p.index, at: mm(p.state.pos), water: landedInWater(this.world.terrain, p.state.pos) });
     this.broadcastRoomState();
     log('ufo land', { code: this.roomId, name: p.name });
   }
@@ -573,32 +615,88 @@ export class GraaoMatchRoom extends Room {
       p.deaths = 0;
       if (p.inMatch) this.resetForSpawn(p, this.spawnState(slot++, undefined, !this.closeSpawns));
     }
+    this.beginLedger(now);
     this.broadcastRoomState();
     log('match start', { code: this.roomId, players: this.players.size });
+  }
+
+  /** A new match record for the participants (their loadouts are final: the draft is over). */
+  private beginLedger(now: number): void {
+    const entrants = [...this.players.values()].filter((p) => p.inMatch);
+    this.ledger = new MatchLedger(
+      entrants.map((p) => ({ index: p.index, name: p.name, loadout: p.loadout })),
+      now,
+    );
+    this.roster = new Map(entrants.map((p) => [p.index, { profileId: p.profileId, appearance: { ...p.appearance } }]));
   }
 
   private checkMatchEnd(): void {
     if (this.phase !== MatchPhase.MATCH && this.phase !== MatchPhase.UFO) return;
     const r = decideMatch([...this.players.values()].map((p) => ({ index: p.index, alive: p.vitals.alive, connected: p.connected, inMatch: p.inMatch })));
     if (!r.over) return;
+    const now = Date.now();
     this.phase = MatchPhase.RESULTS;
     this.winner = r.winner;
     this.startsAt = 0;
     this.ufo = null;
-    this.phaseEndsAt = Date.now() + this.resultsMs;
+    this.phaseEndsAt = now + this.resultsMs;
+    const w = this.byIndex(r.winner);
+    if (w) w.wins++;
+    for (const p of this.players.values()) p.back = false;
+    // The summary first, so every client has it when the phase turns to RESULTS.
+    const summary = this.ledger?.finish(this.roomId, r.winner, now) ?? null;
+    this.ledger = null;
+    if (summary) this.broadcast(S2C.MATCH_SUMMARY, summary);
     this.broadcastRoomState();
-    log('match end', { code: this.roomId, winner: this.byIndex(r.winner)?.name ?? '-' });
+    log('match end', { code: this.roomId, winner: w?.name ?? '-', durationS: summary ? Math.round(summary.durationMs / 1000) : 0 });
+    if (summary) void this.persist(summary, this.roster);
   }
 
-  /** Results over: everyone back on their feet in warmup, ready flags cleared. */
+  /**
+   * Writes the summary once (Supabase `record_match`). Never blocks the room; a failure is only logged. Signed-in
+   * participants who are still here learn that it reached their history.
+   */
+  private async persist(summary: MatchSummaryMsg, roster: ReadonlyMap<number, ParticipantInfo>): Promise<void> {
+    const store = matchStore();
+    try {
+      const id = await store.record(recordMatchPayload(summary, roster, { protocol: PROTOCOL_VERSION, serverVersion: CLIENT_VERSION }));
+      if (!id) return;
+      log('match saved', { code: summary.code, id, store: store.name });
+      const notice: NoticeMsg = { kind: 'info', code: NoticeCode.MATCH_SAVED, text: 'Partida salva no seu histórico' };
+      for (const p of this.players.values()) {
+        if (p.profileId && roster.get(p.index)?.profileId === p.profileId) p.client.send(S2C.NOTICE, notice);
+      }
+    } catch (e) {
+      log('match save failed', { code: summary.code, store: store.name, error: (e as Error).message ?? String(e) });
+    }
+  }
+
+  /** RESULTS: this player is done reading; the room returns to the lobby once every connected player is. */
+  private onReturnLobby(c: Client, m: unknown): void {
+    const p = this.players.get(c.sessionId);
+    if (!p || !validateReturnLobby(m) || this.phase !== MatchPhase.RESULTS || p.back) return;
+    p.back = true;
+    this.broadcastRoomState();
+    this.maybeEndResults();
+  }
+
+  private maybeEndResults(): void {
+    if (this.phase !== MatchPhase.RESULTS) return;
+    const here = [...this.players.values()].filter((p) => p.connected);
+    if (here.length && here.every((p) => p.back)) this.returnToWarmup();
+  }
+
+  /** Results over: everyone back on their feet in the warmup lobby, ready flags cleared. */
   private returnToWarmup(): void {
     this.phase = MatchPhase.FREE_ROAM;
     this.phaseEndsAt = 0;
     this.startsAt = 0;
     this.winner = -1;
     this.ufo = null;
+    this.ledger = null;
     for (const p of this.players.values()) {
       p.ready = false;
+      p.back = false;
       p.inMatch = false;
       // Still aboard or in the air (the match ended during the deployment): back on a spawn.
       const airborne = p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING;
@@ -653,7 +751,8 @@ export class GraaoMatchRoom extends Room {
     if (!p.vitals.alive) return;
     if (f.w !== p.weapon || p.reloading >= 0) return;
     if (!this.canFight(p, Date.now())) return;
-    // Hands are busy while an ability winds up.
+    // Hands are busy while swimming and while an ability winds up.
+    if (p.state.swimming) return;
     if (Date.now() < p.castUntil) return;
     if (p.lastShotSeq >= 0 && !seqGreater(f.s, p.lastShotSeq)) return;
     const w = WEAPONS[WEAPON_SLOTS[f.w]!];
@@ -697,6 +796,7 @@ export class GraaoMatchRoom extends Room {
       }
     }
     this.events.push({ e: 'shot', by: p.index, w: f.w, s: f.s, from: mm(muzzle), to, t: hitT });
+    this.ledger?.shot(p.index, perTarget.size > 0);
 
     for (const [ti, dmg] of perTarget) {
       const q = this.byIndex(ti);
@@ -710,17 +810,19 @@ export class GraaoMatchRoom extends Room {
   }
 
   /**
-   * Shield-then-Health damage from a weapon or an ability (tagged ABILITY), with the dmg event and, on elimination,
-   * kill/death bookkeeping. Returns true when the target was eliminated (the caller then checks the match end).
+   * Shield-then-Health damage from a weapon or an ability (tagged ABILITY), or Health-only drowning (by = the
+   * drowning player), with the dmg event and, on elimination, kill/death bookkeeping. Returns true when the target was eliminated (the caller then checks the match end).
    */
-  private dealDamage(by: ServerPlayer, q: ServerPlayer, amount: number, crit: boolean, now: number, ability?: AbilityId): boolean {
+  private dealDamage(by: ServerPlayer, q: ServerPlayer, amount: number, crit: boolean, now: number, ability?: AbilityId, drowning = false): boolean {
     if (!q.vitals.alive || !this.canFight(q, now)) return false;
-    const res = ability ? applyAbilityDamage(q.vitals, amount) : applyDamage(q.vitals, amount, crit);
+    const res = drowning ? applyDrowning(q.vitals, amount) : ability ? applyAbilityDamage(q.vitals, amount) : applyDamage(q.vitals, amount, crit);
     if (!res.kinds.length) return false;
     this.events.push({ e: 'dmg', by: by.index, target: q.index, amount: res.shieldDamage + res.healthDamage, kinds: res.kinds, health: q.vitals.health, shield: q.vitals.shield, ...(ability ? { a: ability } : {}) });
+    this.ledger?.damage(by.index, q.index, res.shieldDamage + res.healthDamage);
     if (!res.eliminated) return false;
     q.deaths++;
     if (by !== q) by.kills++;
+    this.ledger?.elimination(by.index, q.index, now);
     // No respawns inside a match: the eliminated player watches until the results.
     q.respawnAt = this.phase === MatchPhase.MATCH ? Infinity : now + ATTRIBUTES.respawnDelay * 1000;
     q.reloading = -1;
@@ -772,8 +874,13 @@ export class GraaoMatchRoom extends Room {
     const now = Date.now();
     const dir = v.d ? v3normalize({ x: v.d[0] / DIR_SCALE, y: v.d[1] / DIR_SCALE, z: v.d[2] / DIR_SCALE }) : undefined;
     const point = v.p ? { x: v.p[0] / POS_SCALE, y: v.p[1] / POS_SCALE, z: v.p[2] / POS_SCALE } : undefined;
-    const r = this.abilities.request(p, { slot: v.k, id: v.a, seq: v.s, cmdSeq: v.c, dir, point }, now);
-    if (r === AbilityReject.OK) p.castUltimate = v.k === ULTIMATE_SLOT;
+    // No casting while swimming (the hands are stroking); the client locks its slots in the water too.
+    if (p.state.swimming) return reply(AbilityReject.BUSY);
+    const r = this.abilities.request(p,{ slot: v.k, id: v.a, seq: v.s, cmdSeq: v.c, dir, point }, now);
+    if (r === AbilityReject.OK) {
+      p.castUltimate = v.k === ULTIMATE_SLOT;
+      this.ledger?.cast(p.index);
+    }
     reply(r);
   }
 
@@ -852,6 +959,7 @@ export class GraaoMatchRoom extends Room {
           p.pendingDash = null;
         }
         this.motor.step(p.body, p.state, decodeInput(cmd, p.input), SIM_DT);
+        p.breath = stepBreath(p.breath, p.state.pos, SIM_DT);
         p.simTime += SIM_DT * 1000;
         p.lastSeq = cmd[0];
         p.budget -= 1;
@@ -868,6 +976,7 @@ export class GraaoMatchRoom extends Room {
           for (let i = 0; i < Math.round(dt * SIM_HZ); i++) this.motor.step(p.body, p.state, p.input, SIM_DT);
         }
       } else p.starvedFor = 0;
+      this.drownTick(p, stepped * SIM_DT, wall);
       if (p.deploy === DeployState.DIVING && !p.state.diving) this.land(p);
     }
     this.maybeBeginFight();
@@ -892,6 +1001,22 @@ export class GraaoMatchRoom extends Room {
     this.tickCost = this.tickCost * 0.9 + cost * 0.1;
   }
 
+  /** Out of breath with the head under water: drowning takes Health every MOVEMENT.drownInterval s of simulated time. */
+  private drownTick(p: ServerPlayer, dt: number, now: number): void {
+    if (p.breath > 0 || !p.vitals.alive || !headUnderWater(p.state.pos)) {
+      p.drownT = 0;
+      return;
+    }
+    p.drownT += dt;
+    while (p.drownT >= MOVEMENT.drownInterval && p.vitals.alive) {
+      p.drownT -= MOVEMENT.drownInterval;
+      if (this.canFight(p, now) && this.dealDamage(p, p, MOVEMENT.drownDamage, false, now, undefined, true)) {
+        this.broadcastRoomState();
+        this.checkMatchEnd();
+      }
+    }
+  }
+
   private respawn(p: ServerPlayer): void {
     let killerPos: Vec3 | undefined;
     for (const q of this.players.values()) if (q !== p && q.vitals.alive) killerPos = v3normalize(q.state.pos);
@@ -903,6 +1028,8 @@ export class GraaoMatchRoom extends Room {
     p.state = state;
     this.motor.placeCollider(p.body.collider, p.state.pos);
     p.vitals = newVitals();
+    p.breath = MOVEMENT.breathTime;
+    p.drownT = 0;
     p.ammo.forEach((_, i) => (p.ammo[i] = WEAPONS[WEAPON_SLOTS[i]!].magazine));
     p.reloading = -1;
     p.respawnAt = 0;
@@ -948,7 +1075,8 @@ export class GraaoMatchRoom extends Room {
           (p.vitals.alive ? SnapFlag.ALIVE : 0) |
           (s.aiming ? SnapFlag.AIMING : 0) |
           (p.deploy === DeployState.SHIP ? SnapFlag.ON_SHIP : 0) |
-          (s.diving ? SnapFlag.DIVING : 0),
+          (s.diving ? SnapFlag.DIVING : 0) |
+          (s.airJumped ? SnapFlag.AIR_JUMPED : 0),
         p.lastSeq < 0 ? 0 : p.lastSeq,
         p.vitals.health,
         p.vitals.shield,
@@ -974,6 +1102,8 @@ export class GraaoMatchRoom extends Room {
       deaths: p.deaths,
       loadout: [...p.loadout],
       deploy: p.deploy,
+      wins: p.wins,
+      back: p.back,
     }));
     const msg: RoomStateMsg = { code: this.roomId, phase: this.phase, phaseEndsAt: this.phaseEndsAt, startsAt: this.startsAt, winner: this.winner, players, ufo: this.ufo };
     this.broadcast(S2C.ROOM_STATE, msg);

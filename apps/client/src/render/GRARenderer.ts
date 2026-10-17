@@ -42,6 +42,8 @@ uniform float uOrbit;
 uniform float uLimb;
 uniform vec3 uSpace;
 uniform vec3 uSpaceDeep;
+uniform float uUnder;
+uniform vec3 uUnderColor;
 varying vec3 vDir;
 ${GLSL_NOISE}
 void main() {
@@ -75,6 +77,8 @@ void main() {
     orbitCol += uSunColor * (pow(sd, 8.0) * 0.22 + pow(sd, 90.0) * 0.55);
     col = mix(col, orbitCol, uOrbit);
   }
+  // Under the sea surface the sky only glows through the water.
+  col = mix(col, uUnderColor, uUnder * 0.8);
   gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
 }
@@ -91,6 +95,8 @@ export const SKY = {
   fog: new THREE.Color('#e7cdb4'),
   space: new THREE.Color('#7489c6'),
   spaceDeep: new THREE.Color('#2e3a6b'),
+  /** Fog and sky tint with the camera under the water. */
+  underwater: new THREE.Color('#2f8197'),
 };
 
 export class GRARenderer {
@@ -102,6 +108,8 @@ export class GRARenderer {
   readonly fog = new THREE.FogExp2(SKY.fog.getHex(), 0.0085);
   readonly sunDir = new THREE.Vector3(0, 1, 0);
   quality: Quality;
+  /** 0..1: the camera is under the sea surface (dense teal fog, the sky only glowing through). */
+  underwater = 0;
   private shadowExtent = 26;
   private readonly fixedTangent = new THREE.Vector3(0.62, 0.22, -0.75).normalize();
 
@@ -150,6 +158,8 @@ export class GRARenderer {
         uLimb: { value: 1.57 },
         uSpace: { value: SKY.space },
         uSpaceDeep: { value: SKY.spaceDeep },
+        uUnder: { value: 0 },
+        uUnderColor: { value: SKY.underwater },
       },
       side: THREE.BackSide,
       depthWrite: false,
@@ -217,10 +227,13 @@ export class GRARenderer {
   setAltitude(planetRadius: number): number {
     const dist = this.camera.position.length();
     const alt = dist - planetRadius;
-    this.fog.density = THREE.MathUtils.lerp(0.0085, 0.0011, THREE.MathUtils.smoothstep(alt, 14, 140));
+    const air = THREE.MathUtils.lerp(0.0085, 0.0011, THREE.MathUtils.smoothstep(alt, 14, 140));
+    this.fog.density = THREE.MathUtils.lerp(air, 0.13, this.underwater);
+    this.fog.color.copy(SKY.fog).lerp(SKY.underwater, this.underwater);
     const orbit = THREE.MathUtils.smoothstep(alt, 30, 190);
     const u = this.sky.material.uniforms;
     u.uOrbit!.value = orbit;
+    u.uUnder!.value = this.underwater;
     u.uLimb!.value = Math.asin(Math.min(1, planetRadius / Math.max(dist, planetRadius)));
     // Near plane: precise depth from afar, close-up framing on the ground.
     const near = alt > 30 ? 0.5 : 0.05;

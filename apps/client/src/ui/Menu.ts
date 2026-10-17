@@ -1,4 +1,4 @@
-/** Main menu (DOM): name, create/join by room code, free roam, customize, quality, frame-rate cap. */
+/** Main menu (DOM): name, create/join by room code, free roam, customize, profile and history, quality, frame-rate cap. */
 import { ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '@graao/shared';
 import { FPS_CAPS, type FpsCap } from '../app/FrameLimiter';
 import type { Quality } from '../render/GRARenderer';
@@ -8,6 +8,7 @@ export interface MenuActions {
   create(name: string): void;
   join(code: string, name: string): void;
   customize(): void;
+  history(): void;
   quality(q: Quality): void;
   fpsCap(c: FpsCap): void;
   click(): void;
@@ -21,6 +22,8 @@ export class Menu {
   private readonly note = document.createElement('div');
   private readonly nameInput = document.createElement('input');
   private readonly codeInput = document.createElement('input');
+  private readonly profileEl = document.createElement('div');
+  private readonly profileText = document.createElement('span');
   private readonly buttons: HTMLButtonElement[] = [];
 
   constructor(private readonly actions: MenuActions, name: string, quality: Quality, fps: FpsCap) {
@@ -61,10 +64,16 @@ export class Menu {
     const row = document.createElement('div');
     row.className = 'row';
     row.append(solo, custom);
+    // Who you are to graao: a cloud profile (name, look, settings, history) or this browser only.
+    this.profileEl.className = 'profile-line';
+    const hist = this.btn('Histórico', () => this.actions.history());
+    hist.classList.add('small');
+    this.profileEl.append(this.profileText, hist);
     const q = this.choiceRow('Qualidade', ['LOW', 'MEDIUM', 'HIGH'] as Quality[], quality, QUALITY_LABEL, (v) => this.actions.quality(v));
     const fpsRow = this.choiceRow('Limite de FPS', [...FPS_CAPS], fps, FPS_LABEL, (v) => this.actions.fpsCap(v));
     this.note.className = 'note';
-    this.el.append(h, tag, this.nameInput, create, joinRow, row, q, fpsRow, this.note);
+    this.el.append(h, tag, this.nameInput, create, joinRow, row, this.profileEl, q, fpsRow, this.note);
+    this.setProfile('Perfil: conectando…', false);
   }
 
   private choiceRow<T extends string | number>(label: string, values: T[], current: T, names: Record<T, string>, onPick: (v: T) => void): HTMLElement {
@@ -103,6 +112,17 @@ export class Menu {
 
   name(): string {
     return this.nameInput.value.trim();
+  }
+
+  setName(name: string): void {
+    this.nameInput.value = name;
+  }
+
+  /** The profile line; `history` = the history button is useful (a cloud profile); `why` goes in the tooltip. */
+  setProfile(text: string, history: boolean, why = ''): void {
+    this.profileText.textContent = text;
+    this.profileText.title = why;
+    (this.profileEl.lastElementChild as HTMLElement).hidden = !history;
   }
 
   setNote(text: string, error = false): void {

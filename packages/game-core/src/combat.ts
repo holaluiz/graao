@@ -49,6 +49,21 @@ export function applyDamage(v: Vitals, amount: number, critical: boolean): Damag
   return { kinds, shieldDamage, healthDamage, eliminated };
 }
 
+/** Drowning (out of breath under water): Health only, a shield does not keep water out. */
+export function applyDrowning(v: Vitals, amount: number): DamageResult {
+  const kinds: HitKind[] = [];
+  if (!v.alive || amount <= 0) return { kinds, shieldDamage: 0, healthDamage: 0, eliminated: false };
+  const healthDamage = Math.min(v.health, Math.max(1, Math.round(amount)));
+  v.health -= healthDamage;
+  kinds.push(HitKind.BODY);
+  const eliminated = v.health <= 0;
+  if (eliminated) {
+    v.alive = false;
+    kinds.push(HitKind.ELIMINATION);
+  }
+  return { kinds, shieldDamage: 0, healthDamage, eliminated };
+}
+
 /** Hitbox dimensions relative to the feet (m). The head is a separate sphere for CRITICAL hits. */
 export const HITBOX = {
   bodyBottom: 0.25,

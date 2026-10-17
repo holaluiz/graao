@@ -17,9 +17,12 @@ import {
   DIR_SCALE,
   HitKind,
   MatchPhase,
+  NoticeCode,
   POS_SCALE,
   type FireMsg,
   type GameEvent,
+  type MatchSummaryMsg,
+  type NoticeMsg,
   type PlayerPublic,
   type RoomStateMsg,
   type SelfStatusMsg,
@@ -47,6 +50,9 @@ interface PendingShot {
   targets: number[];
 }
 
+/** The final blow plays out before the results card covers the world (ms). */
+const RESULTS_DELAY_MS = 1400;
+
 const mmToV = (p: [number, number, number], out = new THREE.Vector3()) => out.set(p[0] / POS_SCALE, p[1] / POS_SCALE, p[2] / POS_SCALE);
 
 export class CombatDirector {
@@ -69,7 +75,10 @@ export class CombatDirector {
   private lastFireAt = -1e9;
   private readonly pending: PendingShot[] = [];
   private countdownShown = -1;
-  private readonly match = { shots: 0, hits: 0, damage: 0, kills: 0 };
+  /** The server's summary of the match that just ended, and whether it reached this player's history. */
+  private summary: MatchSummaryMsg | null = null;
+  private saved = false;
+  private resultsAt = 0;
   private readonly tmp = new THREE.Vector3();
   private readonly tmp2 = new THREE.Vector3();
   private readonly muzzleW = new THREE.Vector3();
@@ -104,8 +113,9 @@ export class CombatDirector {
     this.winner = -1;
     this.weapon.reset();
     this.abilities.enter(online);
+    this.summary = null;
     this.app.hud.setDeath(false);
-    this.app.hud.setResults(null);
+    this.app.results.hide();
     this.app.hud.setStatus(online ? '' : 'EXPLORANDO SOZINHO · tiros e magias de treino');
     this.app.audio.setState('NORMAL');
   }
@@ -129,8 +139,8 @@ export class CombatDirector {
 
   private canFire(): boolean {
     if (!this.alive || !this.app.input.locked) return false;
-    // Hands are busy while an ability winds up (the server refuses shots then too).
-    if (this.abilities.casting()) return false;
+    // Hands are busy while swimming and while an ability winds up (the server refuses shots then too).
+    if (this.app.local.state.swimming || this.abilities.casting()) return false;
     if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
     if (this.phase === MatchPhase.RESULTS || this.phase === MatchPhase.UFO) return false;
     if (this.phase === MatchPhase.MATCH) return this.serverNow() >= this.startsAt && !!this.me()?.inMatch;
@@ -139,6 +149,11 @@ export class CombatDirector {
 
   private me(): PlayerPublic | undefined {
     return this.players.find((p) => p.index === this.myIndex);
+  }
+
+  /** Everyone in the room as of the last ROOM_STATE (lobby panel, results). */
+  get roomPlayers(): readonly PlayerPublic[] {
+    return this.players;
   }
 
   /** Upper body holds the aim pose while aiming and shortly after any shot. */
@@ -157,13 +172,18 @@ export class CombatDirector {
     const app = this.app;
     const input = app.input;
     const now = performance.now();
-    if (input.consume('ready')) this.toggleReady();
+    if (input.consume('ready')) {
+      if (this.phase === MatchPhase.RESULTS) this.app.results.askLobby();
+      else this.setReady(!this.me()?.ready);
+    }
+    const firePressed = input.consume('fire');
+    if (firePressed && input.locked && this.alive && app.local.state.swimming) app.hud.notice('NADANDO · SEM ARMAS NA ÁGUA', 1.1);
     const r = this.weapon.update(
       dt,
       now,
       {
         fireHeld: input.isDown('fire'),
-        firePressed: input.consume('fire'),
+        firePressed,
         reloadPressed: input.consume('reload'),
         switchTo: input.consume('weapon1') ? 0 : input.consume('weapon2') ? 1 : -1,
       },
@@ -222,7 +242,6 @@ export class CombatDirector {
     }
     this.pending.push(shot);
     this.lastFireAt = performance.now();
-    this.match.shots++;
     // Body, camera, audio.
     app.character.anim.playUpper('fire', 1.4);
     app.camera.kick(w.cameraProfile.kick * 4 * CAMERA_RESPONSE.MICRO.kick, (Math.random() - 0.5) * w.cameraProfile.kick);
@@ -339,17 +358,13 @@ export class CombatDirector {
       }
     } else if (this.phase === MatchPhase.RESULTS) {
       hud.setStatus('');
-      const me = this.me();
-      hud.setResults({
-        victory: this.winner === this.myIndex,
-        draw: this.winner < 0,
-        winnerName: this.nameOf(this.winner),
-        kills: me?.kills ?? this.match.kills,
-        damage: this.match.damage,
-        shots: this.match.shots,
-        hits: this.match.hits,
-        secondsLeft: Math.ceil((this.phaseEndsAt - now) / 1000),
-      });
+      // The final blow plays out first; then the card, with the pointer free for its buttons.
+      const app = this.app;
+      if (this.summary && performance.now() - this.resultsAt >= RESULTS_DELAY_MS) {
+        if (!app.results.visible) app.input.exitLock();
+        app.results.show(this.summary, this.myIndex, this.players, this.saved ? 'saved' : app.profile.status === 'cloud' ? 'pending' : 'guest');
+        app.results.update(Math.ceil((this.phaseEndsAt - now) / 1000), this.players);
+      }
     }
     if (!this.alive) {
       const sub =
@@ -362,11 +377,22 @@ export class CombatDirector {
 
   private readonly eliminatedInMatch = new Set<number>();
 
-  private toggleReady(): void {
+  /** READY intent (ENTER or the lobby button); the server decides when everyone is. */
+  setReady(ready: boolean): void {
     if (!this.online || this.phase !== MatchPhase.FREE_ROAM || !this.app.net) return;
-    const ready = !this.me()?.ready;
     this.app.net.sendReady(ready);
     this.app.audio.play(ready ? 'ui.ready' : 'ui.click');
+  }
+
+  /** MATCH_SUMMARY arrives just before the ROOM_STATE that turns the phase to RESULTS. */
+  onSummary(m: MatchSummaryMsg): void {
+    this.summary = m;
+    this.saved = false;
+  }
+
+  onNotice(m: NoticeMsg): void {
+    if (m.code === NoticeCode.MATCH_SAVED) this.saved = true;
+    else if (m.text) this.app.hud.notice(m.text, 2);
   }
 
   // ------------------------------------------------------------------------------------------------ server messages
@@ -385,20 +411,20 @@ export class CombatDirector {
         // Boarding: fresh weapons and abilities arrive with SELF; nothing to fight with until everyone has landed.
         this.weapon.reset();
         this.abilities.onRespawn();
-        this.app.hud.setResults(null);
+        this.app.results.hide();
       } else if (m.phase === MatchPhase.MATCH) {
         this.weapon.reset();
         this.abilities.onRespawn();
-        this.match.shots = this.match.hits = this.match.damage = this.match.kills = 0;
         this.eliminatedInMatch.clear();
         this.countdownShown = -1;
-        this.app.hud.setResults(null);
+        this.app.results.hide();
       } else if (m.phase === MatchPhase.RESULTS) {
         const win = m.winner === this.myIndex;
+        this.resultsAt = performance.now();
         this.app.audio.play(m.winner < 0 ? 'defeat' : win ? 'victory' : 'defeat');
         this.app.hud.setDeath(false);
       } else if (m.phase === MatchPhase.FREE_ROAM) {
-        this.app.hud.setResults(null);
+        this.app.results.hide();
         if (prev === MatchPhase.ABILITY_DRAFT) this.app.hud.banner('DRAFT CANCELADO', 'Faltaram jogadores · de volta ao aquecimento', 2.4, 'bad');
         else this.app.hud.banner('AQUECIMENTO', 'Treine à vontade · ENTER quando estiver pronto', 2.2);
       }
@@ -513,9 +539,8 @@ export class CombatDirector {
     const app = this.app;
     const me = this.myIndex;
     const has = (k: HitKind) => kinds.includes(k);
-    if (by === me) {
-      this.match.hits++;
-      this.match.damage += amount;
+    // by === target: drowning (no hitmarker for hurting yourself).
+    if (by === me && target !== me) {
       app.hud.hit(kinds);
       const cue: Cue = has(HitKind.SHIELD_BREAK) ? 'hit.shieldBreak' : has(HitKind.CRITICAL) ? 'hit.crit' : has(HitKind.SHIELD) && !has(HitKind.BODY) ? 'hit.shield' : 'hit.body';
       if (!has(HitKind.ELIMINATION)) app.audio.play(cue);
@@ -574,9 +599,10 @@ export class CombatDirector {
     const app = this.app;
     const me = this.myIndex;
     this.eliminatedInMatch.add(target);
-    const killer = this.nameOf(by);
+    // Eliminated by yourself = drowned: the water takes the credit in the feed.
+    const killer = by === target ? 'Água' : this.nameOf(by);
     const victim = this.nameOf(target);
-    app.hud.feed(killer, victim, by === me ? 'killer' : target === me ? 'victim' : null);
+    app.hud.feed(killer, victim, by === me && target !== me ? 'killer' : target === me ? 'victim' : null);
     const pos = target === me ? app.local.state.pos : app.net?.remote(target)?.pos;
     if (pos) {
       const up = this.tmp.set(pos.x, pos.y, pos.z).normalize();
@@ -585,7 +611,6 @@ export class CombatDirector {
       app.vfx.burst(at, up, { color: '#ffe8a8', count: 18, speed: 5, size: 0.16, life: 0.9, gravity: 5, drag: 2.5, shape: Shape.PETAL, category: 'GameplayCritical' });
     }
     if (by === me && target !== me) {
-      this.match.kills++;
       app.audio.play('hit.elim');
       app.hud.hit([HitKind.ELIMINATION]);
       app.hud.banner('ELIMINAÇÃO', victim, 1.4, 'good');

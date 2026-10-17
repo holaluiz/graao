@@ -50,6 +50,17 @@ ${GLSL_NOISE}
 void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
   vec3 N = normalize(vNormalW + (vec3(graNoise3(vWorldPos * 0.6 + uTime * 0.3), graNoise3(vWorldPos * 0.6 - uTime * 0.25 + 9.0), 0.5) - 0.5) * 0.18);
+  if (!gl_FrontFacing) {
+    // Seen from below: a bright window to the sky straight overhead, a mirror of the depths toward the edges.
+    float win = smoothstep(0.55, 0.82, clamp(dot(N, -V), 0.0, 1.0));
+    float shimmer = graNoise3(vWorldPos * 0.9 + uTime * 0.5);
+    vec3 under = mix(uDeep * 0.85, uSky, win * (0.7 + 0.3 * shimmer));
+    under += vec3(1.0, 0.97, 0.85) * smoothstep(0.74, 0.9, graNoise3(vWorldPos * 1.6 - uTime * 0.6)) * 0.3 * win;
+    gl_FragColor = vec4(under, mix(0.93, 0.5, win));
+    #include <colorspace_fragment>
+    #include <fog_fragment>
+    return;
+  }
   float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
   vec3 col = mix(uShallow, uDeep, 0.55 + 0.45 * graNoise3(vWorldPos * 0.05));
   col = mix(col, uSky, fres * 0.65);
@@ -269,7 +280,10 @@ export class PlanetView {
       transparent: true,
       depthWrite: false,
       fog: true,
+      // Both faces in one pass: the underside is the surface seen by a camera under the water.
+      side: THREE.DoubleSide,
     });
+    mat.forceSinglePass = true;
     const mesh = new THREE.Mesh(g, mat);
     mesh.name = 'water';
     mesh.renderOrder = 10;

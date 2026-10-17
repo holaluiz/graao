@@ -19,6 +19,7 @@ export const C2S = {
   ABILITY_REQUEST: 8,
   UFO_JUMP: 9,
   PING: 10,
+  /** RESULTS: this player wants to go back to the lobby now (the room returns once everyone asked, or on the timer). */
   RETURN_LOBBY: 11,
   START_MATCH: 12,
 } as const;
@@ -37,6 +38,8 @@ export const S2C = {
   ABILITY_RESULT: 108,
   /** Ability Draft state, per player (each one only learns its own hidden choice). */
   DRAFT_STATE: 109,
+  /** Server-authoritative summary of a finished match (sent once, when RESULTS starts). */
+  MATCH_SUMMARY: 110,
 } as const;
 export type S2CType = (typeof S2C)[keyof typeof S2C];
 
@@ -81,6 +84,8 @@ export const MovementState = {
   SPRINT: 3,
   JUMP: 4,
   FALL: 5,
+  /** In deep water (moving or treading): also how a snapshot tells the client that the character swims. */
+  SWIM: 6,
 } as const;
 export type MovementState = (typeof MovementState)[keyof typeof MovementState];
 
@@ -156,7 +161,7 @@ export const AIM_SCALE = 1000;
  * `[index, px, py, pz, vx, vy, vz, fx, fy, fz, aimPitch, moveState, actionState, flags, ackSeq, health, shield, mana, weapon, simDt]`
  * - p: position in millimetres (ints).  v: velocity in cm/s (ints).
  * - f: facing tangent × 127.  aimPitch: radians × 100 relative to the local horizon.
- * - flags: bit 0 grounded, bit 1 alive, bit 2 aiming, bit 3 aboard the UFO, bit 4 diving.
+ * - flags: bit 0 grounded, bit 1 alive, bit 2 aiming, bit 3 aboard the UFO, bit 4 diving, bit 5 double jump used.
  * - simDt: ms between the snapshot time and the moment this player's simulated state is valid (≤ 0). Each player is
  *   simulated in whole 1/60 s commands, so remotes interpolate on this per-player clock to move perfectly evenly.
  */
@@ -173,6 +178,8 @@ export const SnapFlag = {
   ON_SHIP: 1 << 3,
   /** Skydiving after the jump (until the first ground contact). */
   DIVING: 1 << 4,
+  /** The double jump of this flight is spent: the owner's prediction must not grant it again, others flip once. */
+  AIR_JUMPED: 1 << 5,
 } as const;
 
 export const POS_SCALE = 1000;
@@ -206,6 +213,10 @@ export interface PlayerPublic {
   loadout: string[];
   /** UFO deployment progress (aboard / diving / landed); NONE outside a deployment. */
   deploy: DeployState;
+  /** Matches won in this room (the room's running score). */
+  wins: number;
+  /** RESULTS only: asked to go back to the lobby. */
+  back: boolean;
 }
 
 /**
@@ -269,6 +280,48 @@ export interface NoticeMsg {
   kind: 'info' | 'error';
   code: string;
   text: string;
+}
+
+/** NOTICE codes the client reacts to (the text is for display). */
+export const NoticeCode = {
+  /** The finished match was written to this player's history (Supabase). */
+  MATCH_SAVED: 'MATCH_SAVED',
+} as const;
+
+// ------------------------------------------------------------------------------------------------ match summary
+
+/** One participant's line in a match summary. Every number is the server's own count, never a client's claim. */
+export interface MatchSummaryLine {
+  index: number;
+  name: string;
+  /** 1 = winner. Players knocked out at the same moment share a placement (a draw ties everyone). */
+  placement: number;
+  won: boolean;
+  kills: number;
+  deaths: number;
+  damageDealt: number;
+  damageTaken: number;
+  /** Weapon shots fired, and how many of them touched a player (accuracy = hits / shots). */
+  shots: number;
+  hits: number;
+  abilitiesCast: number;
+  /** Ability ids for keys 1–4 in this match. */
+  loadout: string[];
+  /** Left the room before the end. */
+  left: boolean;
+}
+
+/** MATCH_SUMMARY: sent to everyone when a match ends, before (and whatever happens to) its persistence. */
+export interface MatchSummaryMsg {
+  code: string;
+  /** Winner's player index, -1 for a draw. */
+  winner: number;
+  /** Server times: boarding (or the match start without the UFO) and the end. */
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+  /** Best placement first. */
+  players: MatchSummaryLine[];
 }
 
 // ------------------------------------------------------------------------------------------------ combat

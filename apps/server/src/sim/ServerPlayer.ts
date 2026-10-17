@@ -1,7 +1,7 @@
 /** Authoritative per-player state on the server (movement, vitals, weapons, abilities). */
 import type { Client } from '@colyseus/core';
 import { manaShown, newInput, newVitals, type AbilityActor, type CharacterBody, type CharacterInput, type CharacterState, type Vitals } from '@graao/game-core';
-import { LOADOUT_SLOTS, WEAPONS, WEAPON_SLOTS, type Loadout } from '@graao/game-data';
+import { LOADOUT_SLOTS, MOVEMENT, WEAPONS, WEAPON_SLOTS, type Loadout } from '@graao/game-data';
 import { DeployState, type CharacterAppearance, type InputCmd, type SelfStatusMsg, type Vec3 } from '@graao/shared';
 
 /** A dash accepted by the ability system, started when movement command `seq` is simulated. */
@@ -41,8 +41,17 @@ export class ServerPlayer implements AbilityActor {
   respawnAt = 0;
   kills = 0;
   deaths = 0;
+  /** Matches won in this room (the room's running score). */
+  wins = 0;
+  /** RESULTS: asked to go back to the lobby. */
+  back = false;
+  /** Supabase user id verified from the join token; null for a guest. */
+  profileId: string | null = null;
   /** UFO deployment progress (aboard → diving → landed); NONE outside a deployment. */
   deploy: DeployState = DeployState.NONE;
+  /** Air left (s) under water, advanced with every simulated command; `drownT` counts toward the next drowning tick. */
+  breath: number = MOVEMENT.breathTime;
+  drownT = 0;
 
   // Abilities (owned by the server; the draft will replace the loadout in Phase 6).
   readonly cooldownEnds: number[] = new Array<number>(LOADOUT_SLOTS).fill(0);

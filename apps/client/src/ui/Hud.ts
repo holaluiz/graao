@@ -1,12 +1,12 @@
 /**
  * Combat HUD (DOM/CSS/SVG, never rendered into Three.js). Driven by the CombatDirector; it never decides gameplay.
  *
- *   bottom-left   Escudo / Vida / Mana (+ status chips such as LENTO)
+ *   bottom-left   Fôlego bubbles (only under water / catching breath), Escudo / Vida / Mana (+ status chips: LENTO)
  *   bottom-centre ability slots 1 2 3 + Ultimate 4: icon (shape per ability), Mana cost, cooldown sweep
  *   bottom-right  E / Q weapon slots with ammo and reload progress
  *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs
  *   top           place name, match status chip, room code, kill feed
- *   overlays      countdown / banners, elimination screen, results
+ *   overlays      countdown / banners, elimination screen (the results card is its own screen: ResultsScreen)
  *   deploy        UFO / drop panel (bottom-centre): what to do, the jump key, the window bar, the altitude; combat
  *                 widgets hide while aboard and falling (`setMode`)
  *
@@ -62,17 +62,6 @@ export interface AbilitySlotView {
   secondsLeft: number;
   /** Mirror of the server state (the HUD only displays it). */
   state: 'ready' | 'cooldown' | 'nomana' | 'casting' | 'locked';
-}
-
-export interface ResultsView {
-  victory: boolean;
-  draw: boolean;
-  winnerName: string;
-  kills: number;
-  damage: number;
-  shots: number;
-  hits: number;
-  secondsLeft: number;
 }
 
 /** UFO deployment panel (aboard, falling, landed). */
@@ -133,6 +122,10 @@ export class Hud {
 
   private readonly effectsEl = el('div', 'fx-chips', this.vitals);
   private readonly slowChip = el('div', 'fx-chip slow', this.effectsEl);
+  /** Breath under water: a row of bubbles over the vitals that pop as the air runs out. */
+  private readonly breathEl = el('div', 'breath');
+  private readonly breathBubbles: HTMLElement[] = [];
+  private lastBreath = -2;
 
   // Abilities.
   private readonly abilitiesEl = el('div', 'abilities', this.el);
@@ -147,7 +140,6 @@ export class Hud {
   private readonly deathEl = el('div', 'death', this.el);
   private readonly deathTitle = el('div', 'death-title', this.deathEl, 'ELIMINADO');
   private readonly deathSub = el('div', 'death-sub', this.deathEl);
-  private readonly resultsEl = el('div', 'results', this.el);
   private readonly lowHealthEl = el('div', 'low-health', this.el);
   private readonly deployEl = el('div', 'deploy', this.el);
   private readonly deployTitle = el('div', 'deploy-title', this.deployEl);
@@ -173,13 +165,17 @@ export class Hud {
     this.statusEl.hidden = true;
     this.bannerEl.hidden = true;
     this.deathEl.hidden = true;
-    this.resultsEl.hidden = true;
     this.noticeEl.hidden = true;
     this.ammoHint.hidden = true;
     this.slowChip.hidden = true;
     this.deployEl.hidden = true;
     this.altimeter.hidden = true;
     this.el.dataset.mode = 'combat';
+    el('div', 'vbar-label', this.breathEl, 'Fôlego');
+    const bubbles = el('div', 'breath-bubbles', this.breathEl);
+    for (let i = 0; i < 10; i++) this.breathBubbles.push(el('i', 'bubble', bubbles));
+    this.vitals.prepend(this.breathEl);
+    this.breathEl.hidden = true;
     for (let i = 0; i < 2; i++) {
       const root = el('div', 'slot', this.weaponsEl);
       const key = el('div', 'slot-key', root);
@@ -359,6 +355,24 @@ export class Hud {
     this.healthRow.root.classList.toggle('critical', low);
   }
 
+  /** Air left under water (0..1); null hides the meter (head out of the water and lungs full). */
+  setBreath(frac: number | null): void {
+    // Redraw only when a bubble visibly changes (twentieths).
+    const key = frac === null ? -1 : Math.ceil(Math.max(0, Math.min(1, frac)) * 20);
+    if (key === this.lastBreath) return;
+    this.lastBreath = key;
+    this.breathEl.hidden = frac === null;
+    if (frac === null) return;
+    const n = this.breathBubbles.length;
+    this.breathBubbles.forEach((b, i) => {
+      const fill = Math.max(0, Math.min(1, key / 20 * n - i));
+      b.classList.toggle('gone', fill <= 0);
+      b.style.transform = fill > 0 ? `scale(${(0.45 + 0.55 * fill).toFixed(2)})` : '';
+    });
+    this.breathEl.classList.toggle('low', key <= 6 && key > 0);
+    this.breathEl.classList.toggle('out', key <= 0);
+  }
+
   setWeapons(active: number, slots: WeaponSlotView[], reload: number): void {
     slots.forEach((s, i) => {
       const v = this.slots[i]!;
@@ -435,29 +449,6 @@ export class Hud {
   setDeath(show: boolean, sub = ''): void {
     this.deathEl.hidden = !show;
     this.deathSub.textContent = sub;
-  }
-
-  setResults(r: ResultsView | null): void {
-    this.resultsEl.hidden = !r;
-    if (!r) return;
-    const title = r.draw ? 'EMPATE' : r.victory ? 'VITÓRIA!' : 'DERROTA';
-    const sub = r.draw ? 'Ninguém ficou de pé' : r.victory ? 'Você foi o último de pé' : `${r.winnerName} venceu a partida`;
-    const acc = r.shots > 0 ? Math.round((100 * r.hits) / r.shots) : 0;
-    this.resultsEl.dataset.tone = r.draw ? 'neutral' : r.victory ? 'good' : 'bad';
-    this.resultsEl.innerHTML = '';
-    el('div', 'results-title', this.resultsEl, title);
-    el('div', 'results-sub', this.resultsEl, sub);
-    const grid = el('div', 'results-grid', this.resultsEl);
-    for (const [k, v] of [
-      ['Eliminações', String(r.kills)],
-      ['Dano causado', String(Math.round(r.damage))],
-      ['Precisão', `${acc}%`],
-    ] as const) {
-      const c = el('div', 'results-cell', grid);
-      el('div', 'results-v', c, v);
-      el('div', 'results-k', c, k);
-    }
-    el('div', 'results-foot', this.resultsEl, `De volta ao aquecimento em ${Math.max(0, r.secondsLeft)} s`);
   }
 
   update(dt: number): void {
