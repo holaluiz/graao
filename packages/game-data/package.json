@@ -1,0 +1,11 @@
+{
+  "name": "@graao/game-data",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed game content: appearance catalog, weapons, abilities, planet layout.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@graao/shared": "workspace:*"
+  }
+}

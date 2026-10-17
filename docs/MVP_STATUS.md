@@ -1,0 +1,61 @@
+# graao MVP status
+
+Status values: TODO · IN_PROGRESS · TESTING · BLOCKED · DONE (DONE only after a test or a measured check).
+Last update: 2026-10-17. Language: the game (UI, HUD, catalog, regions, weapons) is Portuguese (pt-BR); code and these
+docs stay in English.
+
+## Gates
+
+| Gate | What it proves | Status | Evidence |
+|---|---|---|---|
+| 1 · First visual | A customized graao character runs around a beautiful spherical world with Mixamo-compatible animation | TESTING | Built and seen in the browser (village, grass, houses, curved horizon, run/idle). Animation runs on `GRA_Rig_MixamoCompatible` via the retargeter (CC0 UAL clips). A real **Mixamo FBX** clip has not been loaded yet: no Mixamo animation files exist on this machine (see Blockers). |
+| 2 · Two players | Two customized characters run smoothly around the same world in two windows | TESTING | Two browser tabs in one room saw each other with nameplates and their own outfits; integration tests (two SDK clients) pass: join by code, replication, uniform motion, 60 Hz interpolation replay. Not yet tested on LAN / two machines. |
+| 3 · Shooting | A shoots B, server confirms, Shield/Health change, B dies, A wins | TESTING | Integration test "a complete 1v1 match (gate 3: A wins)" passes: ready → countdown (shots refused) → A's hitscan confirmed by the server → shield then health → elimination, no respawn in the match → RESULTS with winner A → warmup. In the browser (two tabs, own server on 2568): 17 predicted shots, 10 server-confirmed hits, 200 damage, elimination logged by the server, match end with winner; HUD, shield-break VFX, countdown and aim pose seen. Not yet played on two machines. |
+| 4 · Abilities | Guns and magic | TODO | Mana already replicates (100); HUD shows it. |
+| 5 · Creator | Two visibly different avatars seen correctly by each other | TESTING | Creator UI works (tabs, instant parts/colors, drag/zoom); appearance replicates on join and on change. Supabase persistence TODO (localStorage today). |
+| 6 · Draft | Players enter with drafted abilities | TODO | |
+| 7 · UFO | Creator → draft → UFO → drop → combat as one flow | TODO | |
+| 8 · Complete match | Victory/Defeat/Lobby/summary | IN_PROGRESS | Results screen (VITÓRIA / DERROTA / EMPATE, eliminations, damage, accuracy) and automatic return to warmup work; Supabase summary and an explicit lobby are TODO. |
+| 9 · Public deploy | Public URL works | TODO | |
+| 10 · External test | Two PCs, two networks | TODO | |
+
+## Systems
+
+| System | Status | Notes |
+|---|---|---|
+| Monorepo (pnpm, TS strict, Vite, Vitest, ESLint) | DONE | `pnpm dev / build / test / lint / typecheck` pass; 44 tests. Test files run sequentially (`fileParallelism: false`) so the real-time integration suite is not starved by world generation in parallel workers |
+| Spherical world (terrain, features, layout, colliders) | DONE | Deterministic; identical on client/server (tested). Spawn points are kept free of props (tested with a capsule overlap query) |
+| GraaoSphericalCharacterController | DONE | Radial gravity, Rapier KCC with per-step up; full-lap test passes |
+| Third-person camera on the sphere | DONE | Transported heading, terrain pull-in, aim FOV/shoulder, recoil kick and shake with FULL / REDUCED / OFF |
+| Camera obstruction dissolve | TESTING | Implemented (Rapier ray queries → per-instance dither fade); needs a visual pass behind houses |
+| GRA_Rig_MixamoCompatible + MixamoBoneMap | DONE | 55 bones; normalizer handles `mixamorig:` variants and UE/UAL names |
+| Retargeter | DONE | Bone directions preserved within 4° (test) |
+| Mixamo FBX loader | TESTING | Code path exists (manifest + FBXLoader + same retargeter); needs a real Mixamo clip |
+| Modular character (body, 3 faces, 4 hair, 4 tops, 4 bottoms, 3 shoes, 3 accessories, palettes) | DONE | One merged skinned mesh per character, ≈ 10 k triangles |
+| Character creator UI | DONE | Instant switches; Supabase persistence TODO |
+| GRAStylizedMaterial family | DONE | world / terrain / foliage / character + outline |
+| Sky, sun rig, water, grass | DONE | Local golden-hour sun; grass bends around the local player |
+| F3 dev overlay | DONE | FPS, frame ms, draw calls, triangles, character and weapon cost, active VFX, ping, KB/s, snapshot size, server tick |
+| Colyseus room, codes, prediction, reconciliation, interpolation | DONE | Tested (integration) |
+| Weapons (Raio de Sol, Rajada de Pétalas), server hitscan, ammo, reload, switch | TESTING | Server rules tested; client prediction reconciles ammo by FIRE sequence (`shotSeq`); code-authored models on the hand bone |
+| Match flow (warmup → ready → countdown → match → results → warmup) | TESTING | `match.ts` rules unit-tested; full flow integration-tested |
+| Combat HUD (vitals, weapons, reticles, hitmarkers by kind, damage numbers and direction, kill feed, banners, death, results) | TESTING | DOM/CSS/SVG; seen in the browser |
+| GRAVFXSystem (beams + particles, 2 draw calls) | TESTING | Tracers, flashes, impacts, shield shards/ring, elimination burst |
+| GRAAudioManager (synthesized cues, buses, voice limits, LOW_HEALTH / POST_MATCH states) | TESTING | Audible check by a person still pending |
+| Abilities, draft, UFO | TODO | Next slices |
+| Supabase, R2, deploy | TODO | Credentials needed (see Blockers) |
+
+## Known gaps
+
+- Hit registration has no lag compensation (rewind): at high ping, shots at fast-moving targets may miss on the server
+  although the client predicted a hit (the hitmarker only appears on confirmation, so feedback stays honest).
+- Nameplates hide behind walls and the planet's curve (line-of-sight ray per remote per frame).
+- Docs are English; only the game is Portuguese.
+
+## Blockers / needs from the user
+
+1. **Mixamo clips** — to prove a real Mixamo animation on the graao skeleton, download a few clips from mixamo.com
+   (FBX, *Without Skin*, *In Place* ticked): Idle, Running, Jumping, Rifle Aiming Idle, Firing Rifle, Reloading, Hit
+   Reaction, Dying. Put them in `apps/client/public/assets/v1/animations/mixamo/` with a `manifest.json` such as
+   `{ "idle": "Idle.fbx", "run": "Running.fbx" }`. They override the CC0 clips automatically.
+2. **Supabase project** and **Cloudflare R2 bucket + Pages** for persistence and the public deploy (credentials).

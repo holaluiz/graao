@@ -1,0 +1,8 @@
+/// <reference types="vite/client" />
+interface ImportMetaEnv {
+  readonly VITE_SERVER_URL?: string;
+  readonly VITE_ASSET_BASE?: string;
+  readonly VITE_SUPABASE_URL?: string;
+  readonly VITE_SUPABASE_ANON_KEY?: string;
+}
+declare const __BUILD_TIME__: string;

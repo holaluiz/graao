@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.vite/
+coverage/
+test-results/
+playwright-report/
+# Raw Mixamo downloads stay local: Adobe's terms allow use inside the game, not redistribution as loose files.
+assets/animations/mixamo/raw/
+tools/profiling/out/

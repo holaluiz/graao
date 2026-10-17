@@ -1,0 +1,25 @@
+{
+  "name": "@graao/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "graao browser client: Three.js (WebGL2), DOM/CSS/SVG UI, Rapier prediction.",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@colyseus/sdk": "0.18.5",
+    "@dimforge/rapier3d-compat": "0.21.0",
+    "@graao/game-core": "workspace:*",
+    "@graao/game-data": "workspace:*",
+    "@graao/shared": "workspace:*",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.186.0",
+    "vite": "8.3.4"
+  }
+}

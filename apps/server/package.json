@@ -1,0 +1,24 @@
+{
+  "name": "@graao/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "graao authoritative match server (Colyseus + Rapier).",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "build": "node build.mjs",
+    "start": "node dist/server.mjs"
+  },
+  "dependencies": {
+    "@colyseus/core": "0.18.19",
+    "@colyseus/ws-transport": "0.18.4",
+    "@dimforge/rapier3d-compat": "0.21.0",
+    "@graao/game-core": "workspace:*",
+    "@graao/game-data": "workspace:*",
+    "@graao/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@colyseus/sdk": "0.18.5",
+    "esbuild": "0.28.2"
+  }
+}

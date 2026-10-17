@@ -1,0 +1,35 @@
+# Client
+
+Vite + TypeScript, Three.js r186 `WebGLRenderer` (WebGL2), DOM/CSS/SVG UI. Entry `apps/client/src/main.ts`.
+
+## Boot
+
+`index.html` paints the logo and a real progress bar inline (no script needed). `main.ts` (3.5 KB) dynamically imports
+the engine chunk, then `GraaoApp.load()` reports progress: world (terrain, layout, Rapier) → planet view → animation
+retargeting → local character → shader warm-up. **ENTER GRAAO** unlocks audio and starts a paper→world reveal.
+`?auto` skips ENTER (development and tests); `?quality=LOW|MEDIUM|HIGH`; `?lineup=N` spawns N random characters.
+
+## Phases (GRAHudDirector, `app/GraaoApp.ts`)
+
+`MENU` (character framed on the plaza), `CHARACTER_CREATOR` (front framing, drag/zoom), `MATCH` (free roam or online).
+Each phase sets visible UI, input enablement and camera context. Later: ROOM, ABILITY_DRAFT, UFO, DROP, RESULTS.
+
+## Frame (`GraaoApp.frame`)
+
+input → camera look → local fixed-step prediction (60 Hz accumulator) → net (send inputs, interpolate remotes) →
+camera (terrain pull-in) → character pose/animation → obstruction dissolve → sun rig → planet uniforms → render → F3.
+
+## Quality
+
+| | LOW | MEDIUM | HIGH |
+|---|---|---|---|
+| Pixel ratio cap | 1 | 1.25 | 2 |
+| Shadow map | 1024 | 2048 | 2048 |
+| Grass | 35 % | 70 % | 100 % |
+| Flowers | off | on | on |
+
+LOW never removes players, projectiles, telegraphs or Ultimate Marks.
+
+## Debug
+
+F3 overlay; `window.__graao` in dev builds.

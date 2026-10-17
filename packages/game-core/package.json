@@ -1,0 +1,13 @@
+{
+  "name": "@graao/game-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic gameplay rules: spherical world, character movement, combat, abilities, draft.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.21.0",
+    "@graao/game-data": "workspace:*",
+    "@graao/shared": "workspace:*"
+  }
+}
