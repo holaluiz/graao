@@ -5,7 +5,7 @@
  * Layers (manual weights, smoothed every frame):
  *   - Locomotion LOWER (hips + legs): idle / walk / run / sprint / air / fall — always full weight.
  *   - Locomotion UPPER (spine, arms, head): same clips × (1 − upper action weight).
- *   - Upper actions: aim (pitch blend up/neutral/down), fire, reload, cast.
+ *   - Upper actions: aim (pitch blend up/neutral/down), fire, reload, cast, castEnter, castHold (channel), throw.
  *   - Full-body one-shots: jump start, land, hit, death, dash, victory (override both locomotion halves).
  */
 import * as THREE from 'three';
@@ -65,7 +65,7 @@ export class CharacterAnimationController {
       this.lower.set(name, this.layer(lower, THREE.LoopRepeat));
       this.upper.set(name, this.layer(upper, THREE.LoopRepeat));
     }
-    for (const name of ['aim', 'aimUp', 'aimDown', 'fire', 'reload', 'cast', 'castHold'] as ClipName[]) {
+    for (const name of ['aim', 'aimUp', 'aimDown', 'fire', 'reload', 'cast', 'castEnter', 'castHold', 'throw'] as ClipName[]) {
       const clip = lib.get(name);
       if (!clip) continue;
       const loop = name === 'aim' || name === 'aimUp' || name === 'aimDown' || name === 'castHold' ? THREE.LoopRepeat : THREE.LoopOnce;
@@ -102,14 +102,17 @@ export class CharacterAnimationController {
     this.oneShot = { name, until: this.time + (opts.hold ? Infinity : dur), hold: opts.hold };
   }
 
-  /** Plays an upper-body one-shot (fire, reload, cast) over locomotion. */
-  playUpper(name: ClipName, speed = 1): void {
+  /**
+   * Plays an upper-body action (fire, reload, cast, throw) over locomotion. `hold` keeps it for that many seconds
+   * instead of the clip length (looping channels such as castHold during an ability wind-up).
+   */
+  playUpper(name: ClipName, speed = 1, hold?: number): void {
     const l = this.upperActions.get(name);
     if (!l) return;
     l.action.reset();
     l.action.timeScale = speed;
     l.action.play();
-    this.upperShot = { name, until: this.time + l.action.getClip().duration / speed };
+    this.upperShot = { name, until: this.time + (hold ?? l.action.getClip().duration / speed) };
   }
 
   /** Duration (s) of a clip at timeScale 1, or 0 when missing. */

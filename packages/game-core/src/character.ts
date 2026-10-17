@@ -42,6 +42,12 @@ export interface CharacterState {
   jumpHeld: boolean;
   aiming: boolean;
   moveState: MovementState;
+  /** Dash (ability primitive): fixed steps left, world direction (re-projected every step) and speed (m/s). */
+  dashSteps: number;
+  dashDir: Vec3;
+  dashSpeed: number;
+  /** Movement speed multiplier (1 = normal; < 1 while slowed by an ability). */
+  slow: number;
 }
 
 export interface CharacterInput {
@@ -62,11 +68,33 @@ export function createCharacterState(pos: Vec3, facing: Vec3): CharacterState {
     jumpHeld: false,
     aiming: false,
     moveState: MovementState.FALL,
+    dashSteps: 0,
+    dashDir: v3(),
+    dashSpeed: 0,
+    slow: 1,
   };
 }
 
 export function cloneCharacterState(s: CharacterState): CharacterState {
-  return { ...s, pos: { ...s.pos }, vel: { ...s.vel }, facing: { ...s.facing }, aim: { ...s.aim } };
+  return { ...s, pos: { ...s.pos }, vel: { ...s.vel }, facing: { ...s.facing }, aim: { ...s.aim }, dashDir: { ...s.dashDir } };
+}
+
+/**
+ * Dash primitive: from the next step on, the character moves `distance` m along `dir` (projected on its ground plane)
+ * in whole fixed steps (integer count, so client prediction and server agree exactly). Steering, gravity and jumps
+ * pause meanwhile. Returns false when the direction is unusable.
+ */
+export function startDash(s: CharacterState, dir: Vec3, distance: number, duration: number, dt: number): boolean {
+  const up = v3normalize(s.pos);
+  const flat = v3projectOnPlane(dir, up);
+  if (v3len(flat) < 1e-3) return false;
+  const steps = Math.max(1, Math.round(duration / dt));
+  s.dashSteps = steps;
+  // The raw (network-quantized) direction is kept and re-projected every step, so a client that rebuilds a dash in
+  // the middle (reconciliation) gets exactly the server's motion without knowing where it started.
+  v3normalize(dir, s.dashDir);
+  s.dashSpeed = distance / (steps * dt);
+  return true;
 }
 
 /** Decodes a compact input command into a reusable CharacterInput. */
@@ -151,22 +179,28 @@ export class CharacterMotor {
 
     const forwardish = wishLen > 0.1 ? v3dot(wish, s.facing) / Math.max(wishLen, 1e-6) : 0;
     const canSprint = sprint && !s.aiming && !firing && forwardish > 0.3;
-    const maxSpeed = s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed;
-    const target = v3set(this.tmpTarget, wish.x * maxSpeed, wish.y * maxSpeed, wish.z * maxSpeed);
+    const maxSpeed = (s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed) * s.slow;
+    const dashing = s.dashSteps > 0;
+    if (dashing) {
+      // Dash: a fixed ground-plane velocity along the dash direction; no steering.
+      const dd = v3normalize(v3projectOnPlane(s.dashDir, up, this.tmpTarget), this.tmpTarget);
+      v3set(h, dd.x * s.dashSpeed, dd.y * s.dashSpeed, dd.z * s.dashSpeed);
+    } else {
+      const target = v3set(this.tmpTarget, wish.x * maxSpeed, wish.y * maxSpeed, wish.z * maxSpeed);
+      // Accelerate horizontal velocity toward the target.
+      const accel = s.grounded ? (wishLen > 0.05 ? MOVEMENT.groundAccel : MOVEMENT.groundDecel) : MOVEMENT.airAccel;
+      const dx = target.x - h.x, dy = target.y - h.y, dz = target.z - h.z;
+      const dl = Math.hypot(dx, dy, dz);
+      const maxDv = accel * dt;
+      if (dl <= maxDv) v3assign(h, target);
+      else v3addScaled(h, { x: dx, y: dy, z: dz }, maxDv / dl, h);
+    }
 
-    // Accelerate horizontal velocity toward the target.
-    const accel = s.grounded ? (wishLen > 0.05 ? MOVEMENT.groundAccel : MOVEMENT.groundDecel) : MOVEMENT.airAccel;
-    const dx = target.x - h.x, dy = target.y - h.y, dz = target.z - h.z;
-    const dl = Math.hypot(dx, dy, dz);
-    const maxDv = accel * dt;
-    if (dl <= maxDv) v3assign(h, target);
-    else v3addScaled(h, { x: dx, y: dy, z: dz }, maxDv / dl, h);
-
-    // Jump: rising edge buffered, coyote time after leaving ground.
+    // Jump: rising edge buffered, coyote time after leaving ground (not while dashing).
     if (jumpDown && !s.jumpHeld) s.jumpBuffer = MOVEMENT.jumpBuffer;
     s.jumpHeld = jumpDown;
     let jumped = false;
-    if (s.jumpBuffer > 0 && (s.grounded || s.airTime < MOVEMENT.coyoteTime) && vs <= 0.5) {
+    if (!dashing && s.jumpBuffer > 0 && (s.grounded || s.airTime < MOVEMENT.coyoteTime) && vs <= 0.5) {
       vs = MOVEMENT.jumpSpeed;
       s.jumpBuffer = 0;
       s.grounded = false;
@@ -175,8 +209,9 @@ export class CharacterMotor {
     }
     s.jumpBuffer = Math.max(0, s.jumpBuffer - dt);
 
-    // Radial gravity.
-    if (!s.grounded || jumped) vs -= PLANET.gravity * dt;
+    // Radial gravity (an air dash glides flat).
+    if (dashing) vs = s.grounded ? -0.5 : 0;
+    else if (!s.grounded || jumped) vs -= PLANET.gravity * dt;
     else vs = -0.5; // keep contact; snap-to-ground does the rest
     vs = Math.max(vs, -MOVEMENT.terminalSpeed);
 
@@ -200,7 +235,8 @@ export class CharacterMotor {
     // Horizontal velocity follows what actually happened (walls absorb it), transported to the new tangent plane.
     const actualH = v3projectOnPlane({ x: mv.x / dt, y: mv.y / dt, z: mv.z / dt }, newUp);
     const hl = v3len(actualH);
-    const intended = v3len(h);
+    let intended = v3len(h);
+    if (dashing && --s.dashSteps === 0) intended = Math.min(intended, MOVEMENT.runSpeed); // leave the dash at run speed
     if (hl > intended && hl > 1e-6) v3set(actualH, (actualH.x / hl) * intended, (actualH.y / hl) * intended, (actualH.z / hl) * intended);
     const movedUp = v3dot({ x: mv.x, y: mv.y, z: mv.z }, up) / dt;
     if (groundedNow && !jumped) {
@@ -218,7 +254,10 @@ export class CharacterMotor {
     // Facing: transported, then turned toward aim (when aiming/firing) or toward movement.
     transportTangent(s.facing, up, newUp, s.facing);
     let turnTarget: Vec3 | null = null;
-    if (s.aiming || firing) {
+    if (dashing) {
+      const a = v3projectOnPlane(s.dashDir, newUp);
+      if (v3len(a) > 1e-3) turnTarget = v3normalize(a, a);
+    } else if (s.aiming || firing) {
       const a = v3projectOnPlane(s.aim, newUp);
       if (v3len(a) > 1e-3) turnTarget = v3normalize(a, a);
     } else if (wishLen > 0.1) {

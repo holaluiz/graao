@@ -11,9 +11,9 @@ docs stay in English.
 | 1 · First visual | A customized graao character runs around a beautiful spherical world with Mixamo-compatible animation | TESTING | Built and seen in the browser (village, grass, houses, curved horizon, run/idle). Animation runs on `GRA_Rig_MixamoCompatible` via the retargeter (CC0 UAL clips). A real **Mixamo FBX** clip has not been loaded yet: no Mixamo animation files exist on this machine (see Blockers). |
 | 2 · Two players | Two customized characters run smoothly around the same world in two windows | TESTING | Two browser tabs in one room saw each other with nameplates and their own outfits; integration tests (two SDK clients) pass: join by code, replication, uniform motion, 60 Hz interpolation replay. Not yet tested on LAN / two machines. |
 | 3 · Shooting | A shoots B, server confirms, Shield/Health change, B dies, A wins | TESTING | Integration test "a complete 1v1 match (gate 3: A wins)" passes: ready → countdown (shots refused) → A's hitscan confirmed by the server → shield then health → elimination, no respawn in the match → RESULTS with winner A → warmup. In the browser (two tabs, own server on 2568): 17 predicted shots, 10 server-confirmed hits, 200 damage, elimination logged by the server, match end with winner; HUD, shield-break VFX, countdown and aim pose seen. Not yet played on two machines. |
-| 4 · Abilities | Guns and magic | TODO | Mana already replicates (100); HUD shows it. |
+| 4 · Abilities | Guns and magic | TESTING | 8 basics + 3 Ultimates from 8 primitives, executed by the server's GRAAbilitySystem. Integration test "abilities through the authoritative server" passes (ownership, phase, cooldown, Mana, server projectile hit, areas with warning → damage, slow, knockback, elimination by abilities only → A wins). In the browser against a bot: Orbe Solar hit confirmed (hitmarker with ability diamonds), Mana/cooldown sweep, Explosão de Pólen and Meteoro Solar ground warnings, Ultimate Marks on both players. Not yet played person vs person on two machines. |
 | 5 · Creator | Two visibly different avatars seen correctly by each other | TESTING | Creator UI works (tabs, instant parts/colors, drag/zoom); appearance replicates on join and on change. Supabase persistence TODO (localStorage today). |
-| 6 · Draft | Players enter with drafted abilities | TODO | |
+| 6 · Draft | Players enter with drafted abilities | TESTING | `AbilityDraft` rules unit-tested (7 tests); integration test "ability draft through the authoritative server" passes (hidden picks, a disputed ability kept by priority and the loser repicking, a timeout pick, the match starting with the drafted loadouts, ownership enforced). In the browser against the bot: READY → draft screen → picks by click, server picks on timeout, reveal → match with the drafted loadout in the HUD and the drafted Ultimate's mark. Not yet drafted person vs person. |
 | 7 · UFO | Creator → draft → UFO → drop → combat as one flow | TODO | |
 | 8 · Complete match | Victory/Defeat/Lobby/summary | IN_PROGRESS | Results screen (VITÓRIA / DERROTA / EMPATE, eliminations, damage, accuracy) and automatic return to warmup work; Supabase summary and an explicit lobby are TODO. |
 | 9 · Public deploy | Public URL works | TODO | |
@@ -23,7 +23,7 @@ docs stay in English.
 
 | System | Status | Notes |
 |---|---|---|
-| Monorepo (pnpm, TS strict, Vite, Vitest, ESLint) | DONE | `pnpm dev / build / test / lint / typecheck` pass; 44 tests. Test files run sequentially (`fileParallelism: false`) so the real-time integration suite is not starved by world generation in parallel workers |
+| Monorepo (pnpm, TS strict, Vite, Vitest, ESLint) | DONE | `pnpm dev / build / test / lint / typecheck` pass; 91 tests. Test files run sequentially (`fileParallelism: false`) so the real-time integration suite is not starved by world generation in parallel workers |
 | Spherical world (terrain, features, layout, colliders) | DONE | Deterministic; identical on client/server (tested). Spawn points are kept free of props (tested with a capsule overlap query) |
 | GraaoSphericalCharacterController | DONE | Radial gravity, Rapier KCC with per-step up; full-lap test passes |
 | Third-person camera on the sphere | DONE | Transported heading, terrain pull-in, aim FOV/shoulder, recoil kick and shake with FULL / REDUCED / OFF |
@@ -42,7 +42,10 @@ docs stay in English.
 | Combat HUD (vitals, weapons, reticles, hitmarkers by kind, damage numbers and direction, kill feed, banners, death, results) | TESTING | DOM/CSS/SVG; seen in the browser |
 | GRAVFXSystem (beams + particles, 2 draw calls) | TESTING | Tracers, flashes, impacts, shield shards/ring, elimination burst |
 | GRAAudioManager (synthesized cues, buses, voice limits, LOW_HEALTH / POST_MATCH states) | TESTING | Audible check by a person still pending |
-| Abilities, draft, UFO | TODO | Next slices |
+| GRAAbilitySystem + Ultimate Marks | TESTING | See `docs/architecture/ABILITY_SYSTEM.md` |
+| Ability Draft (rules, server, screen) | TESTING | See `docs/gameplay/ABILITY_DRAFT.md`; the network bot drafts too (`--ready`, `--pick`) |
+| Camera obstruction near the camera | DONE | Props within 1.1 m of the camera fade (Rapier ball query), measured: 0.9 m → fades, 3 m → not |
+| UFO deployment | TODO | Next slice (Phase 7) |
 | Supabase, R2, deploy | TODO | Credentials needed (see Blockers) |
 
 ## Known gaps

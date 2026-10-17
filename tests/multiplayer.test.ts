@@ -4,9 +4,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, type Room } from '@colyseus/sdk';
-import { DEFAULT_APPEARANCE, WEAPONS, randomAppearance } from '@graao/game-data';
+import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, WEAPONS, randomAppearance } from '@graao/game-data';
+import { castOrigin, chestOf } from '@graao/game-core';
 import { SnapshotInterpolator } from '../apps/client/src/net/SnapshotInterpolator';
-import { AIM_SCALE, C2S, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MatchPhase, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SnapshotMsg, type WelcomeMsg } from '@graao/shared';
+import { AIM_SCALE, AbilityReject, C2S, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MatchPhase, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
 import { createGraaoServer } from '../apps/server/src/app';
 import { getWorld } from '../apps/server/src/world';
 
@@ -309,7 +310,7 @@ describe('a complete 1v1 match (gate 3: A wins)', () => {
   let shoot: ReturnType<typeof shooter>;
 
   it('starts when both players are ready, with a countdown that locks weapons', async () => {
-    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 600, resultsMs: 900, closeSpawns: true });
+    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 600, resultsMs: 900, closeSpawns: true, skipDraft: true });
     const wa = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
     ia = wa.index;
     b = await new Client(url).joinById(wa.code, opts('B'));
@@ -363,6 +364,268 @@ describe('a complete 1v1 match (gate 3: A wins)', () => {
     expect(warm.players.every((p) => !p.ready && !p.inMatch)).toBe(true);
     const alive = await waitFor<SnapshotMsg>(b, S2C.SNAPSHOT, (m) => m.p.length === 2 && m.p.every((p) => (p[13]! & SnapFlag.ALIVE) !== 0));
     expect(alive.p.find((p) => p[0] === ib)![15]).toBe(100);
+    await a.leave(true);
+    await b.leave(true);
+  });
+});
+
+/** Sends ABILITY_REQUESTs from `a` aimed at `ib` (latest snapshot positions) and returns the server's answer. */
+function caster(a: Room, ia: () => number, ib: () => number) {
+  let seq = 0;
+  async function positions(): Promise<{ A: Vec3; B: Vec3 }> {
+    const s = await waitFor<SnapshotMsg>(a, S2C.SNAPSHOT, (m) => m.p.length >= 2);
+    const pa = s.p.find((p) => p[0] === ia())!;
+    const pb = s.p.find((p) => p[0] === ib())!;
+    return { A: { x: pa[1]! / 1000, y: pa[2]! / 1000, z: pa[3]! / 1000 }, B: { x: pb[1]! / 1000, y: pb[2]! / 1000, z: pb[3]! / 1000 } };
+  }
+  return async function cast(k: number, id: string, target: 'dir' | 'point' | 'none' = 'none'): Promise<AbilityResultMsg> {
+    const { A, B } = await positions();
+    const s = ++seq;
+    const msg: AbilityRequestMsg = { s, k, a: id, c: 0 };
+    if (target === 'dir') {
+      // From where the projectile leaves A toward B's chest (the cast origin depends on the flattened aim).
+      const chest = chestOf(B);
+      const from = castOrigin(A, { x: chest.x - A.x, y: chest.y - A.y, z: chest.z - A.z });
+      const d = { x: chest.x - from.x, y: chest.y - from.y, z: chest.z - from.z };
+      const l = Math.hypot(d.x, d.y, d.z);
+      msg.d = [Math.round((d.x / l) * 10000), Math.round((d.y / l) * 10000), Math.round((d.z / l) * 10000)];
+    } else if (target === 'point') msg.p = [Math.round(B.x * 1000), Math.round(B.y * 1000), Math.round(B.z * 1000)];
+    const answer = waitFor<AbilityResultMsg>(a, S2C.ABILITY_RESULT, (m) => m.s === s);
+    a.send(C2S.ABILITY_REQUEST, msg);
+    return answer;
+  };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe('abilities through the authoritative server (gate 4: guns and magic)', () => {
+  let a: Room;
+  let b: Room;
+  let ia = -1;
+  let ib = -1;
+  const events: GameEvent[] = [];
+  const selfA: SelfStatusMsg[] = [];
+  let cast: ReturnType<typeof caster>;
+
+  it('hands out the default loadouts and refuses casts during the countdown', async () => {
+    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 300, resultsMs: 900, closeSpawns: true, ultimateChargeMs: 0, skipDraft: true });
+    const wa = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
+    ia = wa.index;
+    const joined = waitFor<RoomStateMsg>(a, S2C.ROOM_STATE, (m) => m.players.length === 2);
+    b = await new Client(url).joinById(wa.code, opts('B'));
+    ib = (await waitFor<WelcomeMsg>(b, S2C.WELCOME)).index;
+    b.onMessage(S2C.EVENTS, (m: EventsMsg) => events.push(...m.ev));
+    a.onMessage(S2C.SELF, (m: SelfStatusMsg) => selfA.push(m));
+    cast = caster(a, () => ia, () => ib);
+    const st = await joined;
+    expect(st.players.find((p) => p.index === ia)!.loadout).toEqual(DEFAULT_LOADOUTS[0]);
+    expect(st.players.find((p) => p.index === ib)!.loadout).toEqual(DEFAULT_LOADOUTS[1]);
+    await sleep(500); // land
+    const started = waitFor<RoomStateMsg>(a, S2C.ROOM_STATE, (m) => m.phase === MatchPhase.MATCH);
+    a.send(C2S.READY, { r: 1 });
+    b.send(C2S.READY, { r: 1 });
+    await started;
+    // During the countdown abilities are refused like weapons (the phase rule is the room's canFight).
+    await sleep(100);
+    expect((await cast(0, 'sun_orb', 'dir')).r).toBe(AbilityReject.PHASE);
+    await sleep(450);
+  });
+
+  it('refuses what A does not own, a projectile hits B (server-simulated), spam is refused by cooldown', async () => {
+    expect((await cast(1, 'leaf_shell')).r).toBe(AbilityReject.NOT_OWNED);
+    expect((await cast(3, 'petal_cyclone')).r).toBe(AbilityReject.NOT_OWNED);
+    events.length = 0;
+    const orb = await cast(0, 'sun_orb', 'dir');
+    expect(orb).toMatchObject({ ok: true, r: AbilityReject.OK });
+    expect((await cast(0, 'sun_orb', 'dir')).r).toBe(AbilityReject.COOLDOWN);
+    // Mana and the cooldown end time arrive in A's private status.
+    const st = selfA[selfA.length - 1]!;
+    expect(st.mana).toBeLessThanOrEqual(100 - ABILITIES.sun_orb.manaCost + 1);
+    expect(st.cd[0]).toBeGreaterThan(Date.now() + 1000);
+    await sleep(600);
+    expect(events.some((e) => e.e === 'cast' && e.by === ia && e.a === 'sun_orb')).toBe(true);
+    expect(events.some((e) => e.e === 'proj' && e.by === ia)).toBe(true);
+    expect(events.some((e) => e.e === 'projEnd' && e.t === ib)).toBe(true);
+    const dmg = events.find((e) => e.e === 'dmg' && e.target === ib);
+    expect(dmg && dmg.e === 'dmg' && dmg.a === 'sun_orb' && dmg.kinds.includes(HitKind.ABILITY) && dmg.amount === 26).toBe(true);
+  });
+
+  it('areas at B warn first, then damage, slow and knock B back; the drained Mana refuses the next cast', async () => {
+    events.length = 0;
+    const pb = await cast(2, 'pollen_burst', 'point');
+    expect(pb.r).toBe(AbilityReject.OK);
+    // Winding up: anything else is BUSY.
+    expect((await cast(1, 'wind_step')).r).toBe(AbilityReject.BUSY);
+    await sleep(ABILITIES.pollen_burst.castTime * 1000 + 60);
+    // The Ultimate (no charge time in this room) spends the rest of the Mana.
+    expect((await cast(3, 'sun_meteor', 'point')).ok).toBe(true);
+    await sleep(ABILITIES.sun_meteor.castTime * 1000 + 60);
+    expect((await cast(1, 'wind_step')).r).toBe(AbilityReject.NO_MANA);
+    await sleep(1500);
+    const areas = events.filter((e) => e.e === 'area').map((e) => (e.e === 'area' ? e.a : ''));
+    expect(areas).toEqual(['pollen_burst', 'sun_meteor']);
+    expect(events.some((e) => e.e === 'fx' && e.k === 'slow' && e.target === ib)).toBe(true);
+    expect(events.some((e) => e.e === 'fx' && e.k === 'knock' && e.target === ib)).toBe(true);
+    expect(events.filter((e) => e.e === 'dmg' && e.target === ib).length).toBe(2);
+  }, 15000);
+
+  it('A eliminates B with abilities only: no respawn, RESULTS names A the winner', async () => {
+    const results = waitFor<RoomStateMsg>(a, S2C.ROOM_STATE, (m) => m.phase === MatchPhase.RESULTS, 20000);
+    const deadline = Date.now() + 16000;
+    while (!events.some((e) => e.e === 'elim') && Date.now() < deadline) {
+      // Orbs as soon as cooldown and Mana allow (the server answers COOLDOWN / NO_MANA meanwhile).
+      const r = await cast(0, 'sun_orb', 'dir');
+      await sleep(r.ok ? 700 : 300);
+    }
+    const elim = events.find((e) => e.e === 'elim');
+    expect(elim && elim.e === 'elim' && elim.by === ia && elim.target === ib).toBe(true);
+    const lethal = events.filter((e) => e.e === 'dmg' && e.target === ib).pop();
+    expect(lethal && lethal.e === 'dmg' && lethal.kinds.includes(HitKind.ELIMINATION) && lethal.kinds.includes(HitKind.ABILITY)).toBe(true);
+    const res = await results;
+    expect(res.winner).toBe(ia);
+    expect(res.players.find((p) => p.index === ia)!.kills).toBe(1);
+    // Results screen: abilities are off.
+    expect((await cast(0, 'sun_orb', 'dir')).r).toBe(AbilityReject.PHASE);
+    await a.leave(true);
+    await b.leave(true);
+  }, 25000);
+});
+
+/** Keeps every message of one type a room receives, so a test can wait for one that may already have arrived. */
+function inbox<T>(room: Room, type: number) {
+  const all: T[] = [];
+  const waiters: { pred: (m: T) => boolean; resolve: (m: T) => void }[] = [];
+  room.onMessage(type, (m: T) => {
+    all.push(m);
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      if (waiters[i]!.pred(m)) {
+        waiters[i]!.resolve(m);
+        waiters.splice(i, 1);
+      }
+    }
+  });
+  return {
+    all,
+    latest: () => all[all.length - 1],
+    /** The newest message matching `pred`, now or when it arrives. */
+    until(pred: (m: T) => boolean, ms = 5000): Promise<T> {
+      for (let i = all.length - 1; i >= 0; i--) if (pred(all[i]!)) return Promise.resolve(all[i]!);
+      return new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error(`timeout waiting for message ${type}`)), ms);
+        waiters.push({ pred, resolve: (m) => (clearTimeout(t), resolve(m)) });
+      });
+    },
+  };
+}
+
+describe('ability draft through the authoritative server (gate 6: players enter with drafted abilities)', () => {
+  let a: Room;
+  let b: Room;
+  let ia = -1;
+  let ib = -1;
+  let da: ReturnType<typeof inbox<DraftStateMsg>>;
+  let db: ReturnType<typeof inbox<DraftStateMsg>>;
+  let ra: ReturnType<typeof inbox<RoomStateMsg>>;
+  const picksOf = (m: DraftStateMsg, i: number) => m.seats.find((s) => s.index === i)!.picks;
+
+  it('READY opens the draft: round 1 is a basic round, nobody can fight', async () => {
+    a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 300, resultsMs: 900, closeSpawns: true, draftPickMs: 2500, draftRepickMs: 2500, draftRevealMs: 150 });
+    da = inbox<DraftStateMsg>(a, S2C.DRAFT_STATE);
+    ra = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+    ia = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+    b = await new Client(url).joinById((await ra.until((m) => m.players.length === 1)).code, opts('B'));
+    db = inbox<DraftStateMsg>(b, S2C.DRAFT_STATE);
+    ib = (await waitFor<WelcomeMsg>(b, S2C.WELCOME)).index;
+    await ra.until((m) => m.players.length === 2);
+    a.send(C2S.READY, { r: 1 });
+    b.send(C2S.READY, { r: 1 });
+    await ra.until((m) => m.phase === MatchPhase.ABILITY_DRAFT);
+    const s = await da.until((m) => m.round === 0 && m.stage === 'pick');
+    expect(s).toMatchObject({ rounds: 4, kind: 'basic', unique: true, mine: null, repick: false });
+    expect(s.pool).toContain('sun_orb');
+    expect(s.pool).not.toContain('sun_meteor');
+    expect([...s.priority].sort()).toEqual([ia, ib].sort());
+    // Abilities and weapons are off during the draft.
+    const r = await new Promise<AbilityResultMsg>((resolve) => {
+      const off = a.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => (off(), resolve(m)));
+      a.send(C2S.ABILITY_REQUEST, { s: 1, k: 1, a: DEFAULT_LOADOUTS[0]![1], c: 0 });
+    });
+    expect(r.r).toBe(AbilityReject.PHASE);
+  });
+
+  it('keeps choices hidden; a disputed ability goes to the player with priority and the other repicks', async () => {
+    const first = da.latest()!.priority[0]!;
+    const winner = first === ia ? a : b;
+    const loser = first === ia ? b : a;
+    const loserBox = first === ia ? db : da;
+    const loserIndex = first === ia ? ib : ia;
+    winner.send(C2S.DRAFT_PICK, { r: 0, a: 'sun_orb' });
+    // The other side sees a lock, never the choice.
+    const seen = await (first === ia ? db : da).until((m) => m.seats.some((x) => x.index === first && x.locked));
+    expect(seen.mine).toBeNull();
+    expect(seen.owners).toEqual([]);
+    loser.send(C2S.DRAFT_PICK, { r: 0, a: 'sun_orb' });
+    const lost = await loserBox.until((m) => m.repick);
+    expect(lost.lostTo).toEqual({ index: first, a: 'sun_orb' });
+    expect(lost.owners).toEqual([['sun_orb', first]]);
+    // Taking it anyway is refused (the state keeps no choice); something else is accepted.
+    loser.send(C2S.DRAFT_PICK, { r: 0, a: 'sun_orb' });
+    await sleep(150);
+    expect(loserBox.latest()!.mine).toBeNull();
+    loser.send(C2S.DRAFT_PICK, { r: 0, a: 'sap_snare' });
+    const rev = await da.until((m) => m.round === 0 && m.stage === 'reveal');
+    expect(rev.reveal).toEqual(
+      expect.arrayContaining([
+        { index: first, a: 'sun_orb', auto: false, contested: true },
+        { index: loserIndex, a: 'sap_snare', auto: false, contested: true },
+      ]),
+    );
+    // Round 2 gives priority to the other player.
+    const r1 = await da.until((m) => m.round === 1 && m.stage === 'pick');
+    expect(r1.priority[0]).toBe(loserIndex);
+  });
+
+  it('rounds 2–4 (the last one an Ultimate); a player who runs out of time gets a random free ability', async () => {
+    a.send(C2S.DRAFT_PICK, { r: 1, a: 'wind_step' });
+    b.send(C2S.DRAFT_PICK, { r: 1, a: 'leaf_shell' });
+    await da.until((m) => m.round === 2 && m.stage === 'pick');
+    a.send(C2S.DRAFT_PICK, { r: 2, a: 'pollen_burst' });
+    b.send(C2S.DRAFT_PICK, { r: 2, a: 'gust_ring' });
+    const ult = await da.until((m) => m.round === 3 && m.stage === 'pick');
+    expect(ult.kind).toBe('ultimate');
+    expect(ult.pool.sort()).toEqual(['dawn_lance', 'petal_cyclone', 'sun_meteor']);
+    a.send(C2S.DRAFT_PICK, { r: 3, a: 'dawn_lance' });
+    // B waits: the window (2.5 s) expires and the server picks for B.
+    const done = await da.until((m) => m.stage === 'done', 6000);
+    expect(picksOf(done, ia)[3]).toBe('dawn_lance');
+    expect(['sun_meteor', 'petal_cyclone']).toContain(picksOf(done, ib)[3]);
+  }, 10000);
+
+  it('the match starts with the drafted loadouts, public in ROOM_STATE, and only they can be cast', async () => {
+    const st = await ra.until((m) => m.phase === MatchPhase.MATCH);
+    const final = da.latest()!;
+    const la = st.players.find((p) => p.index === ia)!.loadout;
+    const lb = st.players.find((p) => p.index === ib)!.loadout;
+    expect(la).toEqual(picksOf(final, ia));
+    expect(lb).toEqual(picksOf(final, ib));
+    expect(la.slice(1, 3)).toEqual(['wind_step', 'pollen_burst']);
+    expect(lb.slice(1, 3)).toEqual(['leaf_shell', 'gust_ring']);
+    expect(la.filter((id) => lb.includes(id))).toEqual([]);
+    expect(st.players.every((p) => p.inMatch)).toBe(true);
+    await sleep(450); // countdown
+    const ask = (room: Room, s: number, k: number, id: string) =>
+      new Promise<AbilityResultMsg>((resolve) => {
+        const off = room.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => {
+          if (m.s === s) {
+            off();
+            resolve(m);
+          }
+        });
+        room.send(C2S.ABILITY_REQUEST, { s, k, a: id, c: 0 });
+      });
+    // A's warmup slot 3 was pollen_burst... now A's slot 2 holds the drafted pollen_burst, slot 3 the drafted lance.
+    expect((await ask(a, 10, 3, 'sun_meteor')).r).toBe(AbilityReject.NOT_OWNED);
+    expect((await ask(b, 10, 1, 'leaf_shell')).r).toBe(AbilityReject.OK);
     await a.leave(true);
     await b.leave(true);
   });

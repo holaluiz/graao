@@ -3,6 +3,7 @@
  * dynamic import, reports real progress, waits for ENTER (unlocks audio), then reveals the live world.
  */
 import './styles/main.css';
+import './styles/draft.css';
 
 const bar = document.getElementById('boot-bar') as HTMLElement;
 const status = document.getElementById('boot-status') as HTMLElement;

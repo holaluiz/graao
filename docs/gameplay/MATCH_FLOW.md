@@ -6,16 +6,18 @@ Target journey: menu → create/join by code → character creator → ability d
 |---|---|---|
 | Warmup in the world (free roam, practice damage, respawn after 4 s) | `FREE_ROAM` | TESTING |
 | Ready check: every connected player presses ENTER (≥ 2 players) | `FREE_ROAM` + `ready` | TESTING |
+| Ability draft: 4 simultaneous rounds (3 basics + 1 Ultimate), the drafted loadouts replace the warmup ones | `ABILITY_DRAFT` | TESTING |
 | Match: spread spawns facing the arena, 3 s countdown with weapons locked, no respawns | `MATCH` | TESTING |
 | Results: winner (last standing), 9 s, then back to warmup | `RESULTS` | TESTING |
-| Ability draft (4 simultaneous rounds) | `ABILITY_DRAFT` | TODO |
 | UFO deployment | `UFO` | TODO |
 | Return to lobby / match summary persisted (Supabase) | — | TODO |
 
-Rules live in `@graao/game-core/match.ts` (`everyoneReady`, `decideMatch`, `MATCH_RULES`) and are unit-tested; the
+Rules live in `@graao/game-core/match.ts` (`everyoneReady`, `decideMatch`, `MATCH_RULES`) and `draft.ts` (`AbilityDraft`,
+see `ABILITY_DRAFT.md`) and are unit-tested; the
 room (`GraaoMatchRoom`) applies them. `ROOM_STATE` carries `phase`, `startsAt` (weapons unlock), `phaseEndsAt`
 (results end), `winner` and per-player `ready`, `inMatch`, `kills`, `deaths`.
 
+- Rooms created with `skipDraft` (dev/tests) go from READY straight to the match with the warmup loadouts.
 - Match spawns (`MATCH_SPAWNS`) sit ≈ 50 m apart around Lantern Village, below each other's horizon, so the first
   seconds are about finding the opponent. Rooms created with `closeSpawns` (tests) use the free-roam spawns instead.
 - An opponent leaving during a match hands the win to whoever is still standing; nobody standing is a draw.

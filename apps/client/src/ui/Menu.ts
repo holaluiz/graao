@@ -1,5 +1,6 @@
-/** Main menu (DOM): name, create/join by room code, free roam, customize, quality, camera shake. */
+/** Main menu (DOM): name, create/join by room code, free roam, customize, quality, camera shake, frame-rate cap. */
 import { ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '@graao/shared';
+import { FPS_CAPS, type FpsCap } from '../app/FrameLimiter';
 import type { Quality } from '../render/GRARenderer';
 
 /** Camera response accessibility (shake and recoil): FULL / REDUCED / OFF. */
@@ -12,11 +13,13 @@ export interface MenuActions {
   customize(): void;
   quality(q: Quality): void;
   cameraResponse(c: CameraResponse): void;
+  fpsCap(c: FpsCap): void;
   click(): void;
 }
 
 const QUALITY_LABEL: Record<Quality, string> = { LOW: 'Baixa', MEDIUM: 'Média', HIGH: 'Alta' };
 const RESPONSE_LABEL: Record<CameraResponse, string> = { FULL: 'Total', REDUCED: 'Reduzido', OFF: 'Desligado' };
+const FPS_LABEL: Record<FpsCap, string> = { 30: '30', 60: '60', 120: '120', 0: 'Máximo' };
 
 export class Menu {
   readonly el = document.createElement('div');
@@ -25,7 +28,7 @@ export class Menu {
   private readonly codeInput = document.createElement('input');
   private readonly buttons: HTMLButtonElement[] = [];
 
-  constructor(private readonly actions: MenuActions, name: string, quality: Quality, response: CameraResponse) {
+  constructor(private readonly actions: MenuActions, name: string, quality: Quality, response: CameraResponse, fps: FpsCap) {
     this.el.className = 'menu';
     const h = document.createElement('h1');
     h.textContent = 'graao';
@@ -65,11 +68,12 @@ export class Menu {
     row.append(solo, custom);
     const q = this.choiceRow('Qualidade', ['LOW', 'MEDIUM', 'HIGH'] as Quality[], quality, QUALITY_LABEL, (v) => this.actions.quality(v));
     const shake = this.choiceRow('Tremor da câmera', ['FULL', 'REDUCED', 'OFF'] as CameraResponse[], response, RESPONSE_LABEL, (v) => this.actions.cameraResponse(v));
+    const fpsRow = this.choiceRow('Limite de FPS', [...FPS_CAPS], fps, FPS_LABEL, (v) => this.actions.fpsCap(v));
     this.note.className = 'note';
-    this.el.append(h, tag, this.nameInput, create, joinRow, row, q, shake, this.note);
+    this.el.append(h, tag, this.nameInput, create, joinRow, row, q, shake, fpsRow, this.note);
   }
 
-  private choiceRow<T extends string>(label: string, values: T[], current: T, names: Record<T, string>, onPick: (v: T) => void): HTMLElement {
+  private choiceRow<T extends string | number>(label: string, values: T[], current: T, names: Record<T, string>, onPick: (v: T) => void): HTMLElement {
     const wrap = document.createElement('div');
     wrap.className = 'choice';
     const l = document.createElement('div');

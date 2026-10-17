@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { createGameWorld, latLonToDir, mulberry32, type GameWorld } from '@graao/game-core';
 import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, randomAppearance, validateAppearance } from '@graao/game-data';
-import { ActionState, MovementState, v3angle, type CharacterAppearance, type Vec3 } from '@graao/shared';
+import { ActionState, MatchPhase, MovementState, v3angle, type CharacterAppearance, type DraftStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
 import { GRAAnimationLibrary } from '../character/animation/GRAAnimationLibrary';
@@ -25,12 +25,14 @@ import { Creator } from '../ui/Creator';
 import { DevOverlay } from '../ui/DevOverlay';
 import { Hud } from '../ui/Hud';
 import { Menu, type CameraResponse } from '../ui/Menu';
+import { DraftScreen } from '../ui/DraftScreen';
 import { PlanetView } from '../world/PlanetView';
 import { NetSession } from '../net/NetSession';
+import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
 
 export type HudPhase = 'BOOT' | 'MENU' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
 
-const STORAGE = { appearance: 'graao.appearance', name: 'graao.name', quality: 'graao.quality', cameraResponse: 'graao.cameraResponse' };
+const STORAGE = { appearance: 'graao.appearance', name: 'graao.name', quality: 'graao.quality', cameraResponse: 'graao.cameraResponse', fpsCap: 'graao.fpsCap' };
 const RESPONSE_SCALE: Record<CameraResponse, number> = { FULL: 1, REDUCED: 0.4, OFF: 0 };
 
 function readStorage<T>(key: string, fallback: T, valid: (v: unknown) => v is T): T {
@@ -75,6 +77,8 @@ export class GraaoApp {
   private dev!: DevOverlay;
   private menu!: Menu;
   private creator!: Creator;
+  /** Ability Draft screen (over the world while the server runs the draft). */
+  private draftUi!: DraftScreen;
   private lastT = 0;
   private time = 0;
   private creatorYaw = 0;
@@ -87,6 +91,8 @@ export class GraaoApp {
   private readonly tmpFacing = new THREE.Vector3();
   private readonly tmpUp = new THREE.Vector3();
   private frameMs = 0;
+  /** Optional frame-rate cap ("Limite de FPS"); "Máximo" follows the monitor's refresh rate. */
+  readonly limiter = new FrameLimiter();
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: HTMLElement) {
     const q = new URLSearchParams(location.search).get('quality')?.toUpperCase();
@@ -97,6 +103,7 @@ export class GraaoApp {
     this.appearance = readStorage(STORAGE.appearance, DEFAULT_APPEARANCE, validateAppearance);
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
     this.cameraResponse = readStorage<CameraResponse>(STORAGE.cameraResponse, 'FULL', (v): v is CameraResponse => v === 'FULL' || v === 'REDUCED' || v === 'OFF');
+    this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, 0, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
     window.addEventListener('resize', () => this.r.resize());
     for (const id of ['paper', 'vignette']) {
       const d = document.createElement('div');
@@ -123,6 +130,7 @@ export class GraaoApp {
     this.r.scene.add(this.planet.group);
     this.obstruction = new Obstruction(this.world.physics, this.planet);
     this.vfx = new GRAVFXSystem(this.r.quality);
+    this.vfx.setGround((d) => this.world.terrain.surfaceAt(d));
     this.r.scene.add(this.vfx.group);
     progress(0.55, 'Ensinando todo mundo a andar…');
     t = performance.now();
@@ -185,7 +193,10 @@ export class GraaoApp {
 
   start(): void {
     this.setPhase('MENU');
-    this.r.renderer.setAnimationLoop((t) => this.frame(t));
+    // Every vsync callback goes through the limiter; skipped callbacks cost nothing (dt spans the rendered frames).
+    this.r.renderer.setAnimationLoop((t) => {
+      if (this.limiter.shouldRender(t)) this.frame(t);
+    });
   }
 
   // ------------------------------------------------------------------------------------------------ ui
@@ -208,24 +219,41 @@ export class GraaoApp {
           this.combat.responseScale = RESPONSE_SCALE[c];
           writeStorage(STORAGE.cameraResponse, c);
         },
+        fpsCap: (c) => {
+          this.limiter.cap = c;
+          writeStorage(STORAGE.fpsCap, c);
+          const hz = Math.round(this.limiter.refreshHz);
+          this.menu.setNote(
+            c === 0
+              ? `Máximo: segue o monitor (${hz} Hz). O navegador não mostra mais quadros que isso.`
+              : c >= hz
+                ? `Seu monitor mostra até ${hz} Hz: o limite de ${c} não muda nada aqui.`
+                : `Limite de ${c} FPS (monitor de ${hz} Hz).${(hz / c) % 1 > 0.05 && (hz / c) % 1 < 0.95 ? ` Para movimento mais liso, prefira um valor que divida ${hz}.` : ''}`,
+          );
+        },
         click: () => this.audio.play('ui.click'),
       },
       this.name,
       this.r.quality,
       this.cameraResponse,
+      this.limiter.cap,
     );
     this.creator = new Creator(
       this.appearance,
       (a) => this.applyAppearance(a),
       () => this.setPhase('MENU'),
     );
+    this.draftUi = new DraftScreen({
+      pick: (round, id) => this.net?.sendDraftPick(round, id),
+      sound: (cue) => this.audio.play(cue),
+    });
     this.hud.show(false);
-    this.ui.append(this.menu.el, this.creator.el, this.hud.el);
+    this.ui.append(this.menu.el, this.creator.el, this.hud.el, this.draftUi.el);
     this.dev = new DevOverlay({ renderer: this.r.renderer, extra: () => this.devStats() });
 
     const canvas = this.r.canvas;
     canvas.addEventListener('click', () => {
-      if (this.phase === 'MATCH') this.input.requestLock();
+      if (this.phase === 'MATCH' && !this.draftUi.visible) this.input.requestLock();
     });
     canvas.addEventListener('pointerdown', (e) => {
       if (this.phase === 'CHARACTER_CREATOR') {
@@ -249,7 +277,7 @@ export class GraaoApp {
     if (this.phase !== 'MATCH') return;
     this.hud.setHint(
       this.input.locked
-        ? 'WASD mover · Espaço pular · Shift correr · Botão esq. atirar · Botão dir. mirar · E/Q armas · R recarregar · F3 dados · Esc soltar'
+        ? 'WASD mover · Espaço pular · Shift correr · Botão esq. atirar · Botão dir. mirar · E/Q armas · R recarregar · 1 2 3 magias · 4 suprema · F3 dados · Esc soltar'
         : 'Clique para jogar · Esc de novo volta ao menu',
     );
   }
@@ -261,8 +289,29 @@ export class GraaoApp {
     this.net?.sendAppearance(a);
   }
 
+  /**
+   * The server opened (or closed) the Ability Draft: its screen covers the world, gameplay input is off and the
+   * pointer is released so cards can be clicked. Closing it hands the world back (a click locks the pointer again).
+   */
+  setDraft(on: boolean): void {
+    if (this.draftUi.visible === on) return;
+    this.draftUi.show(on);
+    this.hud.show(this.phase === 'MATCH' && !on);
+    this.input.releaseAll();
+    this.input.enabled = this.phase === 'MATCH' && !on;
+    if (on) this.input.exitLock();
+    else this.updateHint();
+  }
+
+  /** DRAFT_STATE always follows the ROOM_STATE that opened the draft, so the screen is already up. */
+  onDraftState(m: DraftStateMsg): void {
+    if (!this.net || this.phase !== 'MATCH' || this.combat.phase !== MatchPhase.ABILITY_DRAFT) return;
+    this.draftUi.setState(m, this.net.myIndex, (i) => this.combat.nameOf(i));
+  }
+
   setPhase(p: HudPhase): void {
     this.phase = p;
+    if (p !== 'MATCH') this.draftUi.show(false);
     this.menu.show(p === 'MENU');
     this.creator.show(p === 'CHARACTER_CREATOR');
     if (p === 'CHARACTER_CREATOR') this.creator.setAppearance(this.appearance);
@@ -372,6 +421,7 @@ export class GraaoApp {
     if (this.phase === 'MATCH') this.combat.present();
     for (const c of this.lineup) c.update(dt, { moveState: MovementState.IDLE, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE });
     this.vfx.update(dt);
+    this.draftUi.update(this.net ? this.net.serverNow() : Date.now());
     this.r.updateSun(this.phase === 'MATCH' ? feet : this.spawn, this.time);
     this.planet.update(this.time, feet, this.r.sunDir);
     this.r.render();
@@ -437,6 +487,7 @@ export class GraaoApp {
     const out: Record<string, string | number> = {
       'cpu quadro ms': this.frameMs.toFixed(2),
       qualidade: this.r.quality,
+      monitor: `${this.limiter.refreshHz.toFixed(0)} Hz · limite ${this.limiter.cap || 'máximo'}`,
       'malhas skinned': 2 + (this.net?.remoteCount ?? 0) * 2,
       'tris personagem': `${c.triangles} (${c.vertices} vértices)`,
       'ossos': c.bones,
@@ -447,6 +498,7 @@ export class GraaoApp {
       grama: this.planet.stats.grassInstances,
       'props dissolvendo': this.obstruction.stats.fading,
       'VFX ativos': this.vfx.active,
+      habilidades: this.combat.abilities.stats(),
       fase: this.phase,
       posição: s ? `lat ${lat.toFixed(1)} lon ${lon.toFixed(1)} r ${Math.hypot(s.pos.x, s.pos.y, s.pos.z).toFixed(2)}` : '-',
       movimento: s ? `${stateName(s.moveState)} ${this.local.speed().toFixed(2)} m/s ${s.grounded ? 'no chão' : 'no ar'}` : '-',

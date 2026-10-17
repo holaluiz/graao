@@ -20,7 +20,10 @@ import {
   S2C,
   SnapFlag,
   VEL_SCALE,
+  type AbilityRequestMsg,
+  type AbilityResultMsg,
   type CharacterAppearance,
+  type DraftStateMsg,
   type EventsMsg,
   type FireMsg,
   type InputMsg,
@@ -133,6 +136,8 @@ export class NetSession {
       room.onMessage(S2C.PONG, (m: PongMsg) => this.onPong(m));
       room.onMessage(S2C.EVENTS, (m: EventsMsg) => this.app.combat.onEvents(m.ev));
       room.onMessage(S2C.SELF, (m: SelfStatusMsg) => this.app.combat.onSelf(m));
+      room.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => this.app.combat.abilities.onResult(m));
+      room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => this.app.onDraftState(m));
       room.onMessage(S2C.NOTICE, (m: { text: string }) => console.info('[graao] notice', m.text));
       room.onLeave((codeNum: number) => {
         if (!this.left) {
@@ -284,12 +289,20 @@ export class NetSession {
     if (!this.left) this.room.send(C2S.FIRE, m);
   }
 
+  sendAbility(m: AbilityRequestMsg): void {
+    if (!this.left) this.room.send(C2S.ABILITY_REQUEST, m);
+  }
+
   sendReload(): void {
     if (!this.left) this.room.send(C2S.RELOAD, {});
   }
 
   sendSwitch(slot: number): void {
     if (!this.left) this.room.send(C2S.SWITCH_WEAPON, { w: slot });
+  }
+
+  sendDraftPick(round: number, id: string): void {
+    if (!this.left) this.room.send(C2S.DRAFT_PICK, { r: round, a: id });
   }
 
   sendReady(ready: boolean): void {

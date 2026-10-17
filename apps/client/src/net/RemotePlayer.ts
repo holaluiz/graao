@@ -115,7 +115,8 @@ export class RemotePlayer {
       const hit = physics.castRay(cam, dir, dist - 0.3, GROUPS_WORLD_QUERY);
       if (hit) visible = false;
     }
-    headW.addScaledVector(up, 0.3);
+    // Above the Ultimate Mark (which floats ~0.6 m over the head), so the label never covers it.
+    headW.addScaledVector(up, 0.95);
     let x = 0;
     let y = 0;
     if (visible) {

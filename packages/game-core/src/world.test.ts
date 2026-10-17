@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { MATCH_SPAWNS, MOVEMENT, PLANET, SPAWNS } from '@graao/game-data';
 import { InputButton, MovementState, v3, v3angle, v3dot, v3len, v3normalize } from '@graao/shared';
-import { CharacterMotor, cloneCharacterState, createCharacterState, newInput } from './character';
+import { ABILITIES } from '@graao/game-data';
+import { AbilityReject } from '@graao/shared';
+import { resolveTargetPoint, validateTargetPoint } from './abilities';
+import { CharacterMotor, cloneCharacterState, createCharacterState, newInput, startDash } from './character';
 import { GROUPS_PROP_QUERY, quatFromUp } from './physics';
 import { latLonToDir, northTangent, transportTangent } from './sphere';
 import { createGameWorld } from './world';
@@ -146,6 +149,107 @@ describe('spherical character controller', () => {
     for (const i of inputs) motor.step(body, r, { ...i, wish: { ...i.wish }, aim: { ...i.aim } }, 1 / 60);
     body.dispose();
     expect(Math.hypot(a.x - r.pos.x, a.y - r.pos.y, a.z - r.pos.z)).toBeLessThan(1e-6);
+  });
+});
+
+describe('ability primitives on the real planet', () => {
+  const motor = new CharacterMotor(world.physics);
+  const spawnDir = latLonToDir(SPAWNS[0]!.lat, SPAWNS[0]!.lon);
+  const ground = world.terrain.surfaceAt(spawnDir);
+  const start = { x: ground.x + spawnDir.x * 0.3, y: ground.y + spawnDir.y * 0.3, z: ground.z + spawnDir.z * 0.3 };
+  const landed = () => {
+    const s = createCharacterState(start, northTangent(spawnDir));
+    const body = motor.createBody(s);
+    for (let i = 0; i < 60; i++) motor.step(body, s, newInput(), 1 / 60);
+    return { s, body };
+  };
+  const dash = ABILITIES.wind_step.effects[0]! as { distance: number; duration: number };
+
+  it('Dash moves its distance in whole fixed steps, never farther, then leaves at run speed', () => {
+    let best = 0;
+    for (let k = 0; k < 8; k++) {
+      const { s, body } = landed();
+      const up = v3normalize(s.pos);
+      const heading = transportTangent(northTangent(spawnDir), spawnDir, up);
+      const ang = (k / 8) * Math.PI * 2;
+      const side = { x: up.y * heading.z - up.z * heading.y, y: up.z * heading.x - up.x * heading.z, z: up.x * heading.y - up.y * heading.x };
+      const dir = { x: heading.x * Math.cos(ang) + side.x * Math.sin(ang), y: heading.y * Math.cos(ang) + side.y * Math.sin(ang), z: heading.z * Math.cos(ang) + side.z * Math.sin(ang) };
+      const p0 = { ...s.pos };
+      expect(startDash(s, dir, dash.distance, dash.duration, 1 / 60)).toBe(true);
+      expect(s.dashSteps).toBe(Math.round(dash.duration * 60));
+      for (let i = 0; i < 12; i++) motor.step(body, s, newInput(), 1 / 60);
+      expect(s.dashSteps).toBe(0);
+      const moved = Math.hypot(s.pos.x - p0.x, s.pos.y - p0.y, s.pos.z - p0.z);
+      expect(moved).toBeLessThan(dash.distance + 0.4);
+      best = Math.max(best, moved);
+      const vUp = v3dot(s.vel, v3normalize(s.pos));
+      const flat = Math.hypot(s.vel.x - vUp * v3normalize(s.pos).x, s.vel.y - vUp * v3normalize(s.pos).y, s.vel.z - vUp * v3normalize(s.pos).z);
+      expect(flat).toBeLessThanOrEqual(MOVEMENT.runSpeed + 1e-6);
+      body.dispose();
+    }
+    // At least one heading out of the village plaza is free for the whole dash.
+    expect(best).toBeGreaterThan(dash.distance - 0.5);
+  });
+
+  it('a dash replays identically from a cloned mid-dash state (prediction contract)', () => {
+    const { s, body } = landed();
+    startDash(s, northTangent(v3normalize(s.pos)), dash.distance, dash.duration, 1 / 60);
+    for (let i = 0; i < 5; i++) motor.step(body, s, newInput(), 1 / 60);
+    const mid = cloneCharacterState(s);
+    for (let i = 0; i < 20; i++) motor.step(body, s, newInput(), 1 / 60);
+    for (let i = 0; i < 20; i++) motor.step(body, mid, newInput(), 1 / 60);
+    body.dispose();
+    expect(Math.hypot(s.pos.x - mid.pos.x, s.pos.y - mid.pos.y, s.pos.z - mid.pos.z)).toBeLessThan(1e-6);
+  });
+
+  it('Slow scales the running speed', () => {
+    const speed = (slow: number) => {
+      const { s, body } = landed();
+      s.slow = slow;
+      const inp = newInput();
+      let heading = northTangent(v3normalize(s.pos));
+      let prevUp = v3normalize(s.pos);
+      const p0 = { ...s.pos };
+      for (let i = 0; i < 45; i++) {
+        const up = v3normalize(s.pos);
+        heading = transportTangent(heading, prevUp, up);
+        prevUp = up;
+        inp.wish = { ...heading };
+        motor.step(body, s, inp, 1 / 60);
+      }
+      body.dispose();
+      return Math.hypot(s.pos.x - p0.x, s.pos.y - p0.y, s.pos.z - p0.z);
+    };
+    const normal = speed(1);
+    const slowed = speed(0.5);
+    expect(slowed / normal).toBeGreaterThan(0.4);
+    expect(slowed / normal).toBeLessThan(0.62);
+  });
+
+  it('client target points always pass the server checks (camera rays in every direction around the spawn)', () => {
+    const { s, body } = landed();
+    body.dispose();
+    const feet = s.pos;
+    const up = v3normalize(feet);
+    const north = northTangent(up);
+    let checked = 0;
+    for (const id of ['pollen_burst', 'sun_meteor'] as const) {
+      const range = ABILITIES[id].range;
+      for (let k = 0; k < 24; k++) {
+        for (const pitch of [-0.5, -0.25, -0.08, 0.15, 0.6]) {
+          const ang = (k / 24) * Math.PI * 2;
+          const side = { x: up.y * north.z - up.z * north.y, y: up.z * north.x - up.x * north.z, z: up.x * north.y - up.y * north.x };
+          const f = { x: north.x * Math.cos(ang) + side.x * Math.sin(ang), y: north.y * Math.cos(ang) + side.y * Math.sin(ang), z: north.z * Math.cos(ang) + side.z * Math.sin(ang) };
+          const dir = v3normalize({ x: f.x + up.x * pitch, y: f.y + up.y * pitch, z: f.z + up.z * pitch });
+          // Over-the-shoulder camera: 3.2 m behind, 2.2 m up.
+          const cam = { x: feet.x - f.x * 3.2 + up.x * 2.2, y: feet.y - f.y * 3.2 + up.y * 2.2, z: feet.z - f.z * 3.2 + up.z * 2.2 };
+          const p = resolveTargetPoint(world.physics, world.terrain, feet, cam, dir, range);
+          expect(validateTargetPoint(world.physics, feet, p, range), `${id} heading ${k} pitch ${pitch}`).toBe(AbilityReject.OK);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(240);
   });
 });
 

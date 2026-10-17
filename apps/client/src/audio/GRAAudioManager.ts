@@ -31,7 +31,30 @@ export type Cue =
   | 'go'
   | 'victory'
   | 'defeat'
-  | 'death';
+  | 'death'
+  // Abilities: one cast cue per presentation family, plus shared impacts, warnings and HUD cues.
+  | 'ab.orb'
+  | 'ab.dash'
+  | 'ab.pollen'
+  | 'ab.shield'
+  | 'ab.seed'
+  | 'ab.gust'
+  | 'ab.sap'
+  | 'ab.heal'
+  | 'ab.meteor'
+  | 'ab.cyclone'
+  | 'ab.lance'
+  | 'ab.impact'
+  | 'ab.area'
+  | 'ab.boom'
+  | 'ab.warn'
+  | 'ab.denied'
+  | 'ult.ready'
+  // Ability Draft: a choice locked in, a round revealed, a disputed ability lost, the last seconds of a window.
+  | 'draft.lock'
+  | 'draft.reveal'
+  | 'draft.lost'
+  | 'draft.tick';
 
 const VOICE_LIMIT: Record<AudioCategory, number> = { threat: 8, weapons: 10, abilities: 8, match: 4, ui: 4, music: 2, environment: 6 };
 const CATEGORY_GAIN: Record<AudioCategory, number> = { threat: 0.9, weapons: 0.75, abilities: 0.8, match: 0.9, ui: 0.55, music: 0.5, environment: 0.5 };
@@ -52,11 +75,32 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   switch: 'weapons',
   'ui.click': 'ui',
   'ui.ready': 'ui',
+  'draft.lock': 'ui',
+  'draft.reveal': 'match',
+  'draft.lost': 'match',
+  'draft.tick': 'ui',
   countdown: 'match',
   go: 'match',
   victory: 'match',
   defeat: 'match',
   death: 'match',
+  'ab.orb': 'abilities',
+  'ab.dash': 'abilities',
+  'ab.pollen': 'abilities',
+  'ab.shield': 'abilities',
+  'ab.seed': 'abilities',
+  'ab.gust': 'abilities',
+  'ab.sap': 'abilities',
+  'ab.heal': 'abilities',
+  'ab.meteor': 'abilities',
+  'ab.cyclone': 'abilities',
+  'ab.lance': 'abilities',
+  'ab.impact': 'abilities',
+  'ab.area': 'abilities',
+  'ab.boom': 'abilities',
+  'ab.warn': 'threat',
+  'ab.denied': 'ui',
+  'ult.ready': 'match',
 };
 
 export interface PlayOptions {
@@ -306,6 +350,26 @@ export class GRAAudioManager {
       case 'countdown':
         this.osc(out, 'sine', t, 880, 880, 0.12, 0.3);
         return 0.13;
+      case 'draft.lock':
+        // A card pressed onto paper: a soft tap and a small bell.
+        this.noiseBurst(out, t, 0.05, 0.25, 'lowpass', 1400, 600);
+        this.osc(out, 'triangle', t + 0.02, 1318.5, 1318.5, 0.22, 0.14, 0.005);
+        return 0.25;
+      case 'draft.reveal':
+        // Cards turning over: a quick paper sweep and an open fifth.
+        this.noiseBurst(out, t, 0.18, 0.18, 'bandpass', 2400, 5200, 1.2);
+        this.osc(out, 'triangle', t + 0.06, 587.33, 587.33, 0.4, 0.16, 0.01);
+        this.osc(out, 'triangle', t + 0.12, 880, 880, 0.45, 0.14, 0.01);
+        return 0.6;
+      case 'draft.lost':
+        // Someone else kept it: two notes stepping down, then a hopeful lift (pick again).
+        this.osc(out, 'sine', t, 659.25, 659.25, 0.14, 0.2);
+        this.osc(out, 'sine', t + 0.13, 523.25, 523.25, 0.16, 0.2);
+        this.osc(out, 'triangle', t + 0.3, 783.99, 783.99, 0.18, 0.12);
+        return 0.5;
+      case 'draft.tick':
+        this.osc(out, 'square', t, 1760, 1760, 0.025, 0.05);
+        return 0.03;
       case 'go':
         this.osc(out, 'sine', t, 1320, 1320, 0.28, 0.32);
         this.osc(out, 'triangle', t, 660, 660, 0.28, 0.15);
@@ -320,6 +384,85 @@ export class GRAAudioManager {
         this.osc(out, 'sine', t, 300, 70, 0.6, 0.4);
         this.noiseBurst(out, t, 0.5, 0.2, 'lowpass', 1200, 200);
         return 0.6;
+      // ------------------------------------------------------------------------------------------ abilities
+      case 'ab.orb':
+        // A bright rising "fwoom" with a shimmer on top.
+        this.osc(out, 'triangle', t, 420 * p, 1250 * p, 0.16, 0.3, 0.01);
+        this.osc(out, 'sine', t + 0.02, 1680 * p, 2520 * p, 0.12, 0.1);
+        this.noiseBurst(out, t, 0.18, 0.18, 'bandpass', 1800 * p, 4200 * p, 1.2);
+        return 0.2;
+      case 'ab.dash':
+        this.noiseBurst(out, t, 0.28, 0.42, 'bandpass', 700 * p, 2600 * p, 0.9);
+        this.osc(out, 'sine', t, 240 * p, 520 * p, 0.12, 0.12, 0.01);
+        return 0.3;
+      case 'ab.pollen':
+        this.noiseBurst(out, t, 0.14, 0.25, 'bandpass', 3200 * p, 1800 * p, 1.5);
+        for (let k = 0; k < 3; k++) this.osc(out, 'sine', t + k * 0.04, (1900 + k * 420) * p, (2100 + k * 420) * p, 0.08, 0.08);
+        return 0.22;
+      case 'ab.shield':
+        // Crystalline chime: stacked fifths ringing out.
+        for (const [k, f] of [523.25, 783.99, 1174.66, 1567.98].entries()) this.osc(out, 'sine', t + k * 0.03, f * p, f * p, 0.5 - k * 0.07, 0.14, 0.008);
+        this.noiseBurst(out, t, 0.08, 0.12, 'highpass', 6000);
+        return 0.52;
+      case 'ab.seed':
+        this.osc(out, 'square', t, 320 * p, 180 * p, 0.06, 0.12);
+        this.noiseBurst(out, t, 0.12, 0.28, 'bandpass', 1400 * p, 900 * p, 2);
+        return 0.13;
+      case 'ab.gust':
+        this.noiseBurst(out, t, 0.45, 0.5, 'lowpass', 2400, 400, 0.7);
+        this.osc(out, 'sine', t, 160 * p, 60 * p, 0.35, 0.4, 0.01);
+        return 0.46;
+      case 'ab.sap':
+        // A sticky "blorp": low sine with a fast wobble.
+        this.osc(out, 'sine', t, 260 * p, 120 * p, 0.18, 0.4);
+        this.osc(out, 'triangle', t + 0.03, 520 * p, 300 * p, 0.1, 0.12);
+        return 0.2;
+      case 'ab.heal':
+        for (const [k, f] of [392, 493.88, 587.33, 783.99].entries()) this.osc(out, 'triangle', t + k * 0.07, f * p, f * p, 0.55, 0.13, 0.02);
+        this.noiseBurst(out, t, 0.3, 0.06, 'highpass', 7000);
+        return 0.8;
+      case 'ab.meteor':
+        // Wind-up roar rising toward the fall.
+        this.noiseBurst(out, t, 1.1, 0.4, 'bandpass', 300, 2400, 0.8);
+        this.osc(out, 'sawtooth', t, 70 * p, 210 * p, 1.0, 0.16, 0.2);
+        return 1.1;
+      case 'ab.cyclone':
+        this.noiseBurst(out, t, 0.9, 0.38, 'bandpass', 900, 3400, 1.4);
+        for (let k = 0; k < 4; k++) this.osc(out, 'sine', t + k * 0.12, 660 * p, 990 * p, 0.12, 0.08);
+        return 0.9;
+      case 'ab.lance':
+        // Charging hum that climbs, then a release crack.
+        this.osc(out, 'sawtooth', t, 180 * p, 900 * p, 0.7, 0.12, 0.15);
+        this.osc(out, 'sine', t, 360 * p, 1800 * p, 0.7, 0.12, 0.15);
+        this.noiseBurst(out, t + 0.68, 0.12, 0.45, 'highpass', 2500);
+        this.osc(out, 'square', t + 0.68, 1600 * p, 500 * p, 0.12, 0.2);
+        return 0.82;
+      case 'ab.impact':
+        this.osc(out, 'sine', t, 520 * p, 180 * p, 0.1, 0.35);
+        this.noiseBurst(out, t, 0.08, 0.25, 'bandpass', 2600 * p, 900 * p, 1.2);
+        return 0.11;
+      case 'ab.area':
+        this.osc(out, 'sine', t, 150 * p, 55 * p, 0.3, 0.55);
+        this.noiseBurst(out, t, 0.3, 0.38, 'lowpass', 3200, 500, 0.8);
+        return 0.32;
+      case 'ab.boom':
+        this.osc(out, 'sine', t, 110 * p, 32 * p, 0.7, 0.8, 0.005);
+        this.noiseBurst(out, t, 0.7, 0.55, 'lowpass', 4200, 200, 0.7);
+        this.osc(out, 'triangle', t, 260 * p, 90 * p, 0.25, 0.25);
+        return 0.72;
+      case 'ab.warn':
+        // Two-tone warning ping: an ability is about to land here.
+        this.osc(out, 'triangle', t, 990, 990, 0.09, 0.22);
+        this.osc(out, 'triangle', t + 0.11, 740, 740, 0.12, 0.22);
+        return 0.24;
+      case 'ab.denied':
+        this.osc(out, 'square', t, 150, 140, 0.07, 0.1);
+        this.osc(out, 'square', t + 0.09, 130, 120, 0.09, 0.1);
+        return 0.19;
+      case 'ult.ready':
+        [659.25, 830.61, 987.77, 1318.51].forEach((f, k) => this.osc(out, 'triangle', t + k * 0.075, f, f, 0.4, 0.17, 0.01));
+        this.noiseBurst(out, t + 0.2, 0.4, 0.07, 'highpass', 6500);
+        return 0.7;
     }
   }
 }

@@ -33,6 +33,10 @@ export const S2C = {
   PONG: 105,
   NOTICE: 106,
   SELF: 107,
+  /** Private answer to every ABILITY_REQUEST (accepted or refused, with the reason). */
+  ABILITY_RESULT: 108,
+  /** Ability Draft state, per player (each one only learns its own hidden choice). */
+  DRAFT_STATE: 109,
 } as const;
 export type S2CType = (typeof S2C)[keyof typeof S2C];
 
@@ -98,6 +102,8 @@ export interface JoinOptions {
   appearance: CharacterAppearance;
   /** Supabase access token in production; absent for DEV GUEST. */
   token?: string;
+  /** Dev/tests only (ignored in production): ability ids for slots 1–4 instead of the default loadout. */
+  loadout?: string[];
 }
 
 /** First message after joining. Carries the server clock and rates so the client can sync. */
@@ -180,6 +186,8 @@ export interface PlayerPublic {
   /** Eliminations in the current match (warmup: since joining). */
   kills: number;
   deaths: number;
+  /** Ability ids for keys 1, 2, 3 (basics) and 4 (Ultimate). Public like draft picks; the Ultimate drives the mark. */
+  loadout: string[];
 }
 
 /** Reliable, sent when something non-positional changes. */
@@ -268,13 +276,152 @@ export interface SelfStatusMsg {
   respawnAt: number;
   /** Last FIRE sequence the server handled (accepted or refused): newer local shots are still in flight. */
   shotSeq: number;
+  /** Current Mana (integer, floor of the server value). Also in every snapshot. */
+  mana: number;
+  /** Server time when each loadout slot's cooldown ends (0 = ready). Never decided by the HUD. */
+  cd: number[];
+  /** Server time when the current cast wind-up ends (0 = not casting). */
+  castUntil: number;
+  /** Last ABILITY_REQUEST sequence the server handled. */
+  abilitySeq: number;
+  /** Server time when the current slow ends (0 = not slowed) and its speed factor × 100. */
+  slowUntil: number;
+  slow: number;
 }
+
+// ------------------------------------------------------------------------------------------------ abilities
+
+/** Why the server refused an ability (sent in ABILITY_RESULT). */
+export const AbilityReject = {
+  OK: 0,
+  DEAD: 1,
+  NOT_OWNED: 2,
+  /** Countdown, results, or not taking part in the match. */
+  PHASE: 3,
+  /** Another cast is winding up. */
+  BUSY: 4,
+  COOLDOWN: 5,
+  NO_MANA: 6,
+  OUT_OF_RANGE: 7,
+  BAD_TARGET: 8,
+  /** No line of sight from the caster to the target point. */
+  BLOCKED: 9,
+  /** Older than a request already handled. */
+  STALE: 10,
+} as const;
+export type AbilityReject = (typeof AbilityReject)[keyof typeof AbilityReject];
+
+/**
+ * ABILITY_REQUEST intent: `{ s, k, a, c, d?, p? }`
+ * - s: ability request sequence (per client, increasing)
+ * - k: loadout slot 0–3 (keys 1, 2, 3, 4) and a: the ability id the client believes is there (ownership check)
+ * - c: the client's next movement command sequence: dashes start exactly at that command on both sides
+ * - d: direction × 10000 (projectiles: from the cast origin toward the aim; dashes: the move direction)
+ * - p: target point in mm (point abilities; validated for range, surface and line of sight)
+ */
+export interface AbilityRequestMsg {
+  s: number;
+  k: number;
+  a: string;
+  c: number;
+  d?: [number, number, number];
+  p?: [number, number, number];
+}
+
+export interface AbilityResultMsg {
+  s: number;
+  k: number;
+  ok: boolean;
+  r: AbilityReject;
+}
+
+// ------------------------------------------------------------------------------------------------ ability draft
+
+/** Why the server refused a DRAFT_PICK (the next DRAFT_STATE to the picker always shows what it holds). */
+export const DraftReject = {
+  OK: 0,
+  /** No draft running, or between rounds (reveal). */
+  NOT_DRAFTING: 1,
+  /** The pick names another round. */
+  WRONG_ROUND: 2,
+  /** Not offered this round (wrong slot type or unknown id). */
+  NOT_IN_POOL: 3,
+  /** Already owned by another player (unique draft). */
+  TAKEN: 4,
+  /** Already in this player's loadout. */
+  ALREADY_OWNED: 5,
+  /** This player already has this round's ability (or is not in the draft). */
+  NOT_PICKING: 6,
+} as const;
+export type DraftReject = (typeof DraftReject)[keyof typeof DraftReject];
+
+/** DRAFT_PICK intent: `{ r, a }` — the round the client is looking at and the ability id it wants. */
+export interface DraftPickMsg {
+  r: number;
+  a: string;
+}
+
+export type DraftKind = 'basic' | 'ultimate';
+export type DraftStage = 'pick' | 'reveal' | 'done';
+
+export interface DraftSeatPublic {
+  index: number;
+  /** Abilities already won, in round order (public: everyone sees each round once it resolves). */
+  picks: string[];
+  /** Must choose in the current window (has not got this round's ability yet). */
+  picking: boolean;
+  /** Has a hidden choice waiting for the round to resolve (what it is stays private). */
+  locked: boolean;
+}
+
+/**
+ * Ability Draft state for one player. Rounds are simultaneous and hidden: everyone chooses, then the round resolves.
+ * When two players want the same ability, the one with priority this round keeps it and the other repicks at once.
+ */
+export interface DraftStateMsg {
+  /** Current round, 0-based (equals `rounds` once done). */
+  round: number;
+  rounds: number;
+  kind: DraftKind;
+  stage: DraftStage;
+  /** Server time when the current pick window or reveal ends. */
+  endsAt: number;
+  /** Player indices by priority this round, best first. */
+  priority: number[];
+  /** Ability ids offered this round. */
+  pool: string[];
+  /** No duplicate ownership this round (pool large enough for every seat). */
+  unique: boolean;
+  /** Every ability won so far and its owner's index. */
+  owners: [string, number][];
+  seats: DraftSeatPublic[];
+  /** This player's hidden choice in the current window (null = none yet). */
+  mine: string | null;
+  /** This player lost a conflict this round and must choose again. */
+  repick: boolean;
+  /** Who kept the ability this player wanted (with `repick`). */
+  lostTo: { index: number; a: string } | null;
+  /** Reveal: what each player got this round; `contested` = it was disputed, `auto` = chosen when time ran out. */
+  reveal: { index: number; a: string; auto: boolean; contested: boolean }[];
+}
+
+export type StatusFx = 'shield' | 'heal' | 'slow' | 'knock' | 'dash';
 
 export type GameEvent =
   /** A shot happened. `to` are impact points (mm); `t` is the target index or -1 for world. */
   | { e: 'shot'; by: number; w: number; s: number; from: [number, number, number]; to: [number, number, number][]; t: number[] }
   /** Damage dealt by `by` to `target`; kinds is the hit taxonomy. */
-  | { e: 'dmg'; by: number; target: number; amount: number; kinds: HitKind[]; health: number; shield: number }
+  | { e: 'dmg'; by: number; target: number; amount: number; kinds: HitKind[]; health: number; shield: number; a?: string }
+  /** An ability was accepted: everyone plays the cast; `until` is when the wind-up ends (server time). */
+  | { e: 'cast'; by: number; a: string; k: number; s: number; until: number; d?: [number, number, number]; p?: [number, number, number] }
+  /** A server projectile was launched (`v` in cm/s; gravity and radius come from the ability definition). */
+  | { e: 'proj'; id: number; by: number; a: string; s: number; from: [number, number, number]; v: [number, number, number] }
+  /** A projectile ended: hit a player (`t` ≥ 0), the world (`t` = -1) or expired (`t` = -2). */
+  | { e: 'projEnd'; id: number; at: [number, number, number]; t: number }
+  /** An area pulse resolved at `at` (mm) with radius `r` (cm); `n` counts pulses from 0. */
+  | { e: 'area'; by: number; a: string; at: [number, number, number]; r: number; n: number }
+  /** A status effect landed on `target` (shield/heal amount, slow/dash duration ms, knock speed). */
+  | { e: 'fx'; by: number; target: number; k: StatusFx; v: number }
   | { e: 'elim'; by: number; target: number }
   | { e: 'respawn'; target: number }
   | { e: 'reload'; by: number; w: number };
