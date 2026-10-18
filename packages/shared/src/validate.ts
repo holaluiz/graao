@@ -1,7 +1,8 @@
 /** Runtime validation of untrusted client messages. Every handler on the server goes through one of these. */
-import { DISPLAY_NAME_MAX, MAX_INPUT_BACKLOG, MAX_SOLO_BOTS } from './constants';
+import { DISPLAY_NAME_MAX, MAX_INPUT_BACKLOG, MAX_PLAYERS, MAX_SOLO_BOTS, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from './constants';
 import { isAppearanceShape } from './appearance';
-import { AIM_SCALE, WISH_SCALE, type InputCmd, type InputMsg, type PingMsg, type AppearanceUpdateMsg } from './protocol';
+import { AIM_SCALE, MatchPhase, WISH_SCALE, type InputCmd, type InputMsg, type PingMsg, type AppearanceUpdateMsg, type RoomListing } from './protocol';
+import { PROTOCOL_VERSION } from './version';
 
 const isInt = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n);
 
@@ -77,6 +78,48 @@ export function validateRoomSettings(m: unknown): import('./protocol').RoomSetti
   if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
   const bots = (m as { bots?: unknown }).bots;
   return isInt(bots) && bots >= 0 && bots <= MAX_SOLO_BOTS ? { bots } : null;
+}
+
+const ROOM_CODE = new RegExp(`^${ROOM_CODE_PREFIX}[${ROOM_CODE_ALPHABET}]{${ROOM_CODE_LENGTH}}$`);
+const PHASES = new Set<number>(Object.values(MatchPhase));
+const cleanText = (v: unknown, max: number): string => (typeof v === 'string' ? v.replace(/\p{Cc}/gu, '').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+
+/**
+ * One line of the room browser, from an untrusted source (the server's `/rooms`, or a host's own announcement).
+ * Seat counts must add up within the capacity; closed rooms are dropped. A room speaking another protocol is kept
+ * (the browser shows it as another version), never offered as available.
+ */
+export function parseRoomListing(raw: unknown): RoomListing | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const count = (v: unknown, max: number) => (isInt(v) && v >= 0 && v <= max ? v : -1);
+  const code = typeof o.code === 'string' ? o.code.toUpperCase() : '';
+  const humans = count(o.humans, MAX_PLAYERS);
+  const botsDesired = count(o.botsDesired, MAX_SOLO_BOTS);
+  const botsPlanned = count(o.botsPlanned, MAX_SOLO_BOTS);
+  const capacity = count(o.capacity, MAX_PLAYERS);
+  const phase = o.phase;
+  if (!ROOM_CODE.test(code) || o.visibility !== 'public' || typeof o.hostSessionId !== 'string' || !o.hostSessionId) return null;
+  if (humans < 1 || botsDesired < 0 || botsPlanned < 0 || capacity < 2 || humans + botsPlanned > capacity) return null;
+  if (!isInt(phase) || !PHASES.has(phase) || phase === MatchPhase.CLOSED || !isInt(o.protocol)) return null;
+  const region = cleanText(o.region, 32);
+  return {
+    code,
+    name: cleanText(o.name, 56) || `Sala ${code}`,
+    visibility: 'public',
+    hostSessionId: o.hostSessionId.slice(0, 64),
+    hostName: sanitizeName(o.hostName) ?? 'Jogador',
+    humans,
+    botsDesired,
+    botsPlanned,
+    capacity,
+    protocol: o.protocol,
+    phase: phase as MatchPhase,
+    available: o.available === true && o.protocol === PROTOCOL_VERSION && phase === MatchPhase.LOBBY && humans < capacity,
+    canStart: o.canStart === true,
+    startReason: cleanText(o.startReason, 160),
+    ...(region ? { region } : {}),
+  };
 }
 
 export function validatePrepared(m: unknown): import('./protocol').PreparedMsg | null {

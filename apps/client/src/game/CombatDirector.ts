@@ -431,7 +431,8 @@ export class CombatDirector {
 
   onNotice(m: NoticeMsg): void {
     if (m.code === NoticeCode.MATCH_SAVED) this.saved = true;
-    else if (m.text) this.app.hud.notice(m.text, 2);
+    // Outside the match the HUD is hidden and its notice would wait for the next one: the screen's toast says it.
+    else if (m.text && this.app.phase === 'MATCH') this.app.hud.notice(m.text, 2);
   }
 
   // ------------------------------------------------------------------------------------------------ server messages

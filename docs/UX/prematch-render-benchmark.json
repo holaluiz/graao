@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-18",
+  "what": "World rendering behind pre-match screens, with GraaoApp.coverThrottle off (before) and on (after)",
+  "method": "Animation loop paused; 20 warm-up frames, then 120 synthetic frames at 60 Hz (2 simulated seconds) per screen driven through app.frame(t). GPU time of every world render measured with EXT_disjoint_timer_query_webgl2. The browser pane delivered ~1.5 rAF/s without focus, so live FPS was not used.",
+  "machine": { "gpu": "AMD Radeon RX 570", "canvas": [1366, 768], "devicePixelRatio": 1, "quality": "HIGH", "client": "bench Vite server (no HMR), development build" },
+  "samples": [
+    { "screen": "MENU", "throttle": false, "worldRendersPerSec": 60, "gpuMsPerSec": 263.3, "gpuMsPerRender": 4.39, "cpuMsPerFrame": 8.15, "drawCalls": 134 },
+    { "screen": "MENU", "throttle": true, "worldRendersPerSec": 60, "gpuMsPerSec": 274.8, "gpuMsPerRender": 4.58, "cpuMsPerFrame": 7.96, "drawCalls": 134 },
+    { "screen": "ROOM_BROWSER", "throttle": false, "worldRendersPerSec": 60, "gpuMsPerSec": 272.3, "gpuMsPerRender": 4.54, "cpuMsPerFrame": 10.39, "drawCalls": 134 },
+    { "screen": "ROOM_BROWSER", "throttle": true, "worldRendersPerSec": 30, "gpuMsPerSec": 134.9, "gpuMsPerRender": 4.5, "cpuMsPerFrame": 3.99, "drawCalls": 134 },
+    { "screen": "ROOM_LOBBY", "throttle": false, "worldRendersPerSec": 60, "gpuMsPerSec": 304.8, "gpuMsPerRender": 5.08, "cpuMsPerFrame": 9.11, "drawCalls": 134 },
+    { "screen": "ROOM_LOBBY", "throttle": true, "worldRendersPerSec": 30, "gpuMsPerSec": 182.9, "gpuMsPerRender": 6.1, "cpuMsPerFrame": 5.41, "drawCalls": 134 },
+    { "screen": "ABILITY_DRAFT", "throttle": false, "worldRendersPerSec": 60, "gpuMsPerSec": 258.8, "gpuMsPerRender": 4.31, "cpuMsPerFrame": 6.78, "drawCalls": 134 },
+    { "screen": "ABILITY_DRAFT", "throttle": true, "worldRendersPerSec": 4, "gpuMsPerSec": 24.6, "gpuMsPerRender": 6.15, "cpuMsPerFrame": 0.8, "drawCalls": 134 }
+  ],
+  "limits": "Single run on one machine; the compositor cost of the draft's backdrop blur is not included; CPU ms per frame includes JavaScript only. The menu keeps full rate on purpose (the character is the subject there)."
+}

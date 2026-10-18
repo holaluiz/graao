@@ -36,6 +36,7 @@ export class HostRoomDriver {
           room.output = { send: (to, type, message) => this.post({ t: 'send', to, type, m: message }) };
           room.onDisposed = () => this.post({ t: 'disposed' });
           room.onSeatReleased = (sid) => this.post({ t: 'released', sid });
+          room.onMetadata = (metadata) => this.post({ t: 'metadata', metadata });
           this.room = room;
           await room._create(m.options);
           this.post({ t: 'created', code: room.roomId });

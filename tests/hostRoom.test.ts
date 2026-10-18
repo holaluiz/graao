@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_APPEARANCE, randomAppearance } from '@graao/game-data';
-import { C2S, CLIENT_VERSION, MatchPhase, PROTOCOL_VERSION, S2C, type RoomStateMsg, type WelcomeMsg } from '@graao/shared';
+import { C2S, CLIENT_VERSION, MatchPhase, PROTOCOL_VERSION, S2C, parseRoomListing, type RoomStateMsg, type WelcomeMsg } from '@graao/shared';
 import type { FromRoom } from '../apps/client/src/net/host/hostProtocol';
 
 vi.mock('@colyseus/core', async () => await import('../apps/client/src/net/host/colyseusShim'));
@@ -59,6 +59,28 @@ describe('match room hosted in a browser worker', () => {
     await h.driver.handle({ t: 'leave', sid: 'host', consented: true });
     expect(h.out.at(-1)).toEqual({ t: 'disposed' });
     expect(h.latestState('guest')!.phase).toBe(MatchPhase.CLOSED);
+  });
+
+  it('publishes the room’s own listing to the host page, which announces public rooms', async () => {
+    const h = host();
+    open.push(h);
+    const listing = () => {
+      const created = h.out.find((m) => m.t === 'created');
+      const meta = h.out.filter((m): m is Extract<FromRoom, { t: 'metadata' }> => m.t === 'metadata').at(-1);
+      return created?.t === 'created' && meta ? parseRoomListing({ ...meta.metadata, code: created.code }) : null;
+    };
+    await h.driver.handle({ t: 'create', options: { ...opts('A'), legacyWarmup: false, visibility: 'public', roomName: 'Sala de Sábado', bots: 9 } });
+    expect(listing()).toBeNull();
+    await h.driver.handle({ t: 'join', sid: 'host', options: opts('A') });
+    expect(listing()).toMatchObject({ name: 'Sala de Sábado', hostName: 'A', humans: 1, botsPlanned: 9, capacity: 10, phase: MatchPhase.LOBBY, available: true });
+    await h.driver.handle({ t: 'join', sid: 'guest', options: opts('B') });
+    expect(listing()).toMatchObject({ humans: 2, botsPlanned: 8, available: true });
+    await h.driver.handle({ t: 'msg', sid: 'host', type: C2S.READY, m: { r: 1 } });
+    await h.driver.handle({ t: 'msg', sid: 'guest', type: C2S.READY, m: { r: 1 } });
+    await h.driver.handle({ t: 'msg', sid: 'host', type: C2S.START_MATCH, m: {} });
+    expect(listing()).toMatchObject({ phase: MatchPhase.ABILITY_DRAFT, available: false });
+    await h.driver.handle({ t: 'leave', sid: 'host', consented: true });
+    expect(listing()).toBeNull();
   });
 
   it('creates the room, seats the host and a guest, refuses a wrong version and closes', async () => {

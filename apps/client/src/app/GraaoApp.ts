@@ -39,7 +39,7 @@ import { Menu } from '../ui/Menu';
 import { DraftScreen } from '../ui/DraftScreen';
 import { ResultsScreen } from '../ui/ResultsScreen';
 import { Scoreboard } from '../ui/Scoreboard';
-import { RoomBrowser, type CreateRoomSettings } from '../ui/RoomBrowser';
+import { RoomBrowser, type CreateRoomSettings, type RoomSource } from '../ui/RoomBrowser';
 import { SettingsPanel, type GameSettings } from '../ui/SettingsPanel';
 import { PreparationScreen } from '../ui/PreparationScreen';
 import { Modal, Toast, button, field, node } from '../ui/components';
@@ -50,6 +50,7 @@ import { AuthoredParts } from '../character/build/AuthoredParts';
 import { NetSession, type RoomConnectOptions } from '../net/NetSession';
 import { ProfileService, type CloudProfile } from '../net/ProfileService';
 import { signalingConfigured } from '../net/host/signaling';
+import { dedicatedServer } from '../net/serverTarget';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
 
 export type HudPhase = 'BOOT' | 'MENU' | 'ROOM_BROWSER' | 'ROOM_LOBBY' | 'LOADING' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
@@ -114,6 +115,8 @@ export class GraaoApp {
   private browser!: RoomBrowser;
   private settings!: SettingsPanel;
   private pause!: Modal;
+  private readonly pauseNote = node('p', 'gra-fine pause-note');
+  private readonly pauseLeave = button('Sair da sala', () => { this.pause.hide(); this.leaveRoom(); });
   private training: Modal | null = null;
   private readonly preparation = new PreparationScreen();
   private readonly toast = new Toast();
@@ -140,6 +143,14 @@ export class GraaoApp {
   private frameMs = 0;
   /** Optional frame-rate cap ("Limite de FPS"); "Máximo" follows the monitor's refresh rate. */
   readonly limiter = new FrameLimiter();
+  /** Redraw the world less often behind screens that cover it (measurement switch; see docs/UX/PERFORMANCE.md). */
+  coverThrottle = true;
+  private lastWorldRender = 0;
+  /** World frames actually drawn (the F3 overlay shows the rate). */
+  worldFrames = 0;
+  private worldFramesAt = 0;
+  private worldFramesSeen = 0;
+  private worldFps = 0;
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: HTMLElement) {
     // Presentation settings live in their own screen; the development quality override remains available.
@@ -156,7 +167,11 @@ export class GraaoApp {
     this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (_v): _v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
     this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, 0, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
-    window.addEventListener('resize', () => this.r.resize());
+    window.addEventListener('resize', () => {
+      this.r.resize();
+      // Resizing clears the canvas: redraw on the next frame even behind a screen that throttles the world.
+      this.lastWorldRender = 0;
+    });
     for (const id of ['underwater', 'paper', 'vignette']) {
       const d = document.createElement('div');
       d.id = id;
@@ -291,12 +306,15 @@ export class GraaoApp {
       name: (name) => this.rememberName(name),
       click: () => this.audio.play('ui.click'),
     }, this.name);
+    // A dedicated server lists and runs the rooms when the build (or ?server=) names one; otherwise whoever creates a
+    // room hosts it in their browser and public rooms are announced in the live list.
+    const source: RoomSource = dedicatedServer() ? 'server' : signalingConfigured() ? 'hosted' : 'none';
     this.browser = new RoomBrowser({
       back: () => this.setPhase('MENU'),
       create: (settings) => void this.createRoom(settings),
-      join: (code, fallbackHosted) => void this.online('join', code, this.name, 0, { forceDedicated: true, fallbackHosted }),
+      join: (code, typed) => void this.online('join', code, this.name, 0, source === 'server' ? { forceDedicated: true, fallbackHosted: typed } : { hosted: true }),
       click: () => this.audio.play('ui.click'),
-    });
+    }, source);
     this.browser.playerName = this.name;
     this.browser.hostedAvailable = signalingConfigured();
     this.settings = new SettingsPanel({
@@ -331,14 +349,14 @@ export class GraaoApp {
       click: () => this.audio.play('ui.click'),
       notify: (text) => this.toast.show(text),
     });
-    this.pause = new Modal('Um respiro', () => { this.input.enabled = this.phase === 'MATCH'; });
+    this.pause = new Modal('Opções', () => { this.input.enabled = this.phase === 'MATCH'; });
     const pauseActions = node('div', 'pause-actions');
     pauseActions.append(
       button('Continuar', () => { this.pause.hide(); if (this.phase === 'MATCH') this.input.requestLock(); }, true),
       button('Configurações', () => { this.pause.hide(); this.settings.show(); }),
-      button('Sair da sala', () => { this.pause.hide(); this.leaveRoom(); }),
+      this.pauseLeave,
     );
-    this.pause.body.append(pauseActions);
+    this.pause.body.append(this.pauseNote, pauseActions);
     this.history = new HistoryPanel(() => this.history.show(false));
     this.hud.show(false);
     this.ui.append(this.menu.el, this.browser.el, this.history.el, this.creator.stage, this.creator.el, this.hud.el,
@@ -353,9 +371,7 @@ export class GraaoApp {
       if (this.training?.visible) { this.training.hide(); return; }
       if (this.phase === 'ROOM_BROWSER') { if (!this.browser.closeModal()) this.setPhase('MENU'); return; }
       if (this.phase === 'CHARACTER_CREATOR') { this.character.setAppearance(this.appearance); this.setPhase(this.creatorReturn); return; }
-      if (this.net || this.phase === 'MATCH') {
-        this.input.exitLock(); this.input.releaseAll(); this.input.enabled = false; this.pause.show();
-      }
+      if (this.net || this.phase === 'MATCH') this.openPause();
     });
     const canvas = this.r.canvas;
     canvas.addEventListener('click', () => {
@@ -377,6 +393,29 @@ export class GraaoApp {
     document.addEventListener('pointerlockchange', () => {
       if (this.phase === 'MATCH') this.updateHint();
     });
+  }
+
+  /**
+   * ESC: a small options menu. It never hides the lobby's main action and never pauses a multiplayer room: the draft
+   * clock and the match keep running, and leaving is always an explicit button.
+   */
+  private openPause(): void {
+    const online = !!this.net;
+    const fighting = online && this.phase === 'MATCH';
+    this.pauseLeave.textContent = !online ? 'Voltar ao menu' : fighting ? 'Sair da partida' : 'Sair da sala';
+    this.pauseNote.textContent = !online
+      ? 'Treino sozinho: nada é salvo ao sair.'
+      : this.phase === 'ABILITY_DRAFT'
+        ? 'O Draft continua enquanto este menu está aberto: o tempo da rodada não para.'
+        : this.phase === 'LOADING'
+          ? 'A preparação da partida continua enquanto este menu está aberto.'
+          : fighting
+            ? 'A partida continua enquanto este menu está aberto. Ninguém pausa no multiplayer.'
+            : 'Sua vaga na sala continua guardada. Estou pronto fica no rodapé do lobby.';
+    this.input.exitLock();
+    this.input.releaseAll();
+    this.input.enabled = false;
+    this.pause.show();
   }
 
   /** Only the "click to play" prompt while the pointer is free; nothing over the game while playing. */
@@ -475,7 +514,7 @@ export class GraaoApp {
 
   onDraftState(m: DraftStateMsg): void {
     if (!this.net || this.phase !== 'ABILITY_DRAFT') return;
-    this.draftUi.setState(m, this.net.myIndex, (i) => this.combat.nameOf(i));
+    this.draftUi.setState(m, this.net.myIndex, (i) => this.combat.nameOf(i), (i) => this.roomState?.players.find((p) => p.index === i)?.appearance);
   }
 
   onRoomNotice(m: NoticeMsg): void {
@@ -513,17 +552,17 @@ export class GraaoApp {
     const started = performance.now();
     try {
       this.preparation.step(0, 'Verificando o planeta e os recursos…');
-      await nextFrame();
+      await breathe();
       if (!current()) return;
       if (!this.world || !this.planet || !this.anims.clips.size) throw new Error('Os recursos do planeta não estão prontos.');
       this.preparation.step(1, 'Conferindo os participantes e suas habilidades…');
-      await nextFrame();
+      await breathe();
       if (!current()) return;
       if (!this.roomState?.players.length) throw new Error('A lista de participantes não chegou.');
       this.preparation.step(2, 'Preparando a imagem da partida…');
       net?.preparePresentation();
       this.compileShaders();
-      await nextFrame();
+      await breathe();
       if (!current()) return;
       this.loadMs.preparation = Math.round(performance.now() - started);
       this.preparation.step(3, 'Tudo pronto. Aguardando os outros jogadores…');
@@ -753,7 +792,14 @@ export class GraaoApp {
     this.ambient.update(dt, this.time, this.phase === 'MATCH' ? feet : this.spawn);
     const envLevel = (1 - orbit) * this.tormenta.ambience;
     this.audio.setAmbience(envLevel, envLevel * this.water.beachProximity, this.time);
-    this.r.render();
+    // The draft and the loading card cover the world (opaque, blurred): it is redrawn a few times a second there.
+    // Behind the room list and the lobby panel the decorative world needs no more than 30 fps.
+    const gap = !this.coverThrottle ? 0 : this.phase === 'ABILITY_DRAFT' || this.phase === 'LOADING' ? 250 : this.phase === 'ROOM_BROWSER' || this.phase === 'ROOM_LOBBY' ? 1000 / 30 : 0;
+    if (t - this.lastWorldRender >= gap - 2) {
+      this.r.render();
+      this.lastWorldRender = t;
+      this.worldFrames++;
+    }
     this.frameMs = performance.now() - t0;
     this.dev.frame();
   }
@@ -893,8 +939,15 @@ export class GraaoApp {
     const s = this.local?.state;
     const lat = s ? (Math.asin(THREE.MathUtils.clamp(s.pos.y / Math.hypot(s.pos.x, s.pos.y, s.pos.z), -1, 1)) * 180) / Math.PI : 0;
     const lon = s ? (Math.atan2(s.pos.x, s.pos.z) * 180) / Math.PI : 0;
+    const now = performance.now();
+    if (now - this.worldFramesAt >= 1000) {
+      this.worldFps = Math.round(((this.worldFrames - this.worldFramesSeen) * 1000) / Math.max(1, now - this.worldFramesAt));
+      this.worldFramesSeen = this.worldFrames;
+      this.worldFramesAt = now;
+    }
     const out: Record<string, string | number> = {
       'cpu quadro ms': this.frameMs.toFixed(2),
+      'mundo desenhado/s': this.worldFps,
       qualidade: this.r.quality,
       monitor: `${this.limiter.refreshHz.toFixed(0)} Hz · limite ${this.limiter.cap || 'máximo'}`,
       'malhas skinned': 2 + (this.net?.remoteCount ?? 0) * 2,
@@ -924,4 +977,21 @@ export class GraaoApp {
 }
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+/**
+ * Lets the loading card paint between preparation steps without depending on animation frames: a tab in the
+ * background gets none, and one player switching windows during the draft must not hold everyone's match.
+ */
+const breathe = () =>
+  new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    requestAnimationFrame(finish);
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => (document.hidden ? finish() : setTimeout(finish, 100));
+    channel.port2.postMessage(0);
+  });
 const stateName = (v: number) => Object.keys(MovementState).find((k) => MovementState[k as keyof typeof MovementState] === v) ?? String(v);

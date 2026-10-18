@@ -19,11 +19,7 @@ export class Menu {
     this.value = name;
     this.el.setAttribute('aria-label', 'Menu principal');
     const heading = node('div', 'home-heading');
-    heading.append(
-      node('span', 'gra-kicker', 'ABRA O SEU PRÓXIMO CAPÍTULO'),
-      node('h1', '', 'graao'),
-      node('p', 'tag', 'um planetinha · armas, magia e roupas boas'),
-    );
+    heading.append(node('h1', '', 'graao'), node('p', 'tag', 'um planetinha · armas, magia e roupas boas'));
     const nav = node('nav', 'home-actions');
     for (const [text, action, primary] of [
       ['Jogar', actions.play, true],
@@ -40,7 +36,7 @@ export class Menu {
           primary,
         ),
       );
-    const train = button('Treinar sozinho ↗', () => {
+    const train = button('Treinar sozinho', () => {
       actions.click();
       actions.train();
     });

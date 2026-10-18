@@ -25,7 +25,8 @@ export const signalingConfigured = (): boolean => !!url && !!key;
 
 let client: Promise<SupabaseClient> | null = null;
 
-function realtime(): Promise<SupabaseClient> {
+/** The publishable-key Realtime client shared by signaling and the public room directory. */
+export function realtime(): Promise<SupabaseClient> {
   client ??= import('@supabase/supabase-js').then(({ createClient }) =>
     // Its own storage key and no session: signaling never touches the player's cloud profile.
     createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: 'graao-signal' } }),

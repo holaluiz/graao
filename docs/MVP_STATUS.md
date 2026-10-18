@@ -1,5 +1,38 @@
 # graao MVP status
 
+## 2026-10-18 (afternoon) — Public rooms in the published build, and a background-tab fix
+
+The published build has no dedicated server: whoever creates a room hosts it in their browser. Until now its room
+browser could only say "Servidor indisponível", and creating a room needed a fallback button hidden in the form. Now:
+
+- **Live room list for browser-hosted rooms.** Each public room's host announces the listing that its own
+  authoritative `GraaoMatchRoom` publishes (Supabase Realtime Presence, channel `graao-rooms`); every viewer sees it
+  update by itself. Supabase only relays the host's announcement. Seats, phase and admission stay with the host's room,
+  which refuses full or started rooms. With `VITE_SERVER_URL` or `?server=`, the dedicated `/rooms` registry is used as
+  before. Both sources go through the same `parseRoomListing` validator (humans + planned bots ≤ capacity ≤ 10).
+  See [room browser](UX/ROOM_BROWSER.md).
+- **Room browser:** columns (Sala · Participantes · Status · Ping), ten seat pips per row, ping shown as "—" (never
+  estimated), unavailable rows that say why, empty state with "Criar a primeira sala", retry on failure.
+- **Lobby:** each human slot draws a small bust from that player's real appearance, so a look saved in the lobby is
+  visible to everyone. The sidebar lists Mapa, Modo, Capacidade, Bots desejados (host only) and Visibilidade.
+- **Draft:** Portuguese title "Escolha suas habilidades", "Progresso: n de 4 selecionadas", "Supremo" wording, a
+  "Trocar" button on the confirmed slot, avatars in the participant strip.
+- **ESC:** "Opções" names what keeps running; in a match the exit reads "Sair da partida".
+- **Fixed:** a player whose tab was in the background during the draft never acknowledged the match preparation
+  (it waited for animation frames), holding everyone until the 45 s timeout. Also fixed: a lobby notice reappearing on
+  the HUD over the next UFO ride.
+- **Performance:** the decorative world is redrawn at most 4×/s behind the draft and loading card (GPU 259 → 25 ms
+  per second measured on an RX 570) and 30×/s behind the room list and lobby. See [performance](UX/PERFORMANCE.md).
+
+**Validation:** three browser tabs on the no-HMR client without a dedicated server covered create → list → join →
+live row update → Ready → appearance change from the lobby → draft → preparation (with the guest in the background) →
+UFO → landing → match → results → lobby → host leaves → row removed. Details in [verification](UX/VERIFICATION.md).
+Customization was being changed by parallel work at the same time and was only exercised, not re-reviewed, here.
+Automated: `tests/multiplayer.test.ts` had 36 failures at `916a753` (the warmup suites lacked `legacyWarmup: true`);
+fixed, 49/49 alone. Full suite 264/277: the 13 failures are the in-progress spectator tests of parallel work (12) and
+the real-time 60 Hz interpolation test under full-suite load (passes with its file alone). Typecheck, ESLint of the
+changed files and build passed.
+
 ## 2026-10-18 — Pre-match redesign verified locally
 
 The current competitive journey is **Menu → Rooms → Lobby → Ability Draft → Preparation → UFO → Drop → Combat →
@@ -84,7 +117,7 @@ technical docs are English, while the redesign specifications in `docs/UX` are P
 | Colyseus room, codes, prediction, reconciliation, interpolation | DONE | Tested (integration) |
 | Weapons (Raio de Sol, Rajada de Pétalas), server hitscan, ammo, reload, switch | TESTING | Server rules tested; client prediction reconciles ammo by FIRE sequence (`shotSeq`); code-authored models on the hand bone |
 | Match flow (lobby → host start → draft → preparation → UFO → drop → combat → results → lobby) | TESTING | New competitive flow and legacy development path are integration-tested. Current flow waits for all human loading ACKs, freezes the roster on host start and closes on host departure. Two browser clients completed the local flow. See [pre-match flow](UX/PRE_MATCH_FLOW.md). |
-| Public room browser and private browser-host fallback | DONE | Real Colyseus `/rooms` registry, authoritative occupancy, 10 total seats, public/private visibility, create/join errors and explicit private fallback when signaling is available. See [room browser](UX/ROOM_BROWSER.md). |
+| Public room browser (dedicated `/rooms` and live list of browser-hosted rooms) | TESTING | Dedicated: real Colyseus `/rooms` registry. Published build: each public hosted room announces its own room's listing (Presence); the host's room still admits or refuses. One validator for both (10 total seats). Three browser tabs verified create/see/join/update/remove locally; two real machines and networks not yet. See [room browser](UX/ROOM_BROWSER.md). |
 | Lobby, planned bots and loading preparation | DONE | Host controls 0–9 bots and explicit start; all humans Ready; no combat bots or periodic snapshots in the lobby. Two-client browser validation plus occupancy, concurrent joins, preparation ACK/failure/timeout and host-exit integration tests. |
 | Combat HUD (vitals, weapons, reticles, hitmarkers by kind, damage numbers and direction, kill feed, banners, death, results) | TESTING | DOM/CSS/SVG; seen in the browser |
 | GRAVFXSystem (beams + particles, 2 draw calls) | TESTING | Tracers, flashes, impacts, shield shards/ring, elimination burst |

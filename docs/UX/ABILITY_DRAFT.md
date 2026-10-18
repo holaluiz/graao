@@ -17,6 +17,16 @@ Cada rodada oferece **45 segundos** para inspecionar e confirmar. A rodada pode 
 
 O cronômetro usa `endsAt` e o relógio do servidor. Nos últimos cinco segundos de uma escolha ainda aberta, ele recebe destaque de urgência e os sinais sonoros existentes do jogo. Confirmar cedo permite avançar sem consumir o limite completo.
 
+## Hierarquia da tela
+
+- Topo: “ABILITY DRAFT”, o título **Escolha suas habilidades** e a frase “3 básicas + 1 Supremo, uma por rodada. Clique numa carta, confira os detalhes e confirme.” À direita, “RODADA n DE 4 · BÁSICA/SUPREMO”, o cronômetro em segundos e a barra de tempo.
+- **Sua combinação**: os quatro slots ficam visíveis a viagem inteira (“BÁSICA 1 · TECLA 1” … “SUPREMO · TECLA 4”), com “Progresso: n de 4 selecionadas”. O slot da rodada atual fica destacado; um slot confirmado ganha o botão **Trocar** enquanto a rodada está aberta.
+- Catálogo: “Agora: escolha sua 2ª habilidade básica” ou “Agora: escolha seu Supremo”, e as cartas da rodada.
+- Detalhes à direita, com **CONFIRMAR ESCOLHA** / **ALTERAR SELEÇÃO** logo abaixo.
+- Faixa “NA PARTIDA” embaixo: avatar, nome, “Escolhendo/Confirmou” e os quatro slots públicos de cada participante.
+
+O termo do jogo para a quarta habilidade é **Supremo** (carta “SUPREMO”, HUD “SUPREMO PRONTO”); a descrição técnica continua “habilidade suprema”.
+
 ## Selecionar e confirmar
 
 1. O jogador inspeciona uma carta com o mouse ou foco do teclado. Os detalhes permanecem em um painel próprio, sem depender de tooltip.
@@ -51,7 +61,7 @@ Quando há exclusividade, a primeira prioridade é sorteada pelo servidor e a or
 
 ## Participantes e privacidade
 
-A faixa inferior comporta até dez participantes. Cada participante mostra nome, identificação do próprio jogador, status “Escolhendo” ou “Confirmou” e os quatro slots públicos. A contagem informa quantos já confirmaram ou tiveram a habilidade resolvida na rodada.
+A faixa inferior comporta até dez participantes. Cada participante mostra um avatar desenhado com sua aparência (bots usam a aparência sorteada pelo servidor), nome, identificação do próprio jogador, status “Escolhendo” ou “Confirmou” e os quatro slots públicos. Em larguras até 1100 px o avatar sai para a faixa caber. A contagem informa quantos já confirmaram ou tiveram a habilidade resolvida na rodada.
 
 Uma escolha pendente de outro jogador aparece somente como espera ou confirmação. A interface não deduz nem exibe a habilidade secreta. Somente escolhas públicas já atribuídas pelo servidor aparecem como ícones nos slots dos demais jogadores. Durante revelação e conclusão, os textos da faixa acompanham o estágio recebido.
 

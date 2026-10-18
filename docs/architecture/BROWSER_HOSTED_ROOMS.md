@@ -15,6 +15,7 @@ runs the same way, offline. A dedicated Colyseus server is still supported (`?se
 | `RoomHost.ts` | same | Host page: starts the worker, claims the code, seats the host's own player in-page (`LocalLink`), answers guests (`HostPeer`, one data channel each), fans room messages out (encoded once per broadcast) |
 | `PeerLink.ts` | same | Guest: finds the host by code, opens the data channel, asks for a seat, reconnects with its session token |
 | `signaling.ts` | same | Supabase Realtime broadcast channel `graao-room:<code>`: only the offer/answer exchange |
+| `roomDirectory.ts` | same | Public room list: each public room's host announces the metadata its own room publishes (Presence on `graao-rooms`); the room browser shows the live set. A notice board, not an authority: the host's room still accepts or refuses every join |
 | `wire.ts` | same | ICE servers, waiting for candidates (no trickle), JSON framing, splitting frames over 60 KB, snapshot backpressure |
 | `RoomLink.ts` | `apps/client/src/net` | What `NetSession` needs from a connection; a Colyseus `Room` fits it as is |
 

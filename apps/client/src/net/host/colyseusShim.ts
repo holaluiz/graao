@@ -6,7 +6,8 @@
  * It mirrors the Colyseus behaviour the room relies on: `onAuth` → `onJoin` (a throw refuses the seat), the seat limit
  * (`maxClients`, seats held for reconnection included), a consented leave (`onLeave`) versus a drop (`onDrop`, then
  * `onReconnect` if `allowReconnection` saw the player back in time, else `onLeave`), one simulation interval, the `*`
- * handler, and disposal once nobody is left. Not mirrored: the per-client message rate limit, state sync, listings.
+ * handler, and disposal once nobody is left. Metadata goes to the host page, which announces public rooms (see
+ * `roomDirectory.ts`). Not mirrored: the per-client message rate limit and state sync.
  */
 
 export class ServerError extends Error {
@@ -116,6 +117,7 @@ export class Room {
 
   async setMetadata(metadata: Record<string, unknown>): Promise<void> {
     this.metadata = { ...metadata };
+    this.onMetadata(this.metadata);
   }
 
   async disconnect(): Promise<void> {
@@ -243,6 +245,9 @@ export class Room {
 
   /** Set by the host driver: a held seat expired (the main thread forgets that session). */
   onSeatReleased: (sessionId: string) => void = () => {};
+
+  /** Set by the host driver: the room's own listing changed (the host announces public rooms). */
+  onMetadata: (metadata: Record<string, unknown>) => void = () => {};
 
   #disposeIfEmpty(): void {
     if (!this.#members.size && !this.#reconnections.size) void this._dispose();

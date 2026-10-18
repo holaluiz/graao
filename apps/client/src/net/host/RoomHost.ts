@@ -3,13 +3,17 @@
  * player in-page (`LocalLink`) and, when the room is online, answers guests who find it by code (signaling) with a
  * WebRTC data channel each (`HostPeer`). Room messages go out encoded once per broadcast.
  *
+ * A public online room is announced in the room browser of every other player (`roomDirectory`) with the listing its
+ * own room publishes; the announcement follows every change and is withdrawn when the room closes.
+ *
  * The host leaving (SAIR DA SALA, closing the tab) closes the room for everyone: guests get `["bye"]` and go back to
  * the menu. A guest whose connection dies keeps their seat for the room's reconnection window and comes back with a
  * new connection (`["rejoin", {sid, token}]`).
  */
-import { MAX_PLAYERS, S2C } from '@graao/shared';
+import { MAX_PLAYERS, S2C, parseRoomListing } from '@graao/shared';
 import { BufferedLink, LinkClose, type RoomLink } from '../RoomLink';
 import type { FromRoom, ToRoom } from './hostProtocol';
+import { roomDirectory } from './roomDirectory';
 import { SignalChannel, randomId } from './signaling';
 import { FrameReader, SNAPSHOT_BACKLOG_BYTES, gatheredSdp, iceServers, sendFrame } from './wire';
 
@@ -35,6 +39,8 @@ export class RoomHost {
   private readonly peers = new Map<string, HostPeer>();
   private created: Waiter & { code?: string } = { resolve: () => {}, reject: () => {} };
   private closed = false;
+  /** The room's latest listing (sent by the room whenever it changes). */
+  private metadata: Record<string, unknown> | null = null;
   private readonly onPageHide = () => this.close();
 
   private constructor() {}
@@ -52,6 +58,7 @@ export class RoomHost {
         if (attempt >= 3) throw new Error('Não deu para reservar um código de sala. Tente de novo.');
         await host.restart(options);
       }
+      host.announce();
     } catch (e) {
       host.close();
       throw e;
@@ -92,6 +99,7 @@ export class RoomHost {
     if (this.closed) return;
     this.closed = true;
     removeEventListener('pagehide', this.onPageHide);
+    roomDirectory.announce(null);
     for (const peer of this.peers.values()) peer.close('host');
     this.peers.clear();
     this.signal?.close();
@@ -160,6 +168,10 @@ export class RoomHost {
         for (const sid of m.to) this.endpoints.get(sid)?.deliver(m.type, m.m, encoded);
         return;
       }
+      case 'metadata':
+        this.metadata = m.metadata;
+        this.announce();
+        return;
       case 'released':
         this.tokens.delete(m.sid);
         for (const peer of this.peers.values()) if (peer.sid === m.sid) peer.close('released');
@@ -181,6 +193,13 @@ export class RoomHost {
   /** A seat for this session (its endpoint is registered first: the welcome comes with the seat). */
   seat(sid: string, options: unknown): Promise<void> {
     return this.wait(sid, { t: 'join', sid, options });
+  }
+
+  /** Public online rooms are listed for everyone (private and practice rooms only by code, or not at all). */
+  private announce(): void {
+    if (this.closed || !this.signal || !this.code || !this.metadata) return;
+    const room = parseRoomListing({ ...this.metadata, code: this.code });
+    roomDirectory.announce(room?.visibility === 'public' ? room : null);
   }
 
   // ------------------------------------------------------------------------------------------------ guests
