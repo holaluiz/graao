@@ -3,6 +3,8 @@ dist/
 .env
 .env.*
 !.env.example
+# Publishable Supabase values for the production site build (no secrets).
+!apps/client/.env.production
 *.log
 .vite/
 coverage/

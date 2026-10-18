@@ -79,6 +79,10 @@ por login da Vercel); o **`main` vira produção** em graao.vercel.app (merge do
 configurações do projeto e funcionam (a prévia de `5e0e6eb` foi gerada sem erro). A CLI da Vercel não é necessária.
 O build de produção atual não tem `VITE_SUPABASE_*`: as variáveis não existiam em Production quando ele foi feito.
 
+**Atualização (2026-10-18):** o merge do PR #6 publicou o build novo ainda sem as variáveis (online desligado no
+site). Desde então os dois valores publicáveis ficam commitados em `apps/client/.env.production`, que o Vite lê em
+todo build de produção: o passo 1 abaixo virou opcional (variáveis da Vercel, se existirem, têm prioridade).
+
 Passo a passo:
 
 1. Vercel → projeto `graao` → Settings → Environment Variables → adicionar, marcando **Production** e **Preview**:
