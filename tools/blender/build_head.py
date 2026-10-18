@@ -5,10 +5,15 @@ into the data the character code builds on (apps/client/src/character/build/head
   - the head mesh, scaled and centered so its skull matches the head the rest of the character was fitted to
     (crown to chin 0.298 m, same depth split front/back), in GAME space (meters, +Y up, facing +Z, its left on +X)
     relative to the head center;
-  - per-vertex flags: neck stub (blends into the Neck/Spine2 bones), ears (hidden under long hair);
+  - per-vertex flags: neck stub (blends into the Neck/Spine2 bones), ears (their own body region);
   - the skull as a radial table r(theta, phi) around the center with the ears and the nose filled in (hair, hats and
     beards are laid over this surface, so they hug the new skull);
+  - how far the ears reach in each direction (a softened table), so hair passing over them swells around them;
   - face landmarks (eyes, brows, nose, mouth, ears) where the sculpt carves them, for the face decals and accessories.
+
+The sculpt's lid folds and brow ledge are smoothed first: they were carved for its painted eyes and would cut through
+the game's eye and brow decals. After regenerating, rebuild tools/character/body-ref.json (dump-body.ts) and the
+Blender hair (build_hero.py), which is laid over the same skull table.
 
     blender --background --factory-startup --python tools/blender/build_head.py -- \
         assets/characters/head-base.glb apps/client/src/character/build/head-data.json [preview_dir]

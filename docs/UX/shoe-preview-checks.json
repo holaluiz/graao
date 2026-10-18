@@ -1,0 +1,82 @@
+[
+  {
+    "size": {
+      "width": 390,
+      "height": 844
+    },
+    "actual": [
+      390,
+      844
+    ],
+    "avatarBottom": 481.515625,
+    "controlsTop": 487.515625,
+    "outside": [],
+    "overflow": [
+      0,
+      0
+    ],
+    "cameraHeight": 1.0000000000000049,
+    "fading": 0,
+    "lowestToe": 460.735773736789
+  },
+  {
+    "size": {
+      "width": 1366,
+      "height": 768
+    },
+    "actual": [
+      1366,
+      768
+    ],
+    "avatarBottom": 600,
+    "controlsTop": 612,
+    "outside": [],
+    "overflow": [
+      0,
+      0
+    ],
+    "cameraHeight": 1.0000000000000049,
+    "fading": 0,
+    "lowestToe": 569.0310304488976
+  },
+  {
+    "size": {
+      "width": 1440,
+      "height": 820
+    },
+    "actual": [
+      1440,
+      820
+    ],
+    "avatarBottom": 652,
+    "controlsTop": 664,
+    "outside": [],
+    "overflow": [
+      0,
+      0
+    ],
+    "cameraHeight": 1.0000000000000049,
+    "fading": 0,
+    "lowestToe": 618.478508023274
+  },
+  {
+    "size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "actual": [
+      1920,
+      1080
+    ],
+    "avatarBottom": 892,
+    "controlsTop": 904,
+    "outside": [],
+    "overflow": [
+      0,
+      0
+    ],
+    "cameraHeight": 1.0000000000000049,
+    "fading": 0,
+    "lowestToe": 847.2082229936344
+  }
+]

@@ -1,0 +1,72 @@
+{
+  "measuredAtUtc": "2026-10-18T05:16:18.211Z",
+  "server": "ws://127.0.0.1:2567",
+  "clientNode": "v24.14.0",
+  "protocol": 9,
+  "serverVersion": "0.9.0",
+  "secondsRequested": 8,
+  "warmupMs": 1000,
+  "payloadMeasure": "UTF-8 JSON.stringify of incoming decoded S2C payloads; excludes wire framing",
+  "before": {
+    "mode": "legacyWarmup",
+    "phase": "FREE_ROAM",
+    "humans": 1,
+    "botsInstantiated": 9,
+    "botsPlanned": 9,
+    "rosterSize": 10,
+    "sampleMs": 8014.87,
+    "snapshots": {
+      "count": 127,
+      "jsonBytes": 100577,
+      "messagesPerSecond": 15.85,
+      "jsonKiBPerSecond": 12.255
+    },
+    "events": {
+      "count": 0,
+      "jsonBytes": 0,
+      "messagesPerSecond": 0,
+      "jsonKiBPerSecond": 0
+    },
+    "pongTick": {
+      "samples": 15,
+      "meanMs": 4.3673,
+      "p95Ms": 5.76,
+      "maxMs": 5.93
+    },
+    "incomingJson": {
+      "count": 142,
+      "jsonBytes": 101310
+    }
+  },
+  "after": {
+    "mode": "strictLobby",
+    "phase": "LOBBY",
+    "humans": 1,
+    "botsInstantiated": 0,
+    "botsPlanned": 9,
+    "rosterSize": 1,
+    "sampleMs": 8003.59,
+    "snapshots": {
+      "count": 0,
+      "jsonBytes": 0,
+      "messagesPerSecond": 0,
+      "jsonKiBPerSecond": 0
+    },
+    "events": {
+      "count": 0,
+      "jsonBytes": 0,
+      "messagesPerSecond": 0,
+      "jsonKiBPerSecond": 0
+    },
+    "pongTick": {
+      "samples": 16,
+      "meanMs": 0.0094,
+      "p95Ms": 0.01,
+      "maxMs": 0.01
+    },
+    "incomingJson": {
+      "count": 16,
+      "jsonBytes": 781
+    }
+  }
+}

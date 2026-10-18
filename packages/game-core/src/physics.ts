@@ -22,6 +22,8 @@ export const Group = {
   TERRAIN: 0x0001,
   PROP: 0x0002,
   PLAYER: 0x0004,
+  /** Chests added at run time (per room on the server, whose world is shared: see `CharacterMotor.chestFilter`). */
+  CHEST: 0x0008,
 } as const;
 
 /** Rapier InteractionGroups: membership in the high 16 bits, filter in the low 16 bits. */
@@ -30,6 +32,7 @@ export const groups = (membership: number, filter: number): number => ((membersh
 export const GROUPS_WORLD_QUERY = groups(0xffff, Group.TERRAIN | Group.PROP);
 export const GROUPS_TERRAIN_QUERY = groups(0xffff, Group.TERRAIN);
 export const GROUPS_PROP_QUERY = groups(0xffff, Group.PROP);
+export const GROUPS_CHEST_QUERY = groups(0xffff, Group.CHEST);
 
 /** Quaternion (x, y, z, w) of the rotation whose columns are the given orthonormal axes. */
 export function quatFromBasis(xa: Vec3, ya: Vec3, za: Vec3): { x: number; y: number; z: number; w: number } {
@@ -84,8 +87,16 @@ export interface GamePhysics {
   /** Collider handle → placement (props only). */
   propByCollider: Map<number, Placement>;
   terrainHandle: number;
+  /** Every chest collider currently in this world (any room's). */
+  chestHandles: Set<number>;
   /** Casts a ray; returns distance and collider handle of the first hit, or null. */
   castRay(origin: Vec3, dir: Vec3, maxDist: number, filterGroups?: number): { toi: number; handle: number } | null;
+  /** Like castRay, plus the surface normal at the hit. */
+  castRayNormal(origin: Vec3, dir: Vec3, maxDist: number, filterGroups?: number): { toi: number; handle: number; normal: Vec3 } | null;
+  /** True when a box (half extents, centre, basis side/up/forward) overlaps any collider in `filterGroups`. */
+  boxOverlaps(center: Vec3, half: Vec3, side: Vec3, up: Vec3, forward: Vec3, filterGroups: number): boolean;
+  /** True when a ball overlaps any collider in `filterGroups`. */
+  ballOverlaps(center: Vec3, r: number, filterGroups: number): boolean;
   dispose(): void;
 }
 
@@ -126,11 +137,34 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
     world,
     propByCollider,
     terrainHandle: terrain.handle,
+    chestHandles: new Set(),
     castRay(origin, dir, maxDist, filterGroups = GROUPS_WORLD_QUERY) {
       ray.origin = origin;
       ray.dir = dir;
       const hit = world.castRay(ray, maxDist, true, undefined, filterGroups);
       return hit ? { toi: hit.timeOfImpact, handle: hit.collider.handle } : null;
+    },
+    castRayNormal(origin, dir, maxDist, filterGroups = GROUPS_WORLD_QUERY) {
+      ray.origin = origin;
+      ray.dir = dir;
+      const hit = world.castRayAndGetNormal(ray, maxDist, true, undefined, filterGroups);
+      return hit ? { toi: hit.timeOfImpact, handle: hit.collider.handle, normal: { x: hit.normal.x, y: hit.normal.y, z: hit.normal.z } } : null;
+    },
+    boxOverlaps(center, half, side, up, forward, filterGroups) {
+      let any = false;
+      world.intersectionsWithShape(center, quatFromBasis(side, up, forward), new R.Cuboid(half.x, half.y, half.z), () => {
+        any = true;
+        return false;
+      }, undefined, filterGroups);
+      return any;
+    },
+    ballOverlaps(center, r, filterGroups) {
+      let any = false;
+      world.intersectionsWithShape(center, { x: 0, y: 0, z: 0, w: 1 }, new R.Ball(r), () => {
+        any = true;
+        return false;
+      }, undefined, filterGroups);
+      return any;
     },
     dispose() {
       world.free();
@@ -149,4 +183,35 @@ function colliderDesc(R: Rapier, c: ColliderPrimitive) {
     case 'hull':
       return R.ColliderDesc.convexHull(new Float32Array(c.points));
   }
+}
+
+/** Chest collider half extents (m) and the height of its centre over the base point (a chest is a low box). */
+export const CHEST_COLLIDER = { hx: 0.47, hy: 0.33, hz: 0.32, centerHeight: 0.31 } as const;
+
+/**
+ * Adds a chest's box collider (base point on the ground, up, front). Chest colliders only block characters (the
+ * CHEST group is not in the shot/LOS queries). Call `refreshQueries` once after a batch so scene queries see them.
+ */
+export function addChestCollider(physics: GamePhysics, base: Vec3, up: Vec3, forward: Vec3): number {
+  const { R, world } = physics;
+  const side = { x: up.y * forward.z - up.z * forward.y, y: up.z * forward.x - up.x * forward.z, z: up.x * forward.y - up.y * forward.x };
+  const c = CHEST_COLLIDER;
+  const desc = R.ColliderDesc.cuboid(c.hx, c.hy, c.hz)
+    .setTranslation(base.x + up.x * c.centerHeight, base.y + up.y * c.centerHeight, base.z + up.z * c.centerHeight)
+    .setRotation(quatFromBasis(side, up, forward))
+    .setCollisionGroups(groups(Group.CHEST, 0xffff));
+  const col = world.createCollider(desc);
+  physics.chestHandles.add(col.handle);
+  return col.handle;
+}
+
+export function removeChestCollider(physics: GamePhysics, handle: number): void {
+  const col = physics.world.getCollider(handle);
+  if (col) physics.world.removeCollider(col, false);
+  physics.chestHandles.delete(handle);
+}
+
+/** Rebuilds the broad phase after colliders were added or removed (one step of a world with no dynamic bodies). */
+export function refreshQueries(physics: GamePhysics): void {
+  physics.world.step();
 }

@@ -1,4 +1,7 @@
 import { Document, NodeIO } from '@gltf-transform/core';
+import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
+import { meshopt } from '@gltf-transform/functions';
+import { MeshoptEncoder } from 'meshoptimizer';
 import fs from 'node:fs';
 
 const data = JSON.parse(fs.readFileSync('d:/meus documentos/graao/assets/weapons/weapons-data.json', 'utf8'));
@@ -45,7 +48,9 @@ for (const [wid, wdata] of Object.entries(data)) {
   node.addChild(muzzleNode);
 }
 
-const io = new NodeIO();
+await MeshoptEncoder.ready;
+await doc.transform(meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
+const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.encoder': MeshoptEncoder });
 const glb = await io.writeBinary(doc);
 
 fs.writeFileSync('d:/meus documentos/graao/apps/client/public/assets/v1/weapons/weapons.glb', glb);

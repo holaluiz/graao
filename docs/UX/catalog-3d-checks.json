@@ -1,0 +1,41 @@
+[
+  {
+    "cards": 6,
+    "document": [
+      1366,
+      768
+    ],
+    "outside": [],
+    "outsideOptions": [],
+    "viewport": [
+      1366,
+      768
+    ]
+  },
+  {
+    "cards": 3,
+    "document": [
+      390,
+      844
+    ],
+    "outside": [],
+    "outsideOptions": [],
+    "viewport": [
+      390,
+      844
+    ]
+  },
+  {
+    "cards": 3,
+    "document": [
+      390,
+      667
+    ],
+    "outside": [],
+    "outsideOptions": [],
+    "viewport": [
+      390,
+      667
+    ]
+  }
+]

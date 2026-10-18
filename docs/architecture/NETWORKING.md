@@ -1,5 +1,8 @@
 # Networking
 
+Who runs the room: by default the player who creates it, in their browser (`BROWSER_HOSTED_ROOMS.md`: same room code,
+WebRTC data channels instead of WebSockets, same messages); with `?server=` or `VITE_SERVER_URL`, a dedicated server.
+
 Colyseus 0.18 room `graao_match` per match; room ids are human codes `GR-XXXX` (no 0/O/1/I/L). Browser clients are
 untrusted: they send **intent** only. Typed protocol in `packages/shared/src/protocol.ts` (numeric message ids).
 

@@ -13,3 +13,6 @@ export * from './abilitySystem';
 export * from './draft';
 export * from './deploy';
 export * from './tormenta';
+export * from './loot';
+export * from './chests';
+export * from './lootSystem';

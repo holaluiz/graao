@@ -150,10 +150,10 @@ describe('ability draft', () => {
     expect(d.stage).toBe('reveal');
   });
 
-  it('fits a 1v1 inside the 30–60 s target with the default timings', () => {
-    // Worst case without conflicts: every round times out; one repick per round on top of that is still bounded.
-    const worst = DRAFT_ROUNDS.length * (DRAFT_RULES.pickMs + DRAFT_RULES.revealMs);
-    expect(worst).toBeLessThanOrEqual(60000);
+  it('allows 45 seconds to inspect a choice and 20 seconds to repick after a conflict', () => {
+    expect(DRAFT_RULES).toEqual({ pickMs: 45000, repickMs: 20000, revealMs: 1600 });
+    const d = new AbilityDraft([0, 1], 100);
+    expect(d.endsAt).toBe(45100);
     // Pools cover a unique 1v1 draft.
     expect(BASIC_ABILITIES.length).toBeGreaterThanOrEqual(2 * 3);
     expect(ULTIMATE_ABILITIES.length).toBeGreaterThanOrEqual(2);

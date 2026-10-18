@@ -79,4 +79,11 @@ export class Obstruction {
     const ref = this.view.instances.get(id);
     if (ref) this.active.set(id, { ref, target });
   }
+
+  /** Decorative menus and the appearance preview never inherit a gameplay dissolve. */
+  reset(): void {
+    for (const { ref } of this.active.values()) this.view.setInstanceFade(ref, 0);
+    this.active.clear();
+    this.stats.fading = 0;
+  }
 }

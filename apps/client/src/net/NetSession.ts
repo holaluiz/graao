@@ -1,9 +1,12 @@
 /**
- * Online session over Colyseus: create/join by room code, server clock sync, input batching, authoritative
- * reconciliation of the local player and interpolated remote players. Measures ping, bytes/s and snapshot size.
+ * Online session: create/join by room code, server clock sync, input batching, authoritative reconciliation of the
+ * local player and interpolated remote players. Measures ping, bytes/s and snapshot size.
+ *
+ * Who runs the room: by default the player who creates it (the match room runs in their browser, `RoomHost`; guests
+ * connect to it by WebRTC, `PeerLink`). `?server=` (or a build with `VITE_SERVER_URL`) uses a dedicated Colyseus server.
  */
 import * as THREE from 'three';
-import { Client, type Room } from '@colyseus/sdk';
+import { Client } from '@colyseus/sdk';
 import { createCharacterState, type CharacterState, type PlayerHitTarget } from '@graao/game-core';
 import {
   type ActionState,
@@ -13,6 +16,7 @@ import {
   FACING_SCALE,
   INTERPOLATION_DELAY_MS,
   JoinError,
+  NoticeCode,
   PITCH_SCALE,
   POS_SCALE,
   PROTOCOL_VERSION,
@@ -23,6 +27,12 @@ import {
   type AbilityRequestMsg,
   type AbilityResultMsg,
   type CharacterAppearance,
+  type DevLootMsg,
+  type InteractMsg,
+  type LootDevMsg,
+  type LootResultMsg,
+  type LootStateMsg,
+  type UseItemMsg,
   type DraftStateMsg,
   type EventsMsg,
   type FireMsg,
@@ -38,13 +48,30 @@ import {
 } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import { RemotePlayer } from './RemotePlayer';
-import { serverTarget } from './serverTarget';
+import { LinkClose, type RoomLink } from './RoomLink';
+import { PeerLink } from './host/PeerLink';
+import { RoomHost } from './host/RoomHost';
+import { dedicatedServer, serverTarget } from './serverTarget';
+import { signalingConfigured } from './host/signaling';
 
-function friendlyError(e: unknown): Error {
+export interface RoomConnectOptions {
+  roomName?: string;
+  visibility?: 'public' | 'private';
+  forceDedicated?: boolean;
+  hosted?: boolean;
+  fallbackHosted?: boolean;
+}
+
+function friendlyError(e: unknown, hosted = false): Error {
   const msg = (e as Error)?.message ?? String(e);
-  if (msg.includes(JoinError.VERSION_MISMATCH)) return new Error('Este servidor roda outra versão do graao. Recarregue a página.');
+  if (msg.includes(JoinError.VERSION_MISMATCH)) {
+    return new Error(hosted ? 'Quem criou a sala está com outra versão do graao. Recarreguem a página.' : 'Este servidor roda outra versão do graao. Recarregue a página.');
+  }
   if (/not found|invalid room|roomId/i.test(msg)) return new Error('Nenhuma sala com esse código.');
   if (/full|locked/i.test(msg)) return new Error('Essa sala está cheia.');
+  if (msg.includes(JoinError.IN_PROGRESS)) return new Error('O Draft ou a partida desta sala já começou. Aguarde o retorno ao lobby.');
+  if (/room is gone/i.test(msg)) return new Error('Essa sala foi fechada.');
+  if (hosted) return new Error(msg);
   if (/ECONNREFUSED|Failed to fetch|NetworkError|offline|ERR_CONNECTION|ECONNRESET|timeout/i.test(msg)) {
     return new Error(
       import.meta.env.DEV
@@ -75,14 +102,31 @@ export class NetSession {
   private serverTick = 0;
   private lastServerTickMs = 0;
   private left = false;
+  private closeReason = '';
   private active = false;
+  private presentation = false;
   private latestRoom: RoomStateMsg | null = null;
   private latestSelf: SelfStatusMsg | null = null;
   private latestDraft: DraftStateMsg | null = null;
+  private latestLoot: LootStateMsg | null = null;
 
-  private constructor(private readonly app: GraaoApp, private readonly room: Room, readonly solo = false) {
+  private constructor(
+    private readonly app: GraaoApp,
+    private readonly room: RoomLink,
+    readonly solo = false,
+    /** Set when this player runs the room (created it in host mode). */
+    private readonly host: RoomHost | null = null,
+  ) {
     this.labels.className = 'nameplates';
+    this.labels.hidden = true;
     document.getElementById('ui')!.appendChild(this.labels);
+    // The hosted room failing on its own (not this player leaving) ends the session like a lost connection.
+    if (host) host.onClosed = () => !this.left && app.onDisconnected(this.closeReason || 'A sala foi fechada.');
+  }
+
+  /** This player hosts an online room: everyone plays on this tab. */
+  get hosting(): boolean {
+    return !!this.host?.online;
   }
 
   get remoteCount(): number {
@@ -108,20 +152,43 @@ export class NetSession {
     return [...this.remotes.values()].map((r) => ({ index: r.index, feet: { x: r.pos.x, y: r.pos.y, z: r.pos.z }, alive: r.alive }));
   }
 
-  static async connect(app: GraaoApp, kind: 'create' | 'join' | 'solo', code: string, name: string, bots = 0): Promise<NetSession> {
-    const target = serverTarget();
-    const client = new Client(target.url);
-    // A signed-in player proves who they are with the Supabase access token (the server verifies it); else a guest.
-    // Only the build's own server ever receives it (a ?server= link plays as a guest).
-    const token = target.official ? await app.profile.accessToken() : null;
-    const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(token ? { token } : {}), ...(kind === 'solo' ? { soloBots: bots } : {}) };
-    let room: Room;
-    try {
-      room = kind === 'join' ? await client.joinById(code.toUpperCase(), options) : await client.create(ROOM_NAME, options);
-    } catch (e) {
-      throw friendlyError(e);
+  static async connect(app: GraaoApp, kind: 'create' | 'join' | 'solo', code: string, name: string, bots = 0, settings: RoomConnectOptions = {}): Promise<NetSession> {
+    const roomOptions = kind === 'solo' ? { soloBots: bots, roomName: `Treino de ${name}`, visibility: 'private' as const } : kind === 'create' ? { bots, roomName: settings.roomName, visibility: settings.visibility ?? 'public' as const } : {};
+    let room: RoomLink | undefined;
+    let host: RoomHost | null = null;
+    let useDedicated = !settings.hosted && (settings.forceDedicated || dedicatedServer());
+    if (useDedicated) {
+      const target = serverTarget();
+      const client = new Client(target.url);
+      // A signed-in player proves who they are with the Supabase access token (the server verifies it); else a guest.
+      // Only the build's own server ever receives it (a ?server= link plays as a guest).
+      const token = target.official ? await app.profile.accessToken() : null;
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(token ? { token } : {}), ...roomOptions };
+      try {
+        room = kind === 'join' ? await client.joinById(code.toUpperCase(), options) : await client.create(ROOM_NAME, options);
+      } catch (e) {
+        const message = (e as Error).message || String(e);
+        if (kind === 'join' && settings.fallbackHosted && signalingConfigured() && !/VERSION_MISMATCH|ROOM_FULL|IN_PROGRESS|AUTH_FAILED|BAD_APPEARANCE|full|locked/i.test(message)) useDedicated = false;
+        else throw friendlyError(e);
+      }
     }
-    const s = new NetSession(app, room, kind === 'solo');
+    if (!useDedicated) {
+      // Hosted by a player: no identity token leaves this browser (the host is just another player).
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...roomOptions };
+      try {
+        if (kind === 'join') room = await PeerLink.connect(code.toUpperCase(), options);
+        else {
+          // Solo practice runs here too, offline: only an online room publishes its code.
+          host = await RoomHost.create({ ...options }, kind === 'create');
+          room = await host.connectLocal(options);
+        }
+      } catch (e) {
+        host?.close();
+        throw friendlyError(e, true);
+      }
+    }
+    if (!room) throw new Error('Não foi possível abrir a conexão com a sala.');
+    const s = new NetSession(app, room, kind === 'solo', host);
     try {
       await s.init();
     } catch (e) {
@@ -164,7 +231,17 @@ export class NetSession {
         if (this.active) this.app.onDraftState(m);
       });
       room.onMessage(S2C.MATCH_SUMMARY, (m: MatchSummaryMsg) => this.app.combat.onSummary(m));
-      room.onMessage(S2C.NOTICE, (m: NoticeMsg) => this.app.combat.onNotice(m));
+      room.onMessage(S2C.LOOT_STATE, (m: LootStateMsg) => {
+        this.latestLoot = m;
+        if (this.active) this.app.loot.onState(m);
+      });
+      room.onMessage(S2C.LOOT_RESULT, (m: LootResultMsg) => this.app.loot.onResult(m));
+      room.onMessage(S2C.LOOT_DEV, (m: LootDevMsg) => this.app.loot.onDev(m));
+      room.onMessage(S2C.NOTICE, (m: NoticeMsg) => {
+        if (m.code === NoticeCode.HOST_LEFT || m.code === NoticeCode.ROOM_CLOSED) this.closeReason = m.text;
+        this.app.combat.onNotice(m);
+        this.app.onRoomNotice(m);
+      });
       // A dropped socket is not the end: the SDK reconnects on its own and the server keeps the seat for a while.
       room.onDrop(() => {
         if (!this.left) this.app.onConnectionDrop(true);
@@ -175,7 +252,13 @@ export class NetSession {
       room.onLeave((codeNum: number) => {
         if (!this.left) {
           console.warn('[graao] disconnected', codeNum);
-          this.app.onDisconnected('A conexão com a sala caiu.');
+          this.app.onDisconnected(
+            this.closeReason || (codeNum === LinkClose.HOST_CLOSED
+              ? 'Quem criou a sala saiu: a sala fechou.'
+              : codeNum === LinkClose.REFUSED
+                ? 'A sala não guardou sua vaga a tempo.'
+                : 'A conexão com a sala caiu.'),
+          );
         }
       });
     });
@@ -185,6 +268,17 @@ export class NetSession {
   private tapped = false;
   private tapSocket(): void {
     if (this.tapped) return;
+    if (this.room.meter) {
+      this.tapped = true;
+      this.room.meter(
+        (n) => {
+          this.bytesIn += n;
+          if (this.lastSnapshotBytes === 0 || n <= this.lastSnapshotBytes * 3) this.lastSnapshotBytes = n;
+        },
+        (n) => (this.bytesOut += n),
+      );
+      return;
+    }
     const conn = (this.room as unknown as { connection?: { transport?: { ws?: WebSocket } } }).connection;
     const ws = conn?.transport?.ws;
     if (!ws) return;
@@ -219,6 +313,13 @@ export class NetSession {
   private onRoomState(m: RoomStateMsg): void {
     this.latestRoom = m;
     if (!this.active) return;
+    if (this.presentation) this.syncRemotes(m);
+    this.app.combat.onRoomState(m);
+    this.app.onRoomState(m);
+  }
+
+  /** Lobby and Draft keep only the roster; build opponents for loading or world presentation. */
+  private syncRemotes(m: RoomStateMsg): void {
     const seen = new Set<number>();
     for (const p of m.players) {
       seen.add(p.index);
@@ -227,11 +328,13 @@ export class NetSession {
       if (!r) {
         r = new RemotePlayer(p.index, p.name, p.appearance, this.app.parts, this.app.anims, this.labels);
         this.app.r.scene.add(r.character.root);
+        r.character.root.visible = this.presentation;
         this.remotes.set(p.index, r);
       } else {
         r.character.setAppearance(p.appearance);
         r.setName(p.dropped ? `${p.name} · reconectando…` : p.name);
       }
+      r.setWeapons(p.weapons);
     }
     for (const [i, r] of this.remotes) {
       if (!seen.has(i)) {
@@ -239,7 +342,28 @@ export class NetSession {
         this.remotes.delete(i);
       }
     }
-    this.app.combat.onRoomState(m);
+  }
+
+  setPresentation(on: boolean): void {
+    if (on === this.presentation) return;
+    this.presentation = on;
+    this.labels.hidden = !on;
+    if (on && this.latestRoom) {
+      this.syncRemotes(this.latestRoom);
+      this.app.combat.abilities.onRoomState(this.latestRoom);
+    }
+    for (const remote of this.remotes.values()) remote.character.root.visible = on;
+  }
+
+  /** Build the frozen roster's models during loading without running or showing any opponent. */
+  preparePresentation(): void {
+    if (!this.latestRoom || this.left) return;
+    this.syncRemotes(this.latestRoom);
+    for (const remote of this.remotes.values()) {
+      remote.onRespawn();
+      remote.character.root.visible = false;
+    }
+    this.labels.hidden = true;
   }
 
   /** Initial messages can arrive before the app has entered the session's world. */
@@ -248,6 +372,7 @@ export class NetSession {
     if (this.latestRoom) this.onRoomState(this.latestRoom);
     if (this.latestSelf) this.app.combat.onSelf(this.latestSelf);
     if (this.latestDraft) this.app.onDraftState(this.latestDraft);
+    if (this.latestLoot) this.app.loot.onState(this.latestLoot);
   }
 
   private onSnapshot(m: SnapshotMsg): void {
@@ -327,7 +452,7 @@ export class NetSession {
     }
     const vp = { w: window.innerWidth, h: window.innerHeight };
     const now = this.serverNow();
-    for (const r of this.remotes.values()) r.update(dt, now, INTERPOLATION_DELAY_MS, this.app.r.camera, vp, this.app.world.physics);
+    if (this.presentation) for (const r of this.remotes.values()) r.update(dt, now, INTERPOLATION_DELAY_MS, this.app.r.camera, vp, this.app.world.physics);
   }
 
   sendAppearance(a: CharacterAppearance): void {
@@ -340,6 +465,19 @@ export class NetSession {
 
   sendAbility(m: AbilityRequestMsg): void {
     if (!this.left) this.room.send(C2S.ABILITY_REQUEST, m);
+  }
+
+  sendInteract(m: InteractMsg): void {
+    if (!this.left) this.room.send(C2S.INTERACT, m);
+  }
+
+  sendUseItem(m: UseItemMsg): void {
+    if (!this.left) this.room.send(C2S.USE_ITEM, m);
+  }
+
+  /** Dev builds only (the server ignores it in production). */
+  sendDevLoot(m: DevLootMsg): void {
+    if (!this.left && import.meta.env.DEV) this.room.send(C2S.DEV_LOOT, m);
   }
 
   sendReload(): void {
@@ -361,6 +499,10 @@ export class NetSession {
   sendReady(ready: boolean): void {
     if (!this.left) this.room.send(C2S.READY, { r: ready ? 1 : 0 });
   }
+
+  sendStartMatch(): void { if (!this.left) this.room.send(C2S.START_MATCH, {}); }
+  sendRoomSettings(bots: number): void { if (!this.left) this.room.send(C2S.ROOM_SETTINGS, { bots }); }
+  sendPrepared(id: number, ok: boolean, error?: string): void { if (!this.left) this.room.send(C2S.PREPARED, { id, ok, ...(error ? { error } : {}) }); }
 
   sendReturnLobby(): void {
     if (!this.left) this.room.send(C2S.RETURN_LOBBY, {});

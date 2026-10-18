@@ -1,0 +1,102 @@
+/* Loot HUD: prompt, replacement card, consumable belt, use bar, pickup feed, item labels. Rarity colour is always
+   paired with a symbol and a name or pips. */
+
+.loot-hud { position: absolute; inset: 0; pointer-events: none; }
+
+/* [F] prompt, under the reticle (above the notices). */
+/* Beside the reticle (right), clear of the notices under it and of the ability bar at the bottom. */
+.loot-prompt { position: absolute; left: calc(50% + 58px); top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 9px;
+  padding: 6px 14px 6px 6px; border: 2.5px solid var(--ink); border-radius: 14px; background: rgba(255, 246, 226, .94); box-shadow: 0 3px 0 var(--ink);
+  max-width: min(330px, calc(50vw - 74px)); }
+.loot-prompt.pop { animation: loot-pop-side .18s ease-out; }
+.lp-key, .loot-choice kbd, .belt-key { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 8px; background: var(--ink); color: var(--paper);
+  font: 900 14px var(--font); box-shadow: 0 2px 0 rgba(0, 0, 0, .35); }
+.lp-text { display: grid; gap: 1px; min-width: 0; }
+.lp-action { font-weight: 900; font-size: 15px; letter-spacing: .02em; white-space: nowrap; }
+.lp-item { display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: 12px; white-space: nowrap; overflow: hidden; }
+.lp-rarity, .lc-rarity { flex: none; padding: 1px 7px; border-radius: 999px; border: 2px solid var(--ink); background: var(--rarity); color: var(--ink); font-size: 11px; font-weight: 900; }
+.lp-name { overflow: hidden; text-overflow: ellipsis; }
+.lp-note { opacity: .7; font-style: italic; }
+
+/* Weapon replacement card. */
+.loot-choice { position: absolute; left: min(calc(50% + 58px), calc(100vw - 376px)); top: calc(50% - 40px); transform: translateY(-50%); width: min(360px, calc(100vw - 32px)); padding: 12px 14px 10px;
+  border: 2.5px solid var(--ink); border-top: 8px solid var(--rarity); border-radius: 16px; background: rgba(255, 246, 226, .97); box-shadow: 0 4px 0 var(--ink); }
+.loot-choice.pop { animation: loot-pop-side .2s ease-out; }
+.lc-title { font-weight: 900; font-size: 11px; letter-spacing: .16em; opacity: .7; }
+.lc-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 3px 0 8px; }
+.lc-name { font-weight: 900; font-size: 19px; }
+.lc-rows { display: grid; gap: 5px; }
+.lc-row { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 8px; font-weight: 800; font-size: 13px; }
+.lc-row kbd { min-width: 26px; height: 26px; font-size: 13px; }
+.lc-old { justify-self: end; opacity: .7; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-row.cancel { opacity: .75; }
+
+/* Use bar (a consumable in progress), just under the reticle. */
+.loot-use { position: absolute; left: 50%; top: calc(50% + 30px); transform: translateX(-50%); display: grid; gap: 3px; justify-items: center; }
+.lu-text { font-weight: 900; font-size: 12px; letter-spacing: .06em; color: #fff; text-shadow: 0 1px 0 var(--ink), 0 0 6px rgba(42, 33, 48, .8); }
+.lu-track { width: 120px; height: 6px; border-radius: 6px; background: rgba(42, 33, 48, .5); border: 1.5px solid var(--ink); overflow: hidden; }
+.lu-track > i { display: block; height: 100%; width: 0; background: #ff6f84; }
+.loot-use[data-kind='shield'] .lu-track > i { background: #6fbaff; }
+.loot-use[data-kind='mana'] .lu-track > i { background: #a98bff; }
+
+/* Consumable belt, above the weapon cards. */
+.loot-belt { position: absolute; right: 22px; bottom: 150px; display: flex; gap: 6px; }
+.belt-slot { position: relative; display: grid; grid-template-columns: auto auto; align-items: center; gap: 4px; padding: 4px 8px 4px 4px; border: 2.5px solid var(--ink);
+  border-radius: 12px; background: rgba(255, 246, 226, .92); overflow: hidden; }
+.belt-slot.none { opacity: .45; }
+.belt-slot.gain { animation: loot-pop .3s ease-out; }
+.belt-key { min-width: 20px; height: 20px; font-size: 11px; border-radius: 6px; }
+.belt-icon { width: 22px; height: 22px; grid-row: 1 / span 2; grid-column: 2; }
+.belt-icon .fill { stroke: var(--ink); stroke-width: 1.6; }
+.belt-icon .mark { fill: none; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.c-health .belt-icon .fill { fill: #ff6f84; }
+.c-shield .belt-icon .fill { fill: #6fbaff; }
+.c-mana .belt-icon .fill { fill: #a98bff; }
+.belt-count { position: absolute; right: 4px; bottom: 1px; font-weight: 900; font-size: 13px; text-shadow: 0 0 3px var(--paper), 0 0 3px var(--paper); }
+.belt-fill { position: absolute; inset: 0; transform-origin: bottom; transform: scaleY(0); background: rgba(255, 211, 110, .45); pointer-events: none; }
+.belt-slot.using { border-color: var(--orange); }
+
+/* Pickup feed, above the belt. */
+.loot-feed { position: absolute; right: 22px; bottom: 196px; display: grid; gap: 4px; justify-items: end; }
+.loot-feed-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 10px; border: 2px solid var(--ink); border-left: 6px solid var(--rarity, var(--ink));
+  background: rgba(255, 246, 226, .94); font-weight: 900; font-size: 13px; animation: loot-in .22s ease-out; transition: opacity .5s, transform .5s; }
+.loot-feed-row.out { opacity: 0; transform: translateX(14px); }
+.lf-sym { color: var(--rarity); -webkit-text-stroke: .7px var(--ink); }
+.lf-sub { font-weight: 800; font-size: 11px; opacity: .65; }
+
+/* Floating labels over items on the ground (positioned every frame). */
+.loot-labels { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+.loot-label { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 5px; padding: 2px 8px 2px 6px; border-radius: 9px; border: 2px solid var(--ink);
+  border-bottom: 4px solid var(--rarity); background: rgba(255, 246, 226, .9); font: 900 11px var(--font); color: var(--ink); white-space: nowrap; will-change: transform; }
+.loot-label.target { font-size: 13px; background: #fff8e8; box-shadow: 0 0 0 2px var(--rarity); }
+.ll-sym { color: var(--rarity); -webkit-text-stroke: .7px var(--ink); }
+.ll-pips { color: var(--rarity); -webkit-text-stroke: .5px var(--ink); letter-spacing: -1px; }
+
+.hud[data-mode='ufo'] .loot-hud, .hud[data-mode='drop'] .loot-hud { display: none; }
+
+@keyframes loot-pop { 0% { transform: translateX(-50%) scale(.9); opacity: .4; } 100% { transform: translateX(-50%) scale(1); opacity: 1; } }
+@keyframes loot-pop-side { 0% { transform: translateY(-50%) translateX(-8px) scale(.94); opacity: .4; } 100% { transform: translateY(-50%); opacity: 1; } }
+.belt-slot.gain { animation-name: loot-gain; }
+@keyframes loot-gain { 0% { transform: scale(1.18); } 100% { transform: scale(1); } }
+@keyframes loot-in { 0% { transform: translateX(18px); opacity: 0; } 100% { transform: none; opacity: 1; } }
+
+@media (max-width: 720px) {
+  .loot-belt { right: 16px; bottom: 138px; }
+  .loot-feed { right: 16px; bottom: 182px; }
+  /* Narrow screens: under the reticle, above the notices. */
+  .loot-prompt { left: 50%; top: calc(50% + 100px); transform: translateX(-50%); max-width: calc(100vw - 32px); }
+  .loot-prompt.pop { animation-name: loot-pop; }
+  .loot-choice { left: 50%; transform: translateX(-50%); top: calc(50% + 70px); }
+  .loot-choice.pop { animation-name: loot-pop; }
+}
+@media (max-height: 620px) {
+  .loot-belt { bottom: 126px; }
+  .loot-feed { display: none; }
+}
+
+/* Dev only: chest ids, states and contents, authored spots (LootDirector.debug). */
+.loot-debug { position: fixed; inset: 0; pointer-events: none; z-index: 3; }
+.loot-debug pre { position: absolute; left: 0; top: 0; margin: 0; padding: 3px 6px; border-radius: 6px; font: 700 10px/1.25 ui-monospace, Consolas, monospace;
+  background: rgba(20, 16, 26, .82); color: #fff3c4; white-space: pre; }
+.loot-debug pre.spot { background: rgba(30, 90, 50, .78); color: #e8ffe8; }
+.loot-debug pre.spot.bad { background: rgba(160, 40, 40, .85); color: #fff; }

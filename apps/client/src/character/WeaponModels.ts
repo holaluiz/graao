@@ -6,7 +6,7 @@
  * one inverted ink shell per model matches the characters' comic-outline aesthetic.
  */
 import * as THREE from 'three';
-import { WEAPON_SLOTS, type WeaponId } from '@graao/game-data';
+import { STARTING_KIT, WEAPON_SLOT_COUNT, type WeaponId } from '@graao/game-data';
 import { createStylizedMaterial } from '../render/materials/GRAStylizedMaterial';
 import { INK_STATE } from '../render/InkPass';
 import { decodeBakedWeapons, type BakedWeapon } from './WeaponData';
@@ -25,6 +25,12 @@ function data(): Record<WeaponId, BakedWeapon> {
     inkMaterial = new THREE.MeshBasicMaterial({ color: INK, side: THREE.BackSide, vertexColors: false, fog: true });
   }
   return cache;
+}
+
+/** A weapon's shared geometry and material (pickups on the ground draw it instanced). */
+export function weaponDrawable(id: WeaponId): { geometry: THREE.BufferGeometry; material: THREE.ShaderMaterial } {
+  const d = data()[id] ?? data().sunbeam;
+  return { geometry: d.body, material: material! };
 }
 
 export interface WeaponModel {
@@ -52,29 +58,55 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
  * Mount transform from the weapon frame to the canonical RightHand bone (bind: T-pose, fingers along −X, palm −Y,
  * thumb +Z). Held like a real pistol: the grip runs across the palm from the index side down past the little finger
  * (weapon −Y → hand −Z), the top of the weapon sits on the thumb side (weapon +Y → hand +Z) and the barrel continues
- * the line of the forearm (weapon +Z → hand −X). The grip's middle lands inside the closed fist (GraaoCharacter curls
- * the fingers around it).
+ * the line of the forearm (weapon +Z → hand −X). The grip runs through the middle of the closed fist (GraaoCharacter
+ * curls the fingers around it) and comes out under the little finger.
  */
 export const HAND_MOUNT = {
-  position: new THREE.Vector3(-0.074, -0.036, 0.036),
+  position: new THREE.Vector3(-0.066, -0.004, 0.036),
   rotation: new THREE.Euler().setFromRotationMatrix(
     new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0)),
   ),
 };
 
-/** Both weapons of one character, mounted in the right hand; only the equipped slot is visible. */
+/**
+ * The weapons of one character (E and Q), mounted in the right hand; only the equipped slot is visible. Slots hold
+ * any weapon of the pack (picked up, swapped, dropped): a model is built the first time a weapon shows up in this
+ * hand and reused after that (shared geometry and materials, so it costs one small group).
+ */
 export class WeaponHolder {
   readonly group = new THREE.Group();
-  readonly models: WeaponModel[];
+  private readonly cache = new Map<WeaponId, WeaponModel>();
+  readonly ids: (WeaponId | null)[] = new Array<WeaponId | null>(WEAPON_SLOT_COUNT).fill(null);
   slot = 0;
 
-  constructor() {
+  constructor(ids: (WeaponId | null)[] = STARTING_KIT.weapons) {
     this.group.name = 'weaponMount';
     this.group.position.copy(HAND_MOUNT.position);
     this.group.rotation.copy(HAND_MOUNT.rotation);
-    this.models = (WEAPON_SLOTS as WeaponId[]).map((id) => createWeaponModel(id));
-    for (const m of this.models) this.group.add(m.root);
-    this.setSlot(0);
+    this.setWeapons(ids);
+  }
+
+  private model(id: WeaponId): WeaponModel {
+    let m = this.cache.get(id);
+    if (!m) {
+      m = createWeaponModel(id);
+      this.cache.set(id, m);
+      this.group.add(m.root);
+    }
+    return m;
+  }
+
+  /** What is in each slot (server truth). */
+  setWeapons(ids: readonly (string | null)[]): void {
+    let changed = false;
+    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+      const id = (ids[i] || null) as WeaponId | null;
+      if (id !== this.ids[i]) {
+        this.ids[i] = id;
+        changed = true;
+      }
+    }
+    if (changed) this.setSlot(this.slot);
   }
 
   /** Attaches to a character's canonical RightHand bone (kept across skeleton rebuilds by GraaoCharacter). */
@@ -84,12 +116,15 @@ export class WeaponHolder {
 
   setSlot(slot: number): void {
     this.slot = slot;
-    this.models.forEach((m, i) => (m.root.visible = i === slot));
+    const id = this.ids[slot];
+    const show = id ? this.model(id) : null;
+    for (const m of this.cache.values()) m.root.visible = m === show;
   }
 
   /** World position of the equipped weapon's muzzle (call after the character's world matrices are current). */
   muzzleWorld(out: THREE.Vector3): THREE.Vector3 {
-    return this.models[this.slot]!.muzzle.getWorldPosition(out);
+    const id = this.ids[this.slot];
+    return id ? this.model(id).muzzle.getWorldPosition(out) : this.group.getWorldPosition(out);
   }
 
   setVisible(v: boolean): void {
@@ -97,7 +132,7 @@ export class WeaponHolder {
   }
 }
 
-/** Triangles of both weapon models (F3 overlay). */
+/** Triangles of every weapon model of the pack (F3 overlay). */
 export function weaponTriangles(): number {
   const d = data();
   return Object.values(d).reduce((n, m) => n + (m.body.getAttribute('position').count + m.ink.getAttribute('position').count) / 3, 0);

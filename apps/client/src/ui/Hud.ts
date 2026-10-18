@@ -3,7 +3,9 @@
  *
  *   bottom-left   Fôlego bubbles (only under water / catching breath), Escudo / Vida / Mana (+ status chips: LENTO)
  *   bottom-centre ability slots 1 2 3 + Ultimate 4: icon (shape per ability), Mana cost, cooldown sweep
- *   bottom-right  E / Q weapon slots with ammo and reload progress
+ *   bottom-right  E / Q weapon slots (rarity mark, magazine · reserve, reload progress); above them the
+ *                 consumable belt Z / X / C and the pickup feed (LootHud)
+ *   centre-low    interaction prompt [F], the weapon replacement card, the use bar (LootHud)
  *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs
  *   top           place name, match status chip, room code, kill feed
  *   overlays      countdown / banners, elimination screen (the results card is its own screen: ResultsScreen)
@@ -24,6 +26,9 @@ import { TormentaMap, type TormentaMapView } from './TormentaMap';
 import '../styles/tormenta.css';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+/** The reticle follows the spread cone at this fraction of its true screen size: it still opens and closes with the
+ *  weapon, aiming and bloom, but stays compact (the full cone of the Rajada de Pétalas covered a big slice of the screen). */
+const RETICLE_SCALE = 0.35;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?: HTMLElement, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -54,6 +59,11 @@ export interface WeaponSlotView {
   name: string;
   ammo: number;
   magazine: number;
+  /** Rounds left in the reserve of this weapon's ammunition. */
+  reserve: number;
+  /** Rarity colour and symbol (never colour alone); absent for an empty slot. */
+  rarity?: { color: string; symbol: string; name: string };
+  empty?: boolean;
 }
 
 export interface AbilitySlotView {
@@ -144,10 +154,10 @@ export class Hud {
   private readonly reticleCross = svg(
     'reticle cross',
     '-50 -50 100 100',
-    '<g class="ticks"><rect class="t t-up" x="-2" y="-22" width="4" height="12" rx="2"/><rect class="t t-down" x="-2" y="10" width="4" height="12" rx="2"/>' +
-      '<rect class="t t-left" x="-22" y="-2" width="12" height="4" rx="2"/><rect class="t t-right" x="10" y="-2" width="12" height="4" rx="2"/></g><circle class="dot" r="2.2"/>',
+    '<g class="ticks"><rect class="t t-up" x="-1.5" y="-12" width="3" height="7" rx="1.5"/><rect class="t t-down" x="-1.5" y="5" width="3" height="7" rx="1.5"/>' +
+      '<rect class="t t-left" x="-12" y="-1.5" width="7" height="3" rx="1.5"/><rect class="t t-right" x="5" y="-1.5" width="7" height="3" rx="1.5"/></g><circle class="dot" r="1.8"/>',
   );
-  private readonly reticleCircle = svg('reticle circle', '-50 -50 100 100', '<circle class="ring" r="16"/><circle class="dot" r="2.2"/>');
+  private readonly reticleCircle = svg('reticle circle', '-50 -50 100 100', '<circle class="ring" r="8"/><circle class="dot" r="1.8"/>');
   private readonly blocked = svg('blocked', '-50 -50 100 100', '<path d="M-7 -7 L7 7 M7 -7 L-7 7"/>');
   private readonly hitmarker = svg(
     'hitmarker',
@@ -182,7 +192,7 @@ export class Hud {
 
   // Weapons.
   private readonly weaponsEl = el('div', 'weapons', this.el);
-  private readonly slots: { root: HTMLElement; name: HTMLElement; ammo: HTMLElement; fill: HTMLElement; key: HTMLElement }[] = [];
+  private readonly slots: { root: HTMLElement; name: HTMLElement; ammo: HTMLElement; fill: HTMLElement; key: HTMLElement; rarity: HTMLElement; last: string }[] = [];
   private readonly ammoHint = el('div', 'ammo-hint', this.el);
 
   // Overlays.
@@ -256,11 +266,13 @@ export class Hud {
     for (let i = 0; i < 2; i++) {
       const root = el('div', 'slot', this.weaponsEl);
       const key = el('div', 'slot-key', root);
-      const name = el('div', 'slot-name', root);
+      const head = el('div', 'slot-head', root);
+      const rarity = el('span', 'slot-rarity', head);
+      const name = el('span', 'slot-name', head);
       const ammo = el('div', 'slot-ammo', root);
       const track = el('div', 'slot-reload', root);
       const fill = el('i', '', track);
-      this.slots.push({ root, name, ammo, fill, key });
+      this.slots.push({ root, name, ammo, fill, key, rarity, last: '' });
     }
   }
 
@@ -441,9 +453,10 @@ export class Hud {
     this.reticleCross.style.display = visible && profile === 'dot-cross' ? '' : 'none';
     this.reticleCircle.style.display = visible && profile === 'circle' ? '' : 'none';
     this.blocked.style.display = visible && blocked ? '' : 'none';
-    const s = Math.max(0, spreadPx);
+    const s = Math.max(0, spreadPx) * RETICLE_SCALE;
     this.reticleCross.style.setProperty('--spread', `${s}px`);
-    this.reticleCircle.style.setProperty('--ring', `${1 + s / 18}`);
+    // The ring follows the cone; its radius changes (not a scale), so the stroke stays thin at any spread.
+    this.reticleCircle.style.setProperty('--ring', `${Math.max(8, s)}px`);
   }
 
   /** Server-confirmed hit by the local player. The strongest kind decides the shape; abilities add their diamonds. */
@@ -522,17 +535,27 @@ export class Hud {
   setWeapons(active: number, slots: WeaponSlotView[], reload: number): void {
     slots.forEach((s, i) => {
       const v = this.slots[i]!;
-      v.root.classList.toggle('active', i === active);
-      v.key.textContent = s.key;
-      v.name.textContent = s.name;
-      v.ammo.textContent = `${s.ammo}/${s.magazine}`;
-      v.root.classList.toggle('dry', s.ammo === 0);
+      const key = `${i === active}|${s.key}|${s.name}|${s.ammo}|${s.reserve}|${s.rarity?.name}|${s.empty}`;
+      if (key !== v.last) {
+        // A new weapon in this slot: a short pop so the change reads.
+        if (v.last && v.name.textContent !== s.name) replay(v.root, 'fresh');
+        v.last = key;
+        v.root.classList.toggle('active', i === active && !s.empty);
+        v.root.classList.toggle('empty', !!s.empty);
+        v.key.textContent = s.key;
+        v.name.textContent = s.empty ? 'vazio' : s.name;
+        v.rarity.textContent = s.rarity?.symbol ?? '';
+        v.rarity.title = s.rarity?.name ?? '';
+        v.root.style.setProperty('--rarity', s.rarity?.color ?? 'transparent');
+        v.ammo.innerHTML = s.empty ? '<small>pegue uma arma</small>' : `${s.ammo}<small> / ${s.reserve}</small>`;
+        v.root.classList.toggle('dry', !s.empty && s.ammo === 0);
+      }
       v.fill.style.width = i === active && reload >= 0 ? `${reload * 100}%` : '0%';
     });
     const a = slots[active];
-    const dry = !!a && a.ammo === 0 && reload < 0;
+    const dry = !!a && !a.empty && a.ammo === 0 && reload < 0;
     this.ammoHint.hidden = !(dry || reload >= 0);
-    this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : 'SEM MUNIÇÃO · R';
+    this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : a && a.reserve <= 0 ? 'SEM MUNIÇÃO · procure caixas de munição' : 'SEM MUNIÇÃO · R';
   }
 
   /** Ability slots 1–4. The views mirror the server (cooldowns, Mana, wind-up); the HUD never decides. */

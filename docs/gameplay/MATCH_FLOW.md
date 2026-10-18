@@ -18,6 +18,14 @@ see `ABILITY_DRAFT.md`) and are unit-tested; the
 room (`GraaoMatchRoom`) applies them. `ROOM_STATE` carries `phase`, `startsAt` (weapons unlock), `phaseEndsAt`
 (results end), `winner` and per-player `ready`, `inMatch`, `kills`, `deaths`.
 
+- **Who hosts.** *Criar partida* runs the room in the creator's browser (friends join by code, peer to peer);
+  *Jogar solo* runs it there too, offline. See `docs/architecture/BROWSER_HOSTED_ROOMS.md`.
+- **Bots.** *Jogar solo* with N bots creates a private room (`soloBots`: one person, nobody else joins). *Criar
+  partida* with N bots creates an ordinary room joinable by code (`bots`): bots fill the free seats (10 in all) and
+  are always ready, so the match starts when every person is. In the warmup a person joining a full room takes the
+  newest bot's seat; seats people leave go back to bots, but only in the warmup (never mid-match). While a match runs
+  in a room with every seat taken, newcomers get `ROOM_FULL` until it ends. Bots draft, follow the first person out of
+  the UFO and fight the nearest player. Matches with bots are practice: not saved to anyone's history.
 - Rooms created with `skipDraft` (dev/tests) go from READY straight to the UFO with the warmup loadouts; `skipUfo`
   skips the deployment (the match starts on the spread spawns below). The UFO itself: `UFO_DEPLOYMENT.md`.
 - An opponent leaving during the deployment hands the win to whoever is still there, like during the match.

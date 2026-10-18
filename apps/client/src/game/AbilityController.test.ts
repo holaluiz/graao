@@ -3,7 +3,7 @@ import { ABILITIES, ABILITY_RULES } from '@graao/game-data';
 import { AbilityReject, type SelfStatusMsg } from '@graao/shared';
 import { AbilityController } from './AbilityController';
 
-const status = (o: Partial<SelfStatusMsg>): SelfStatusMsg => ({ weapon: 0, ammo: [24, 4], reloading: false, reloadEndsAt: 0, alive: true, respawnAt: 0, shotSeq: -1, mana: 100, cd: [0, 0, 0, 0], castUntil: 0, abilitySeq: -1, slowUntil: 0, slow: 100, ...o });
+const status = (o: Partial<SelfStatusMsg>): SelfStatusMsg => ({ weapon: 0, ammo: [24, 4], reloading: false, reloadEndsAt: 0, alive: true, respawnAt: 0, shotSeq: -1, mana: 100, cd: [0, 0, 0, 0], castUntil: 0, abilitySeq: -1, slowUntil: 0, slow: 100, wpn: ['sunbeam', ''], res: [48, 0, 0], inv: [0, 0, 0], useUntil: 0, useItem: -1, ...o });
 const same = (t: number) => t;
 
 describe('AbilityController (client mirror, never the judge)', () => {

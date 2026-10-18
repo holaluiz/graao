@@ -1,49 +1,178 @@
 /**
- * Ambience: the outdoor bed under everything, synthesized like the rest of graao's audio (no files).
+ * Ambience: the outdoor bed under everything. Plays the recorded wind audio bed and beach/waves bed seamlessly
+ * on loop.
  *
- *   - Wind: two decorrelated noise beds (left/right) through a low-pass "air" and a band-pass "gust" whose level and
- *     color follow a slow gust curve, plus a faint leaf rustle that only rises with the strongest gusts.
- *   - Birds: calls scheduled at random intervals, each placed somewhere around the listener (pan + distance
- *     low-pass): a melodic whistle (thrush-like), a quick chirp trill, and the bem-te-vi's three-note call.
+ *   - Wind: global outdoor bed, volume fades with altitude (0 in orbit, 1 on ground).
+ *   - Beach / Sea: shoreline bed, volume fades with proximity to water/beach (1 on beach/water, 0 inland).
  *
- * `update(level, time)` runs every frame: `level` fades the whole bed (0 in orbit, 1 on the ground).
+ * A synthesized noise bed is kept as an offline/network fallback if the recorded asset is unavailable.
+ * Procedural bird calls (whistle, trill, bem-te-vi) remain available via `enableBirds`.
  */
 export class Ambience {
   private readonly out: GainNode;
-  private readonly air: BiquadFilterNode;
-  private readonly gust: BiquadFilterNode;
-  private readonly gustGain: GainNode;
-  private readonly rustle: GainNode;
-  private nextBird = 0;
-  private level = 0;
+  private readonly windGain: GainNode;
+  private readonly beachGain: GainNode;
 
-  constructor(private readonly ctx: AudioContext, destination: AudioNode, private readonly noise: AudioBuffer) {
+  private windSource: AudioBufferSourceNode | null = null;
+  private beachSource: AudioBufferSourceNode | null = null;
+  private windLevel = 0;
+  private beachLevel = 0;
+
+  // Fallback procedural nodes (only wired if wind audio fails or is pending)
+  private fallbackAir: BiquadFilterNode | null = null;
+  private fallbackGust: BiquadFilterNode | null = null;
+  private fallbackGustGain: GainNode | null = null;
+  private fallbackRustle: GainNode | null = null;
+  private fallbackGain: GainNode | null = null;
+
+  private nextBird = 0;
+  enableBirds = false;
+
+  constructor(
+    private readonly ctx: AudioContext,
+    destination: AudioNode,
+    windBuffer?: AudioBuffer | null,
+    beachBuffer?: AudioBuffer | null,
+    windUrl?: string,
+    beachUrl?: string,
+    private readonly fallbackNoise?: AudioBuffer | null,
+  ) {
     this.out = ctx.createGain();
-    this.out.gain.value = 0;
+    this.out.gain.value = 1;
     this.out.connect(destination);
 
-    this.air = ctx.createBiquadFilter();
-    this.air.type = 'lowpass';
-    this.air.frequency.value = 420;
-    this.air.Q.value = 0.4;
+    this.windGain = ctx.createGain();
+    this.windGain.gain.value = 0;
+    this.windGain.connect(this.out);
+
+    this.beachGain = ctx.createGain();
+    this.beachGain.gain.value = 0;
+    this.beachGain.connect(this.out);
+
+    if (windBuffer) {
+      this.setWindBuffer(windBuffer);
+    } else if (windUrl) {
+      void this.loadWindFromUrl(windUrl);
+    } else if (fallbackNoise) {
+      this.initFallback(fallbackNoise);
+    }
+
+    if (beachBuffer) {
+      this.setBeachBuffer(beachBuffer);
+    } else if (beachUrl) {
+      void this.loadBeachFromUrl(beachUrl);
+    }
+
+    this.nextBird = ctx.currentTime + 1.5;
+  }
+
+  /** Attaches and starts the recorded wind buffer looping seamlessly. */
+  setWindBuffer(buffer: AudioBuffer): void {
+    if (this.windSource) {
+      try {
+        this.windSource.stop();
+        this.windSource.disconnect();
+      } catch {
+        /* no-op */
+      }
+      this.windSource = null;
+    }
+
+    // Disable fallback synth if active
+    if (this.fallbackGain) {
+      this.fallbackGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2);
+    }
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.connect(this.windGain);
+    const offset = buffer.duration > 0 ? Math.random() * buffer.duration : 0;
+    src.start(0, offset);
+    this.windSource = src;
+  }
+
+  /** Attaches and starts the recorded beach/water buffer looping seamlessly. */
+  setBeachBuffer(buffer: AudioBuffer): void {
+    if (this.beachSource) {
+      try {
+        this.beachSource.stop();
+        this.beachSource.disconnect();
+      } catch {
+        /* no-op */
+      }
+      this.beachSource = null;
+    }
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.connect(this.beachGain);
+    const offset = buffer.duration > 0 ? Math.random() * buffer.duration : 0;
+    src.start(0, offset);
+    this.beachSource = src;
+  }
+
+  setBuffer(buffer: AudioBuffer): void {
+    this.setWindBuffer(buffer);
+  }
+
+  private async loadWindFromUrl(url: string): Promise<void> {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const arrayBuf = await res.arrayBuffer();
+      const decoded = await this.ctx.decodeAudioData(arrayBuf);
+      this.setWindBuffer(decoded);
+    } catch (e) {
+      console.warn('[Ambience] Failed to load wind audio, using fallback:', e);
+      if (this.fallbackNoise && !this.windSource) {
+        this.initFallback(this.fallbackNoise);
+      }
+    }
+  }
+
+  private async loadBeachFromUrl(url: string): Promise<void> {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const arrayBuf = await res.arrayBuffer();
+      const decoded = await this.ctx.decodeAudioData(arrayBuf);
+      this.setBeachBuffer(decoded);
+    } catch (e) {
+      console.warn('[Ambience] Failed to load beach audio:', e);
+    }
+  }
+
+  private initFallback(noise: AudioBuffer): void {
+    if (this.fallbackGain) return;
+    const ctx = this.ctx;
+    this.fallbackGain = ctx.createGain();
+    this.fallbackGain.gain.value = 1;
+    this.fallbackGain.connect(this.windGain);
+
+    this.fallbackAir = ctx.createBiquadFilter();
+    this.fallbackAir.type = 'lowpass';
+    this.fallbackAir.frequency.value = 420;
+    this.fallbackAir.Q.value = 0.4;
     const airGain = ctx.createGain();
     airGain.gain.value = 0.5;
-    this.air.connect(airGain).connect(this.out);
+    this.fallbackAir.connect(airGain).connect(this.fallbackGain);
 
-    this.gust = ctx.createBiquadFilter();
-    this.gust.type = 'bandpass';
-    this.gust.frequency.value = 700;
-    this.gust.Q.value = 0.8;
-    this.gustGain = ctx.createGain();
-    this.gustGain.gain.value = 0.2;
-    this.gust.connect(this.gustGain).connect(this.out);
+    this.fallbackGust = ctx.createBiquadFilter();
+    this.fallbackGust.type = 'bandpass';
+    this.fallbackGust.frequency.value = 700;
+    this.fallbackGust.Q.value = 0.8;
+    this.fallbackGustGain = ctx.createGain();
+    this.fallbackGustGain.gain.value = 0.2;
+    this.fallbackGust.connect(this.fallbackGustGain).connect(this.fallbackGain);
 
     const rustleFilter = ctx.createBiquadFilter();
     rustleFilter.type = 'highpass';
     rustleFilter.frequency.value = 3200;
-    this.rustle = ctx.createGain();
-    this.rustle.gain.value = 0;
-    rustleFilter.connect(this.rustle).connect(this.out);
+    this.fallbackRustle = ctx.createGain();
+    this.fallbackRustle.gain.value = 0;
+    rustleFilter.connect(this.fallbackRustle).connect(this.fallbackGain);
 
     for (const [pan, rate] of [[-0.7, 0.91], [0.7, 1.07]] as const) {
       const src = ctx.createBufferSource();
@@ -53,28 +182,35 @@ export class Ambience {
       const p = ctx.createStereoPanner();
       p.pan.value = pan;
       src.connect(p);
-      p.connect(this.air);
-      p.connect(this.gust);
+      p.connect(this.fallbackAir);
+      p.connect(this.fallbackGust);
       p.connect(rustleFilter);
       src.start(0, Math.random());
     }
-    this.nextBird = ctx.currentTime + 1.5;
   }
 
-  update(level: number, time: number): void {
+  update(windLevel: number, beachLevel = 0, time = 0): void {
     const t = this.ctx.currentTime;
-    if (Math.abs(level - this.level) > 0.01) {
-      this.level = level;
-      this.out.gain.setTargetAtTime(level * 0.55, t, 0.6);
+    if (Math.abs(windLevel - this.windLevel) > 0.01) {
+      this.windLevel = windLevel;
+      this.windGain.gain.setTargetAtTime(windLevel * 0.75, t, 0.5);
     }
-    // Gusts: a smooth irregular curve 0..1 from a few incommensurate slow sines.
-    const g = Math.max(0, Math.min(1, 0.5 + 0.28 * Math.sin(time * 0.071) + 0.18 * Math.sin(time * 0.193 + 1.3) + 0.12 * Math.sin(time * 0.47 + 2.1)));
-    this.gust.frequency.setTargetAtTime(380 + g * 900, t, 0.3);
-    this.gustGain.gain.setTargetAtTime(0.06 + g * g * 0.42, t, 0.3);
-    this.air.frequency.setTargetAtTime(300 + g * 260, t, 0.3);
-    this.rustle.gain.setTargetAtTime(Math.max(0, g - 0.62) * 0.18, t, 0.25);
 
-    if (level > 0.05 && t >= this.nextBird) {
+    if (Math.abs(beachLevel - this.beachLevel) > 0.01) {
+      this.beachLevel = beachLevel;
+      this.beachGain.gain.setTargetAtTime(beachLevel * 0.85, t, 0.4);
+    }
+
+    if (this.fallbackGust && this.fallbackAir && this.fallbackGustGain && this.fallbackRustle) {
+      // Gusts: a smooth irregular curve 0..1 from a few incommensurate slow sines.
+      const g = Math.max(0, Math.min(1, 0.5 + 0.28 * Math.sin(time * 0.071) + 0.18 * Math.sin(time * 0.193 + 1.3) + 0.12 * Math.sin(time * 0.47 + 2.1)));
+      this.fallbackGust.frequency.setTargetAtTime(380 + g * 900, t, 0.3);
+      this.fallbackGustGain.gain.setTargetAtTime(0.06 + g * g * 0.42, t, 0.3);
+      this.fallbackAir.frequency.setTargetAtTime(300 + g * 260, t, 0.3);
+      this.fallbackRustle.gain.setTargetAtTime(Math.max(0, g - 0.62) * 0.18, t, 0.25);
+    }
+
+    if (this.enableBirds && windLevel > 0.05 && t >= this.nextBird) {
       this.bird(t + 0.05);
       // Sometimes a second bird answers.
       const answer = Math.random() < 0.3;

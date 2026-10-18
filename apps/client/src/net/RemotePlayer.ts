@@ -77,6 +77,11 @@ export class RemotePlayer {
     if (slot !== this.holder.slot) this.holder.setSlot(slot);
   }
 
+  /** What this player carries in E and Q (public, from ROOM_STATE). */
+  setWeapons(ids: readonly string[] | undefined): void {
+    if (ids) this.holder.setWeapons(ids);
+  }
+
   /** The server moved this player to a spawn: drop old samples so it does not slide across the planet. */
   onRespawn(): void {
     this.interp.samples.length = 0;

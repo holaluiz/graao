@@ -52,8 +52,8 @@ body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-u
 .menu h1 { margin: 0; font-size: clamp(36px, 7.5dvh, 64px); font-weight: 900; letter-spacing: .02em; line-height: 1;
   text-shadow: 0 3px 0 var(--paper); }
 .menu .tag { margin: 0; font-weight: 700; font-size: clamp(11px, 1.8dvh, 14px); line-height: 1.25; opacity: .7; }
-.solo-options { display: grid; gap: 5px; }
-.solo-options select { font-size: 14px; letter-spacing: .02em; text-transform: none; cursor: pointer; }
+.bot-options { display: grid; gap: 5px; }
+.bot-options select { font-size: 14px; letter-spacing: .02em; text-transform: none; cursor: pointer; }
 /* Ink cards: the face (::before) and its hard shadow (::after) share one crooked quad (corner offsets from ui/ink.ts). */
 .btn, .tab, .opt, .swatch, .ink-btn, .ink-card { --face: var(--card); --shade: var(--card-shadow); --drop: 5px; position: relative; isolation: isolate;
   transform: rotate(var(--tilt, 0deg)); }
@@ -141,7 +141,7 @@ body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-u
 .reticle.cross .t-down { transform: translateY(var(--spread, 0px)); }
 .reticle.cross .t-left { transform: translateX(calc(var(--spread, 0px) * -1)); }
 .reticle.cross .t-right { transform: translateX(var(--spread, 0px)); }
-.reticle.circle .ring { fill: none; stroke: #fff; stroke-width: 2.5; transform: scale(var(--ring, 1)); transition: transform .06s linear;
+.reticle.circle .ring { fill: none; stroke: #fff; stroke-width: 2; r: var(--ring, 8px); transition: r .06s linear;
   filter: drop-shadow(0 0 1px rgba(42, 33, 48, .95)) drop-shadow(0 0 1px rgba(42, 33, 48, .95)); }
 .blocked path { stroke: var(--danger); stroke-width: 3.5; stroke-linecap: round; fill: none; transform: translate(0, 22px); }
 .hitmarker { opacity: 0; }
@@ -258,8 +258,17 @@ body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-u
 .slot.active { opacity: 1; background: rgba(255, 246, 226, .95); transform: translateY(-6px); box-shadow: 0 4px 0 var(--ink); }
 .slot-key { position: absolute; left: -9px; top: -11px; width: 24px; height: 24px; display: grid; place-items: center; font-weight: 900; font-size: 12px; border-radius: 8px;
   background: var(--ink); color: var(--paper); }
+.slot { border-left: 7px solid var(--rarity, var(--ink)); }
+.slot-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.slot-rarity { flex: none; font-size: 12px; color: var(--rarity); -webkit-text-stroke: .6px var(--ink); }
 .slot-name { font-weight: 900; font-size: 12px; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .slot-ammo { font-weight: 900; font-size: 22px; line-height: 1.1; }
+.slot-ammo small { font-size: 13px; opacity: .65; }
+.slot.empty { opacity: .5; border-left-color: rgba(42, 33, 48, .35); }
+.slot.empty .slot-name { font-style: italic; opacity: .8; }
+.slot.empty .slot-ammo small { font-size: 11px; opacity: .7; }
+.slot.fresh { animation: slot-fresh .45s ease-out; }
+@keyframes slot-fresh { 0% { transform: translateY(-6px) scale(1.12); } 100% { transform: translateY(-6px) scale(1); } }
 .slot.dry .slot-ammo { color: var(--danger); }
 .slot-reload { height: 4px; border-radius: 4px; background: rgba(42, 33, 48, .18); overflow: hidden; margin-top: 3px; }
 .slot-reload > i { display: block; height: 100%; width: 0; background: var(--orange); }

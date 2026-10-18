@@ -1,113 +1,173 @@
-/**
- * Room lobby (DOM, over the warmup world): shown while the pointer is free between matches. The room code (copy it
- * for a friend), everyone in the room with their ready state and the room's running score, and the actions: ESTOU
- * PRONTO / CANCELAR (same as ENTER), VOLTAR AO MUNDO (lock the pointer and warm up) and SAIR DA SALA.
- * The server owns readiness; this panel only shows ROOM_STATE and sends intents.
- */
-import type { PlayerPublic } from '@graao/shared';
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?: HTMLElement, text?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  e.className = cls;
-  if (text !== undefined) e.textContent = text;
-  parent?.appendChild(e);
-  return e;
-}
-
+import { MAX_PLAYERS, MAX_SOLO_BOTS, type RoomStateMsg } from '@graao/shared';
+import { badge, button, field, focusScreen, node } from './components';
 export interface LobbyActions {
   ready(on: boolean): void;
-  play(): void;
+  start(): void;
+  bots(count: number): void;
+  customize(): void;
   leave(): void;
   click(): void;
+  notify(text: string): void;
 }
-
+/** Ten slots and explicit host controls; planned bots have no actor, connection or combat state. */
 export class LobbyPanel {
-  readonly el = el('div', 'lobby');
-  private readonly codeEl: HTMLElement;
-  private readonly copyBtn: HTMLButtonElement;
-  private readonly hint = el('div', 'lobby-hint');
-  private readonly list = el('div', 'lobby-list');
-  private readonly readyBtn = el('button', 'btn primary', undefined, 'Estou pronto');
-  private code = '';
-  private ready = false;
-  private lastKey = '';
-
+  readonly el = node('section', 'prematch-screen room-lobby');
+  private readonly name = node('h1');
+  private readonly host = node('p', 'screen-description');
+  private readonly count = badge('0 / 10');
+  private readonly code = button('', () => this.copy());
+  private readonly list = node('div', 'player-slots');
+  private readonly desired = node('select', 'field');
+  private readonly ready = button(
+    'Estou pronto',
+    () => {
+      this.actions.click();
+      this.actions.ready(!this.mineReady);
+    },
+    true,
+  );
+  private readonly start = button(
+    'Iniciar Draft →',
+    () => {
+      this.actions.click();
+      this.actions.start();
+    },
+    true,
+  );
+  private readonly why = node('p', 'lobby-reason');
+  private readonly visibility = badge('');
+  private readonly connected = badge('Conectado à sala', 'good');
+  private currentCode = '';
+  private mineReady = false;
+  private key = '';
   constructor(private readonly actions: LobbyActions) {
     this.el.hidden = true;
-    el('div', 'lobby-k', this.el, 'Sala');
-    const top = el('div', 'lobby-top', this.el);
-    this.codeEl = el('div', 'lobby-code', top);
-    this.copyBtn = el('button', 'btn small', top, 'Copiar');
-    this.copyBtn.addEventListener('click', () => {
-      this.actions.click();
-      void navigator.clipboard?.writeText(this.code).then(
-        () => this.flash('Copiado!'),
-        () => this.flash('Selecione e copie'),
-      );
-    });
-    this.el.append(this.hint, this.list);
-    this.readyBtn.addEventListener('click', () => {
-      this.actions.click();
-      this.actions.ready(!this.ready);
-    });
-    const play = el('button', 'btn', undefined, 'Voltar ao mundo');
-    play.addEventListener('click', () => {
-      this.actions.click();
-      this.actions.play();
-    });
-    const leave = el('button', 'btn', undefined, 'Sair da sala');
-    leave.addEventListener('click', () => {
-      this.actions.click();
-      this.actions.leave();
-    });
-    const row = el('div', 'row', this.el);
-    row.append(play, leave);
-    this.el.insertBefore(this.readyBtn, row);
-    el('div', 'lobby-foot', this.el, 'Todos prontos → draft de habilidades → OVNI → luta. ENTER também marca pronto.');
+    const panel = node('div', 'gra-panel lobby-panel');
+    const heading = node('header', 'gra-heading');
+    const title = node('div');
+    title.append(node('span', 'gra-kicker', 'SUA TURMA, SEU PLANETINHA'), this.name, this.host);
+    const tags = node('div', 'gra-badges');
+    tags.append(this.connected, this.count, this.visibility, this.code);
+    heading.append(title, tags);
+    const content = node('div', 'lobby-content');
+    const side = node('aside', 'lobby-sidebar');
+    side.append(
+      node('div', 'map-postcard', '✦'),
+      node('h2', '', 'Planeta graao'),
+      node('p', '', 'Último de pé · armas e magia'),
+      badge('10 participantes no máximo', 'blue'),
+    );
+    for (let i = 0; i <= MAX_SOLO_BOTS; i++) {
+      const option = node('option', '', `${i} ${i === 1 ? 'bot desejado' : 'bots desejados'}`);
+      option.value = String(i);
+      this.desired.append(option);
+    }
+    this.desired.addEventListener('change', () => actions.bots(Number(this.desired.value)));
+    side.append(
+      field('Bots desejados pelo host', this.desired),
+      node(
+        'p',
+        'gra-fine',
+        'Antes do Draft, humanos substituem vagas previstas de bots. Ninguém está combatendo enquanto a sala se prepara.',
+      ),
+    );
+    content.append(this.list, side);
+    const footer = node('footer', 'lobby-actions');
+    footer.append(
+      this.ready,
+      button('Personalizar', actions.customize),
+      button('Sair da sala', actions.leave),
+      this.start,
+    );
+    panel.append(heading, content, this.why, footer);
+    this.el.append(panel);
   }
-
-  private flash(text: string): void {
-    this.copyBtn.textContent = text;
-    setTimeout(() => (this.copyBtn.textContent = 'Copiar'), 1400);
-  }
-
   get visible(): boolean {
     return !this.el.hidden;
   }
-
-  show(v: boolean): void {
-    this.el.hidden = !v;
+  show(on: boolean): void {
+    const changed = on !== this.visible;
+    this.el.hidden = !on;
+    if (on && changed) focusScreen(this.el);
   }
-
-  /** Refreshes from the room state (rebuilds the list only when something visible changed). */
-  update(code: string, players: PlayerPublic[], me: number): void {
-    this.code = code;
-    const solo = players.some((p) => p.bot);
-    const title = solo ? 'SOLO · BOTS' : code;
-    if (this.codeEl.textContent !== title) this.codeEl.textContent = title;
-    this.copyBtn.hidden = solo;
-    const here = players.filter((p) => p.connected).sort((a, b) => a.index - b.index);
-    this.el.classList.toggle('full-roster', here.length > 5);
-    const mine = here.find((p) => p.index === me);
-    this.ready = !!mine?.ready;
-    const key = JSON.stringify(here.map((p) => [p.index, p.name, p.ready, p.wins, p.dropped])) + me;
-    if (key === this.lastKey) return;
-    this.lastKey = key;
-    this.list.innerHTML = '';
-    for (const p of here) {
-      const row = el('div', `lobby-row${p.index === me ? ' me' : ''}`, this.list);
-      const identity = el('span', 'lobby-identity', row);
-      const name = el('span', 'lobby-name', identity, p.name);
-      name.title = p.name;
-      if (p.index === me) el('span', 'rt-tag', identity, 'você');
-      if (p.bot) el('span', 'rt-tag', identity, 'bot');
-      if (p.wins > 0) el('span', 'lobby-wins', identity, `♛ ${p.wins}`);
-      el('span', `lobby-state${p.ready ? ' on' : ''}`, row, p.dropped ? 'reconectando…' : p.ready ? 'PRONTO ✓' : 'aquecendo');
+  setConnection(dropped: boolean): void {
+    this.connected.textContent = dropped ? 'Reconectando à sala…' : 'Conectado à sala';
+    this.connected.dataset.tone = dropped ? 'bad' : 'good';
+  }
+  update(state: RoomStateMsg, me: number): void {
+    const room = state.room;
+    const players = state.players.filter((p) => p.connected).sort((a, b) => a.index - b.index);
+    const mine = players.find((p) => p.index === me);
+    const isHost = !!mine && room?.hostSessionId === mine.sessionId;
+    this.currentCode = state.code;
+    this.mineReady = !!mine?.ready;
+    const planned = room?.botsPlanned ?? 0;
+    this.name.textContent = room?.name || `Sala ${state.code}`;
+    this.host.textContent = `Host: ${room?.hostName || 'Jogador'} · Aguardando preparação`;
+    this.code.textContent = `⌁ ${state.code} · copiar`;
+    this.count.textContent = `${players.length} humanos + ${planned} bots previstos / ${room?.capacity ?? MAX_PLAYERS}`;
+    this.visibility.textContent = room?.visibility === 'private' ? 'Privada' : 'Pública';
+    this.desired.disabled = !isHost;
+    this.desired.value = String(room?.botsDesired ?? 0);
+    this.ready.textContent = this.mineReady ? '✓ Desfazer pronto' : 'Estou pronto';
+    this.ready.classList.toggle('primary', !this.mineReady);
+    this.start.hidden = !isHost;
+    this.start.disabled = !room?.canStart;
+    this.why.textContent = room?.canStart
+      ? isHost
+        ? 'Todos prontos. Você pode iniciar o Draft.'
+        : 'Todos prontos. Aguardando o host iniciar o Draft.'
+      : room?.startReason || 'Marque pronto quando seu personagem estiver preparado.';
+    const key = JSON.stringify([
+      players.map((p) => [p.index, p.name, p.ready, p.dropped, p.appearance]),
+      planned,
+      room?.hostSessionId,
+    ]);
+    if (key === this.key) return;
+    this.key = key;
+    this.list.replaceChildren();
+    for (let i = 0; i < MAX_PLAYERS; i++) {
+      const p = players[i];
+      const bot = !p && i - players.length < planned;
+      const slot = node(
+        'article',
+        `player-slot${p?.index === me ? ' player-slot-me' : ''}${bot ? ' planned-bot' : ''}${!p && !bot ? ' empty-slot' : ''}`,
+      );
+      const number = node('span', 'slot-number', String(i + 1).padStart(2, '0'));
+      const avatar = node('div', 'slot-avatar', p ? '◉' : bot ? '⚙' : '+');
+      const identity = node('div', 'slot-identity');
+      identity.append(
+        node('strong', '', p?.name || (bot ? `Bot ${String(i - players.length + 1).padStart(2, '0')}` : 'Vaga aberta')),
+      );
+      identity.append(
+        node(
+          'span',
+          '',
+          p
+            ? room?.hostSessionId === p.sessionId
+              ? 'HOST · HUMANO'
+              : 'JOGADOR · HUMANO'
+            : bot
+              ? 'BOT PREVISTO'
+              : 'AGUARDANDO JOGADOR',
+        ),
+      );
+      slot.append(
+        number,
+        avatar,
+        identity,
+        badge(
+          p ? (p.dropped ? 'Reconectando' : p.ready ? 'Pronto ✓' : 'Aguardando') : bot ? 'Automático' : 'Livre',
+          p?.ready ? 'good' : '',
+        ),
+      );
+      this.list.append(slot);
     }
-    const ready = here.filter((p) => p.ready).length;
-    this.hint.textContent =
-      solo ? 'Os bots estão prontos. Comece quando quiser.' : here.length < 2 ? 'Mande o código para alguém entrar pelo menu (ENTRAR).' : ready === here.length ? 'Todos prontos: começando…' : `${ready} de ${here.length} prontos`;
-    this.readyBtn.textContent = this.ready ? 'Cancelar pronto' : 'Estou pronto';
-    this.readyBtn.classList.toggle('primary', !this.ready);
+  }
+  private copy(): void {
+    void navigator.clipboard?.writeText(this.currentCode).then(
+      () => this.actions.notify('Código copiado'),
+      () => this.actions.notify(`Código: ${this.currentCode}`),
+    );
   }
 }

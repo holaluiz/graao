@@ -4,5 +4,7 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client"]
   },
-  "include": ["src/**/*.ts", "vite.config.ts"]
+  "include": ["src/**/*.ts", "vite.config.ts"],
+  // The host worker runs server code (Node types): checked by tsconfig.host.json and the root tsconfig instead.
+  "exclude": ["src/net/host/host.worker.ts", "src/net/host/HostRoomDriver.ts"]
 }

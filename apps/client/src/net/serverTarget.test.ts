@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { httpBase, officialServerUrl, serverTarget } from './serverTarget';
+import { dedicatedServer, httpBase, officialServerUrl, serverTarget } from './serverTarget';
 
 describe('match server target', () => {
   const page = { protocol: 'https:', hostname: 'graao.vercel.app' };
@@ -19,6 +19,15 @@ describe('match server target', () => {
     expect(serverTarget('?server=javascript:alert(1)', false, official)).toEqual({ url: official, official: true });
     expect(serverTarget('?server=wss://evil.example.com/path?x=1', false, official)).toEqual({ url: official, official: true });
     expect(serverTarget('', false, official)).toEqual({ url: official, official: true });
+  });
+
+  it('lets the room creator host unless the build or ?server= names a dedicated server', () => {
+    expect(dedicatedServer('', false, {})).toBe(false);
+    expect(dedicatedServer('', false, { VITE_SERVER_URL: 'wss://play.example.com' })).toBe(true);
+    expect(dedicatedServer('?server=ws://localhost:2569', true, {})).toBe(true);
+    expect(dedicatedServer('?server=ws://localhost:2569', false, {})).toBe(false);
+    expect(dedicatedServer('?server=wss://abc.trycloudflare.com', false, {})).toBe(true);
+    expect(dedicatedServer('?server=javascript:alert(1)', true, {})).toBe(false);
   });
 
   it('derives the HTTP base for /health', () => {

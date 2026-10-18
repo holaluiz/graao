@@ -1,5 +1,5 @@
 /** Runtime validation of untrusted client messages. Every handler on the server goes through one of these. */
-import { DISPLAY_NAME_MAX, MAX_INPUT_BACKLOG } from './constants';
+import { DISPLAY_NAME_MAX, MAX_INPUT_BACKLOG, MAX_SOLO_BOTS } from './constants';
 import { isAppearanceShape } from './appearance';
 import { AIM_SCALE, WISH_SCALE, type InputCmd, type InputMsg, type PingMsg, type AppearanceUpdateMsg } from './protocol';
 
@@ -73,6 +73,19 @@ export function validateReady(m: unknown): import('./protocol').ReadyMsg | null 
   return r === 0 || r === 1 ? { r } : null;
 }
 
+export function validateRoomSettings(m: unknown): import('./protocol').RoomSettingsMsg | null {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
+  const bots = (m as { bots?: unknown }).bots;
+  return isInt(bots) && bots >= 0 && bots <= MAX_SOLO_BOTS ? { bots } : null;
+}
+
+export function validatePrepared(m: unknown): import('./protocol').PreparedMsg | null {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
+  const o = m as Record<string, unknown>;
+  if (!isInt(o.id) || o.id < 1 || typeof o.ok !== 'boolean') return null;
+  return { id: o.id, ok: o.ok, ...(typeof o.error === 'string' ? { error: o.error.slice(0, 160) } : {}) };
+}
+
 export function validateSwitch(m: unknown): import('./protocol').SwitchWeaponMsg | null {
   if (!m || typeof m !== 'object') return null;
   const w = (m as { w?: unknown }).w;
@@ -121,4 +134,36 @@ export function validateReturnLobby(m: unknown): Record<string, never> | null {
 /** UFO_JUMP carries no data (the server decides where and when the jump starts): any plain object is accepted. */
 export function validateUfoJump(m: unknown): Record<string, never> | null {
   return m && typeof m === 'object' && !Array.isArray(m) ? {} : null;
+}
+
+/** INTERACT shape check (distance, state, ownership and the generation are the loot system's job). */
+export function validateInteract(m: unknown): import('./protocol').InteractMsg | null {
+  if (!m || typeof m !== 'object') return null;
+  const o = m as Record<string, unknown>;
+  if (!isInt(o.s) || (o.s as number) < 0 || (o.s as number) > 0x7fffffff) return null;
+  if (o.k !== 0 && o.k !== 1) return null;
+  if (!isInt(o.id) || (o.id as number) < 0 || (o.id as number) > 0x7fffffff) return null;
+  if (!isInt(o.g) || (o.g as number) < 0 || (o.g as number) > 0x7fffffff) return null;
+  if (o.w !== undefined && o.w !== 0 && o.w !== 1) return null;
+  return { s: o.s as number, k: o.k, id: o.id as number, g: o.g as number, ...(o.w !== undefined ? { w: o.w as number } : {}) };
+}
+
+/** USE_ITEM shape check. */
+export function validateUseItem(m: unknown): import('./protocol').UseItemMsg | null {
+  if (!m || typeof m !== 'object') return null;
+  const o = m as Record<string, unknown>;
+  if (!isInt(o.s) || (o.s as number) < 0 || (o.s as number) > 0x7fffffff) return null;
+  if (!isInt(o.c) || (o.c as number) < 0 || (o.c as number) > 7) return null;
+  return { s: o.s as number, c: o.c as number };
+}
+
+/** DEV_LOOT shape check (the server also ignores it outside dev builds). */
+export function validateDevLoot(m: unknown): import('./protocol').DevLootMsg | null {
+  if (!m || typeof m !== 'object') return null;
+  const o = m as Record<string, unknown>;
+  if (o.op !== 'regen' && o.op !== 'open_all' && o.op !== 'reveal' && o.op !== 'give') return null;
+  const out: import('./protocol').DevLootMsg = { op: o.op };
+  if (isInt(o.seed)) out.seed = (o.seed as number) >>> 0;
+  if (typeof o.item === 'string' && o.item.length <= 32 && /^[a-z_0-9]+$/.test(o.item)) out.item = o.item;
+  return out;
 }

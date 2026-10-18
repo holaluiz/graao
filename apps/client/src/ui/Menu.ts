@@ -1,165 +1,92 @@
-/** Main menu (DOM): name, create/join by room code, free roam, customize, profile and history, frame-rate cap. */
-import { MAX_SOLO_BOTS, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '@graao/shared';
-import { FPS_CAPS, type FpsCap } from '../app/FrameLimiter';
-
+import { button, Modal, node, field, focusScreen } from './components';
+import '../styles/prematch.css';
 export interface MenuActions {
-  solo(bots: number): void;
-  create(name: string): void;
-  join(code: string, name: string): void;
+  play(): void;
   customize(): void;
-  history?(): void;
-  fpsCap(c: FpsCap): void;
+  settings(): void;
+  train(): void;
+  name(value: string): void;
   click(): void;
 }
-
-const FPS_LABEL: Record<FpsCap, string> = { 30: '30', 60: '60', 120: '120', 0: 'Máximo' };
-
+/** Home has one primary route: play opens the actual room browser. */
 export class Menu {
-  readonly el = document.createElement('div');
-  private readonly note = document.createElement('div');
-  /** Match server reachability, checked before the player clicks (online buttons need it; exploring does not). */
-  private readonly server = document.createElement('div');
-  private readonly nameInput = document.createElement('input');
-  private readonly codeInput = document.createElement('input');
-  private readonly botSelect = document.createElement('select');
-  private readonly buttons: HTMLButtonElement[] = [];
-
-  constructor(private readonly actions: MenuActions, name: string, fps: FpsCap) {
-    this.el.className = 'menu';
-    const h = document.createElement('h1');
-    h.textContent = 'graao';
-    const tag = document.createElement('p');
-    tag.className = 'tag';
-    tag.textContent = 'um planetinha · armas, magia e roupas boas';
-    this.nameInput.className = 'field';
-    this.nameInput.maxLength = 16;
-    this.nameInput.placeholder = 'Seu nome';
-    this.nameInput.value = name;
-    this.nameInput.setAttribute('aria-label', 'Nome de exibição');
-    this.nameInput.style.textTransform = 'none';
-    this.nameInput.style.letterSpacing = '0.02em';
-
-    const create = this.btn('Criar partida', () => this.actions.create(this.name()), true);
-    this.codeInput.className = 'field';
-    this.codeInput.placeholder = `${ROOM_CODE_PREFIX}XXXX`;
-    this.codeInput.maxLength = ROOM_CODE_PREFIX.length + ROOM_CODE_LENGTH;
-    this.codeInput.setAttribute('aria-label', 'Código da sala');
-    this.codeInput.addEventListener('input', () => {
-      let v = this.codeInput.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
-      if (v.length > 0 && !v.startsWith('GR')) v = `${ROOM_CODE_PREFIX}${v.replace(/-/g, '')}`;
-      this.codeInput.value = v;
+  readonly el = node('section', 'menu home-menu');
+  private readonly note = node('p', 'gra-feedback');
+  private readonly profile = node('button', 'home-profile');
+  private value: string;
+  private readonly dialog = new Modal('Como você quer ser chamado?');
+  constructor(actions: MenuActions, name: string) {
+    this.value = name;
+    this.el.setAttribute('aria-label', 'Menu principal');
+    const heading = node('div', 'home-heading');
+    heading.append(
+      node('span', 'gra-kicker', 'ABRA O SEU PRÓXIMO CAPÍTULO'),
+      node('h1', '', 'graao'),
+      node('p', 'tag', 'um planetinha · armas, magia e roupas boas'),
+    );
+    const nav = node('nav', 'home-actions');
+    for (const [text, action, primary] of [
+      ['Jogar', actions.play, true],
+      ['Personalizar', actions.customize, false],
+      ['Configurações', actions.settings, false],
+    ] as const)
+      nav.append(
+        button(
+          text,
+          () => {
+            actions.click();
+            action();
+          },
+          primary,
+        ),
+      );
+    const train = button('Treinar sozinho ↗', () => {
+      actions.click();
+      actions.train();
     });
-    this.codeInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') join.click();
+    train.classList.add('home-secondary');
+    this.profile.type = 'button';
+    this.profile.addEventListener('click', () => this.dialog.show());
+    const input = node('input', 'field');
+    input.maxLength = 16;
+    input.value = name;
+    input.setAttribute('autocomplete', 'nickname');
+    const form = node('form', 'gra-form');
+    const save = button('Salvar nome', () => {}, true);
+    save.type = 'submit';
+    form.append(field('Seu nome', input), save);
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      this.setName(input.value.trim());
+      actions.name(this.value);
+      this.dialog.hide();
     });
-    const join = this.btn('Entrar', () => this.actions.join(this.codeInput.value.trim(), this.name()));
-    const joinRow = document.createElement('div');
-    joinRow.className = 'row';
-    this.codeInput.style.flex = '1.4';
-    joinRow.append(this.codeInput, join);
-    const solo = this.btn('Explorar sozinho', () => this.actions.solo(Number(this.botSelect.value)));
-    const soloOptions = document.createElement('label');
-    soloOptions.className = 'solo-options';
-    const botLabel = document.createElement('span');
-    botLabel.className = 'choice-label';
-    botLabel.textContent = 'Bots na partida solo';
-    this.botSelect.className = 'field';
-    this.botSelect.setAttribute('aria-label', 'Bots na partida solo');
-    for (let count = 0; count <= MAX_SOLO_BOTS; count++) {
-      const option = document.createElement('option');
-      option.value = String(count);
-      option.textContent = count === 0 ? 'Sem bots · exploração' : `${count} ${count === 1 ? 'bot' : 'bots'}`;
-      this.botSelect.append(option);
-    }
-    this.botSelect.addEventListener('change', () => {
-      const bots = Number(this.botSelect.value);
-      solo.textContent = bots > 0 ? 'Jogar solo' : 'Explorar sozinho';
-      this.setNote(bots > 0 ? 'Enfrente os bots em uma sala só sua. Requer conexão com o servidor.' : 'Explore o planeta e pratique à vontade.');
-    });
-    soloOptions.append(botLabel, this.botSelect);
-    const custom = this.btn('Personalizar', () => this.actions.customize());
-    const row = document.createElement('div');
-    row.className = 'row';
-    row.append(solo, custom);
-    const fpsRow = this.choiceRow('Limite de FPS', [...FPS_CAPS], fps, FPS_LABEL, (v) => this.actions.fpsCap(v));
-    this.note.className = 'note';
-    this.server.className = 'server-status';
-    this.server.setAttribute('role', 'status');
-    const heading = document.createElement('div');
-    heading.className = 'menu-heading';
-    heading.append(h, tag);
-    const play = document.createElement('div');
-    play.className = 'menu-play';
-    play.append(this.nameInput, create, joinRow, this.server, soloOptions, row);
-    const settings = document.createElement('div');
-    settings.className = 'menu-settings';
-    settings.append(fpsRow);
-    this.el.append(heading, play, settings, this.note);
+    this.dialog.body.append(form);
+    this.el.append(heading, nav, train, this.profile, this.note, this.dialog.el);
+    this.setName(name);
   }
-
-  private choiceRow<T extends string | number>(label: string, values: T[], current: T, names: Record<T, string>, onPick: (v: T) => void): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.className = 'choice';
-    const l = document.createElement('div');
-    l.className = 'choice-label';
-    l.textContent = label;
-    const row = document.createElement('div');
-    row.className = 'row';
-    for (const v of values) {
-      const b = this.btn(names[v], () => {
-        for (const x of row.children) (x as HTMLElement).classList.remove('primary');
-        b.classList.add('primary');
-        onPick(v);
-      });
-      b.classList.add('small');
-      if (v === current) b.classList.add('primary');
-      row.append(b);
-    }
-    wrap.append(l, row);
-    return wrap;
-  }
-
-  private btn(label: string, fn: () => void, primary = false): HTMLButtonElement {
-    const b = document.createElement('button');
-    b.className = `btn${primary ? ' primary' : ''}`;
-    b.textContent = label;
-    b.addEventListener('click', () => {
-      this.actions.click();
-      fn();
-    });
-    this.buttons.push(b);
-    return b;
-  }
-
   name(): string {
-    return this.nameInput.value.trim();
+    return this.value.trim();
   }
-
   setName(name: string): void {
-    this.nameInput.value = name;
+    this.value = name;
+    this.profile.textContent = `✎ ${name || 'Escolher meu nome'}`;
+    const input = this.dialog.body.querySelector('input');
+    if (input) input.value = name;
   }
-
-  setProfile(_text?: string, _history?: boolean, _why = ''): void {
-    // Profile indicator and history button removed from the menu per UI requirements.
-  }
-
+  setProfile(_text?: string, _history?: boolean, _why = ''): void {}
   setNote(text: string, error = false): void {
     this.note.textContent = text;
-    this.note.classList.toggle('err', error);
+    this.note.dataset.error = String(error);
   }
-
-  /** Server line under the online buttons: checking, online, other version, or unreachable. */
-  setServer(state: 'checking' | 'online' | 'version' | 'offline', text: string): void {
-    this.server.dataset.state = state;
-    this.server.textContent = text;
-  }
-
+  setServer(_state: string, _text: string): void {}
   setBusy(busy: boolean): void {
-    for (const b of this.buttons) b.disabled = busy;
-    this.botSelect.disabled = busy;
+    for (const e of this.el.querySelectorAll('button')) e.disabled = busy;
   }
-
-  show(v: boolean): void {
-    this.el.hidden = !v;
+  show(on: boolean): void {
+    const changed = this.el.hidden === on;
+    this.el.hidden = !on;
+    if (!on) this.dialog.hide();
+    else if (changed) focusScreen(this.el);
   }
 }
