@@ -21,8 +21,9 @@
 .creator-category { display: flex; align-items: center; gap: 10px; min-height: 0; border: 2px solid var(--ink); border-radius: 12px; padding: 9px 10px; background: var(--paper); box-shadow: 3px 3px 0 var(--ink); font-size: 13px !important; font-weight: 900 !important; text-align: left; line-height: 1.15; }
 .creator-category svg { width: 25px; height: 25px; }
 .creator-category[aria-selected='true'] { background: var(--card-blue); box-shadow: 4px 4px 0 var(--ink); }
-.creator-preview { position: relative; min-height: 0; min-width: 0; pointer-events: none; }
-.creator-view-controls { position: absolute; bottom: 5px; left: 0; right: 0; display: grid; justify-items: center; gap: 8px; }
+.creator-preview { position: relative; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 12px; min-height: 0; min-width: 0; pointer-events: none; }
+.creator-avatar-space { min-height: 0; min-width: 0; pointer-events: none; }
+.creator-view-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px; padding: 2px 4px 6px; }
 .creator-view-controls p { margin: 0; padding: 4px 10px; border-radius: 10px; background: #f3e9d8dc; font-size: 11px; font-weight: 800; text-align: center; }
 .creator-options { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; padding: 16px; border: 2px solid var(--ink); border-radius: 20px 17px 18px 16px; background: #fff8ecf5; box-shadow: 6px 6px 0 var(--ink); pointer-events: auto; }
 .creator-option-heading h3 { margin: 0; font-size: 23px; font-weight: 950; line-height: 1.1; }
@@ -87,8 +88,8 @@
   .creator-category span { display: none; }
   .creator-category::after { content: attr(data-short); white-space: nowrap; }
   .creator-category svg { width: 21px; height: 21px; }
-  .creator-preview { min-height: 110px; }
-  .creator-view-controls { left: auto; right: 0; bottom: 3px; gap: 4px; max-width: 120px; }
+  .creator-preview { min-height: 110px; gap: 6px; }
+  .creator-view-controls { gap: 4px 7px; padding: 0 2px 4px; }
   .creator-view-controls .creator-tool { gap: 4px; padding: 6px 7px; font-size: 9px !important; }
   .creator-view-controls .creator-tool svg { width: 15px; height: 15px; }
   .creator-view-controls p { font-size: 8px; line-height: 1.25; padding: 3px 6px; }

@@ -539,6 +539,7 @@ export class GraaoApp {
     if (this.phase === p) return;
     const previous = this.phase;
     this.phase = p;
+    if (p !== 'CHARACTER_CREATOR') this.r.camera.clearViewOffset();
     if (previous === 'CHARACTER_CREATOR' && p !== this.creatorReturn) this.character.setAppearance(this.appearance);
     this.input.releaseAll();
     this.local.outbox.length = 0;
@@ -560,6 +561,7 @@ export class GraaoApp {
       this.input.exitLock();
       this.deploy.reset();
       this.tormenta.reset();
+      this.obstruction.reset();
       this.results.hide();
       this.character.root.visible = true;
     }
@@ -832,27 +834,39 @@ export class GraaoApp {
   private placeCreatorCamera(dt: number): void {
     const up = this.spawn.clone().normalize();
     const f = this.menuFacing;
-    const side = new THREE.Vector3().crossVectors(up, f).normalize();
-    // Sliding camera and target sideways by `shift` puts the character at NDC x = -shift / halfWidth.
     const view = this.r.canvas.getBoundingClientRect();
     const bounds = this.creator.previewBounds();
     // Fit the reserved preview by widening the lens, keeping the camera clear of village buildings.
     const framing = Math.max(1, view.height / Math.max(110, bounds.height) * .95);
-    const fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(20)) * framing));
     const distance = this.creatorZoom;
-    const halfH = Math.tan(THREE.MathUtils.degToRad(fov / 2)) * distance;
-    const shift = -this.creator.freeCenterX(view) * halfH * this.r.camera.aspect;
-    const centerY = 1 - ((bounds.top + bounds.height / 2 - view.top) / view.height) * 2;
-    const verticalShift = -centerY * halfH;
+    const halfH = Math.tan(THREE.MathUtils.degToRad(20)) * framing * distance;
     // Whole body at the default distance; zooming in rises toward the face (hats, beards, glasses).
     const focus = THREE.MathUtils.clamp(THREE.MathUtils.mapLinear(this.creatorZoom, 3.1, 1.6, 0.9, 1.38), 0.9, 1.38);
-    const want = this.spawn.clone().addScaledVector(up, focus + verticalShift + 0.1).addScaledVector(f, distance).addScaledVector(side, shift);
+    const target = this.spawn.clone().addScaledVector(up, focus);
+    const want = target.clone().addScaledVector(up, .1).addScaledVector(f, distance);
     this.r.camera.position.lerp(want, 1 - Math.exp(-dt * 10));
+    // Keep the preview camera in front of scenery instead of dissolving props across the avatar.
+    const back = this.r.camera.position.clone().sub(target);
+    const length = back.length();
+    if (length > .001) {
+      back.divideScalar(length);
+      const hit = this.world.physics.castRay(target, back, length + .3);
+      if (hit) this.r.camera.position.copy(target).addScaledVector(back, Math.max(.35, Math.min(length, hit.toi - .3)));
+    }
+    // Preserve the full-body framing when an obstacle pulls the camera closer.
+    const fov = THREE.MathUtils.radToDeg(2 * Math.atan(halfH / Math.max(.35, this.r.camera.position.distanceTo(target))));
     this.r.camera.up.copy(up);
-    this.r.camera.lookAt(this.spawn.clone().addScaledVector(up, focus + verticalShift).addScaledVector(side, shift));
+    this.r.camera.lookAt(target);
     if (Math.abs(this.r.camera.fov - fov) > .01) {
       this.r.camera.fov = fov;
       this.r.camera.updateProjectionMatrix();
+    }
+    // Shift the lens to the free UI region without moving the camera into scenery or below the ground.
+    const offsetX = view.width / 2 - (bounds.left - view.left + bounds.width / 2);
+    const offsetY = view.height / 2 - (bounds.top - view.top + bounds.height / 2);
+    const lens = this.r.camera.view;
+    if (!lens?.enabled || lens.fullWidth !== view.width || lens.fullHeight !== view.height || lens.offsetX !== offsetX || lens.offsetY !== offsetY) {
+      this.r.camera.setViewOffset(view.width, view.height, offsetX, offsetY, view.width, view.height);
     }
   }
 

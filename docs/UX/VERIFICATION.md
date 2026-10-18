@@ -29,3 +29,7 @@ Capturas em [screenshots/](screenshots/): menu, lista real, lista com cinco sala
 - `git diff --check`: passou.
 
 As métricas reproduzíveis e suas limitações estão em [PERFORMANCE.md](PERFORMANCE.md). A verificação foi local; deploy público, duas redes físicas, clipes Mixamo externos e comparação com um build histórico não foram certificados por esta execução.
+
+## Correção da prévia de calçados e da câmera
+
+Os controles de visualização passaram para uma faixa separada, fora da área usada para enquadrar o avatar. A câmera consulta colisões sem dissolver objetos e desloca a lente em vez de mover sua posição física para dentro do cenário. Em 390 × 844, 1366 × 768, 1440 × 820 e 1920 × 1080 foram verificados zero fades ativos, câmera a aproximadamente 1 m acima da base do avatar, pés acima dos controles e ausência de botões fora da tela. Dados em [shoe-preview-checks.json](shoe-preview-checks.json); capturas [desktop](screenshots/customization-shoes-clear-1440.png) e [celular](screenshots/customization-shoes-clear-mobile.png).

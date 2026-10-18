@@ -147,7 +147,9 @@ O rodapé é uma linha própria da grade de tela inteira e contém **Descartar**
 | Salvar aparência | Emite o rascunho para persistência e volta ao menu ou lobby que abriu o editor. |
 | Visão frontal | Reposiciona a apresentação, sem modificar as peças. |
 
-Salvar aparência nunca inicia uma partida. A câmera usa a região livre dos painéis; a arma deve estar oculta durante a edição para permitir avaliação das roupas. As animações e as regras de cobertura das peças continuam pertencendo ao sistema de personagem existente.
+Salvar aparência nunca inicia uma partida. A câmera usa a região livre dos painéis; a arma deve estar oculta durante a edição para permitir avaliação das roupas. A faixa de **Visão frontal** e a dica de rotação ficam abaixo da subárea do avatar e não entram em `previewBounds()`, para não cobrir os calçados.
+
+O enquadramento desloca a lente para essa subárea, mantendo a posição física da câmera acima do chão. Um raycast a partir do torso impede a câmera de entrar nos objetos; o campo de visão compensa a aproximação. A prévia não dissolve o cenário, e os fades de combate são limpos ao entrar nos menus. O deslocamento de lente é removido ao sair da personalização. As animações e as regras de cobertura das peças continuam pertencendo ao sistema de personagem existente.
 
 Em largura até 760 px, as categorias passam para uma faixa superior, a prévia ocupa a região intermediária e o painel de opções compacto aparece abaixo. O enquadramento deve considerar os limites verticais da prévia, além de seu centro horizontal.
 

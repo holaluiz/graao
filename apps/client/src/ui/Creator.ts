@@ -32,6 +32,7 @@ export class Creator {
   /** Kept as a separate, transparent layer for the application's existing mount point. */
   readonly stage = document.createElement('div');
   readonly previewSurface = document.createElement('div');
+  private readonly avatarSpace = document.createElement('div');
   private baseline: CharacterAppearance;
   private appearance: CharacterAppearance;
   private cat = CATEGORIES[0]!;
@@ -73,13 +74,15 @@ export class Creator {
     this.tabs.setAttribute('aria-orientation', this.mobile.matches ? 'horizontal' : 'vertical');
     this.previewSurface.className = 'creator-preview';
     this.previewSurface.setAttribute('aria-label', 'Prévia 3D do personagem');
+    this.avatarSpace.className = 'creator-avatar-space';
+    this.avatarSpace.setAttribute('aria-hidden', 'true');
     const controls = document.createElement('div');
     controls.className = 'creator-view-controls';
     controls.append(this.button('Visão frontal', () => this.actions.resetView(), 'creator-tool', 'rotate'));
     const hint = document.createElement('p');
     hint.textContent = 'Arraste para girar · role para aproximar';
     controls.append(hint);
-    this.previewSurface.append(controls);
+    this.previewSurface.append(this.avatarSpace, controls);
     this.opts.className = 'creator-options';
     this.opts.id = 'creator-options';
     this.opts.setAttribute('role', 'tabpanel');
@@ -280,8 +283,8 @@ export class Creator {
       control?.focus({ preventScroll: true });
     });
   }
-  /** Screen-space area reserved for the existing 3D character, excluding panels and actions. */
-  previewBounds(): DOMRect { return this.previewSurface.getBoundingClientRect(); }
+  /** The camera fits only the free avatar area, above the separate view controls. */
+  previewBounds(): DOMRect { return this.avatarSpace.getBoundingClientRect(); }
   freeCenterX(view: DOMRect): number {
     if (this.el.hidden || view.width <= 0) return 0;
     const rect = this.previewBounds();
