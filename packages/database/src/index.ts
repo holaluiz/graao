@@ -24,6 +24,13 @@ export interface ProfileRow {
 export interface PlayerSettings {
   quality?: string;
   fpsCap?: number;
+  volume?: number;
+  effectsVolume?: number;
+  ambienceVolume?: number;
+  sensitivity?: number;
+  invertY?: boolean;
+  shakeIntensity?: number;
+  keyBindings?: Record<string, string>;
 }
 
 // ------------------------------------------------------------------------------------------------ record_match

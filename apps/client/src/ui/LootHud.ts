@@ -6,6 +6,7 @@
  * Rarity is never colour alone: every label carries the rarity's symbol (● ▲ ◆ ★) and its name or pips.
  */
 import { CONSUMABLES, CONSUMABLE_ORDER, RARITIES, type ConsumableId, type Rarity } from '@graao/game-data';
+import { DEFAULT_BINDINGS, keyLabel, type KeyBindings } from '../game/KeyBindings';
 import '../styles/loot.css';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?: HTMLElement, text?: string): HTMLElementTagNameMap[K] {
@@ -42,8 +43,15 @@ export interface LabelView {
   alpha: number;
 }
 
+interface ChoiceView {
+  item: string;
+  rarity: Rarity;
+  slots: { key: string; name: string; rarity?: Rarity }[];
+}
+
 export class LootHud {
   readonly el = el('div', 'loot-hud');
+  private bindings: KeyBindings = { ...DEFAULT_BINDINGS };
   private readonly prompt = el('div', 'loot-prompt', this.el);
   private readonly promptKey = el('kbd', 'lp-key', this.prompt, 'F');
   private readonly promptText = el('div', 'lp-text', this.prompt);
@@ -54,6 +62,7 @@ export class LootHud {
   private readonly choice = el('div', 'loot-choice', this.el);
   private readonly choiceItem = el('div', 'lc-item', this.choice);
   private readonly choiceRows = el('div', 'lc-rows', this.choice);
+  private choiceView: ChoiceView | null = null;
 
   private readonly useBar = el('div', 'loot-use', this.el);
   private readonly useText = el('div', 'lu-text', this.useBar);
@@ -61,7 +70,7 @@ export class LootHud {
   private readonly useFill = el('i', '', this.useTrack);
 
   private readonly belt = el('div', 'loot-belt', this.el);
-  private readonly beltSlots: { root: HTMLElement; count: HTMLElement; fill: HTMLElement; last: string }[] = [];
+  private readonly beltSlots: { root: HTMLElement; key: HTMLElement; count: HTMLElement; fill: HTMLElement; last: string }[] = [];
 
   private readonly feed = el('div', 'loot-feed', this.el);
 
@@ -78,7 +87,7 @@ export class LootHud {
       const def = CONSUMABLES[id];
       const root = el('div', `belt-slot c-${id}`, this.belt);
       root.title = `${CONSUMABLE_NAME[id]}: +${def.amount} ${CONSUMABLE_STAT[id]}`;
-      el('kbd', 'belt-key', root, def.key);
+      const key = el('kbd', 'belt-key', root, def.key);
       const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       icon.setAttribute('viewBox', '0 0 24 24');
       icon.setAttribute('class', 'belt-icon');
@@ -86,7 +95,20 @@ export class LootHud {
       root.appendChild(icon);
       const count = el('div', 'belt-count', root, '0');
       const fill = el('i', 'belt-fill', root);
-      this.beltSlots.push({ root, count, fill, last: '' });
+      this.beltSlots.push({ root, key, count, fill, last: '' });
+    }
+  }
+
+  setKeyBindings(bindings: KeyBindings): void {
+    this.bindings = { ...bindings };
+    this.promptKey.textContent = keyLabel(bindings.interact);
+    const actions = ['item1', 'item2', 'item3'] as const;
+    this.beltSlots.forEach((slot, i) => { slot.key.textContent = keyLabel(bindings[actions[i]!]); });
+    if (this.choiceView) {
+      this.setChoice({
+        ...this.choiceView,
+        slots: this.choiceView.slots.map((slot, i) => ({ ...slot, key: keyLabel(bindings[i === 0 ? 'weapon1' : 'weapon2']) })),
+      });
     }
   }
 
@@ -117,7 +139,8 @@ export class LootHud {
   // ------------------------------------------------------------------------------------------------ replacement card
 
   /** Both slots hold a weapon: which one does the new one replace? null hides the card. */
-  setChoice(c: { item: string; rarity: Rarity; slots: { key: string; name: string; rarity?: Rarity }[] } | null): void {
+  setChoice(c: ChoiceView | null): void {
+    this.choiceView = c;
     this.choice.hidden = !c;
     if (!c) return;
     const r = RARITIES[c.rarity];
@@ -126,14 +149,14 @@ export class LootHud {
     el('span', 'lc-name', this.choiceItem, c.item);
     el('span', 'lc-rarity', this.choiceItem, `${r.symbol} ${r.name}`);
     this.choiceRows.innerHTML = '';
-    for (const s of c.slots) {
+    for (const [index, s] of c.slots.entries()) {
       const row = el('div', 'lc-row', this.choiceRows);
       el('kbd', '', row, s.key);
-      el('span', '', row, `Substituir arma ${s.key}`);
+      el('span', '', row, `Substituir arma ${index + 1}`);
       el('span', 'lc-old', row, s.rarity ? `${RARITIES[s.rarity].symbol} ${s.name}` : s.name);
     }
     const cancel = el('div', 'lc-row cancel', this.choiceRows);
-    el('kbd', '', cancel, 'F');
+    el('kbd', '', cancel, keyLabel(this.bindings.interact));
     el('span', '', cancel, 'Cancelar');
     replay(this.choice, 'pop');
   }

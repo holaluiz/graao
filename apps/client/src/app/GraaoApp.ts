@@ -23,6 +23,7 @@ import { DeployDirector } from '../game/DeployDirector';
 import { LootDirector } from '../game/LootDirector';
 import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
+import { keyLabel } from '../game/KeyBindings';
 import { LocalPlayer } from '../game/LocalPlayer';
 import { Obstruction } from '../game/Obstruction';
 import { SpectatorDirector } from '../game/SpectatorDirector';
@@ -55,6 +56,7 @@ import { ProfileService, type CloudProfile } from '../net/ProfileService';
 import { signalingConfigured } from '../net/host/signaling';
 import { dedicatedServer } from '../net/serverTarget';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
+import { normalizeGameSettings } from './GameSettings';
 
 export type HudPhase = 'BOOT' | 'MENU' | 'ROOM_BROWSER' | 'ROOM_LOBBY' | 'LOADING' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
 
@@ -118,6 +120,7 @@ export class GraaoApp {
   private menu!: Menu;
   private browser!: RoomBrowser;
   private settings!: SettingsPanel;
+  private settingsChanged = false;
   private pause!: Modal;
   private readonly pauseNote = node('p', 'gra-fine pause-note');
   private readonly pauseLeave = button('Sair da sala', () => { this.pause.hide(); this.leaveRoom(); });
@@ -164,18 +167,23 @@ export class GraaoApp {
   constructor(canvas: HTMLCanvasElement, private readonly ui: HTMLElement) {
     // Presentation settings live in their own screen; the development quality override remains available.
     const q = new URLSearchParams(location.search).get('quality')?.toUpperCase();
-    const savedSettings = readStorage<Partial<GameSettings>>(STORAGE.settings, {}, (v): v is Partial<GameSettings> => !!v && typeof v === 'object');
-    const quality = (['LOW', 'MEDIUM', 'HIGH'].includes(q ?? '') ? q : ['LOW', 'MEDIUM', 'HIGH'].includes(savedSettings.quality ?? '') ? savedSettings.quality : 'HIGH') as Quality;
+    const savedSettings = normalizeGameSettings(readStorage<unknown>(STORAGE.settings, {}, (v): v is unknown => !!v && typeof v === 'object'));
+    const quality = (['LOW', 'MEDIUM', 'HIGH'].includes(q ?? '') ? q : savedSettings.quality) as Quality;
     this.r = new GRARenderer(canvas, quality);
     this.input = new Input(canvas);
     this.camera = new GraaoThirdPersonCamera(this.r.camera);
-    this.audio.setVolume(typeof savedSettings.volume === 'number' ? THREE.MathUtils.clamp(savedSettings.volume, 0, 1) : .8);
-    if (typeof savedSettings.sensitivity === 'number') this.input.sensitivity = THREE.MathUtils.clamp(savedSettings.sensitivity, .0005, .005);
-    this.input.invertY = savedSettings.invertY === true;
+    this.audio.setVolume(savedSettings.volume);
+    this.audio.setEffectsVolume(savedSettings.effectsVolume);
+    this.audio.setAmbienceVolume(savedSettings.ambienceVolume);
+    this.camera.setShakeIntensity(savedSettings.shakeIntensity);
+    this.input.sensitivity = savedSettings.sensitivity;
+    this.input.invertY = savedSettings.invertY;
+    this.input.setBindings(savedSettings.keyBindings);
+    this.hud.setKeyBindings(savedSettings.keyBindings);
     // Saves from older catalogs keep every piece that still exists; new slots start empty.
     this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (_v): _v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
-    this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, 0, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
+    this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, savedSettings.fpsCap, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
     window.addEventListener('resize', () => {
       this.r.resize();
       // Resizing clears the canvas: redraw on the next frame even behind a screen that throttles the world.
@@ -251,6 +259,7 @@ export class GraaoApp {
     this.character = new GraaoCharacter(this.parts, this.anims, this.appearance);
     this.r.scene.add(this.character.root);
     this.loot = new LootDirector(this);
+    this.loot.hud.setKeyBindings(this.input.bindings);
     this.combat = new CombatDirector(this);
     this.deploy = new DeployDirector(this);
     this.water = new WaterDirector(this);
@@ -329,19 +338,10 @@ export class GraaoApp {
     }, source);
     this.browser.playerName = this.name;
     this.browser.hostedAvailable = signalingConfigured();
-    this.settings = new SettingsPanel({
-      quality: this.r.quality, fpsCap: this.limiter.cap, volume: this.audio.volume,
-      sensitivity: this.input.sensitivity, invertY: this.input.invertY,
-    }, (settings) => {
-      this.r.setQuality(settings.quality);
-      this.vfx.setQuality(settings.quality);
-      this.limiter.cap = settings.fpsCap;
-      this.audio.setVolume(settings.volume);
-      this.input.sensitivity = settings.sensitivity;
-      this.input.invertY = settings.invertY;
-      writeStorage(STORAGE.settings, settings);
-      writeStorage(STORAGE.fpsCap, settings.fpsCap);
-      this.profile.save({ settings: { fpsCap: settings.fpsCap, quality: settings.quality } });
+    this.settings = new SettingsPanel(this.currentSettings(), (settings) => {
+      this.settingsChanged = true;
+      this.applySettings(settings);
+      this.profile.save({ settings: this.currentSettings() });
     });
     this.creator = new Creator(this.appearance, {
       preview: (a) => this.character.setAppearance(a),
@@ -352,6 +352,7 @@ export class GraaoApp {
     }, new CreatorThumbnails(this.parts, this.anims));
     this.draftUi = new DraftScreen({ pick: (round, id) => this.net?.sendDraftPick(round, id), sound: (cue) => this.audio.play(cue) });
     this.results = new ResultsScreen({ lobby: () => this.net?.sendReturnLobby(), leave: () => this.leaveRoom(), click: () => this.audio.play('ui.click') });
+    this.results.setReadyKey(keyLabel(this.input.keyFor('ready')));
     this.lobby = new LobbyPanel({
       ready: (on) => this.combat.setReady(on),
       start: () => this.net?.sendStartMatch(),
@@ -453,6 +454,36 @@ export class GraaoApp {
     this.profile.save({ name });
   }
 
+  private currentSettings(): GameSettings {
+    return {
+      quality: this.r.quality, fpsCap: this.limiter.cap, volume: this.audio.volume,
+      effectsVolume: this.audio.effectsVolume, ambienceVolume: this.audio.ambienceVolume,
+      sensitivity: this.input.sensitivity, invertY: this.input.invertY,
+      shakeIntensity: this.camera.shakeIntensity, keyBindings: this.input.bindings,
+    };
+  }
+
+  private applySettings(value: GameSettings): void {
+    const settings = normalizeGameSettings(value);
+    if (this.r.quality !== settings.quality) {
+      this.r.setQuality(settings.quality);
+      this.vfx.setQuality(settings.quality);
+    }
+    this.limiter.cap = settings.fpsCap;
+    this.audio.setVolume(settings.volume);
+    this.audio.setEffectsVolume(settings.effectsVolume);
+    this.audio.setAmbienceVolume(settings.ambienceVolume);
+    this.camera.setShakeIntensity(settings.shakeIntensity);
+    this.input.sensitivity = settings.sensitivity;
+    this.input.invertY = settings.invertY;
+    this.input.setBindings(settings.keyBindings);
+    this.hud.setKeyBindings(settings.keyBindings);
+    this.loot.hud.setKeyBindings(settings.keyBindings);
+    this.results.setReadyKey(keyLabel(settings.keyBindings.ready));
+    writeStorage(STORAGE.settings, settings);
+    writeStorage(STORAGE.fpsCap, settings.fpsCap);
+  }
+
   /**
    * The cloud row arrived: it wins over this browser's copy, except for what the player already changed this session.
    * No row yet (first sign-in): this browser's name, look and settings become the profile.
@@ -461,7 +492,7 @@ export class GraaoApp {
     if (this.profile.status !== 'cloud') return;
     const changed = this.profile.localChanges;
     if (!row) {
-      this.profile.save({ name: this.name, appearance: this.appearance, settings: { fpsCap: this.limiter.cap } });
+      this.profile.save({ name: this.name, appearance: this.appearance, settings: this.currentSettings() });
       return;
     }
     // The cloud name, unless the player is typing a new one in the menu right now.
@@ -479,10 +510,9 @@ export class GraaoApp {
       writeStorage(STORAGE.appearance, look);
       this.net?.sendAppearance(look);
     }
-    const fps = row.settings.fpsCap;
-    if (!changed.settings && typeof fps === 'number' && (FPS_CAPS as readonly number[]).includes(fps)) {
-      this.limiter.cap = fps as FpsCap;
-      writeStorage(STORAGE.fpsCap, fps);
+    if (!changed.settings && !this.settingsChanged) {
+      this.applySettings(normalizeGameSettings({ ...this.currentSettings(), ...row.settings }));
+      this.settings.setState(this.currentSettings());
     }
   }
 

@@ -16,6 +16,7 @@ import type { GraaoApp } from '../app/GraaoApp';
 import { Shape } from '../render/vfx/GRAVFXSystem';
 import { CONSUMABLE_NAME, LootHud, type LabelView } from '../ui/LootHud';
 import { LootView } from '../world/LootView';
+import { keyLabel } from './KeyBindings';
 
 interface ChestClient {
   id: number;
@@ -425,7 +426,7 @@ export class LootDirector {
       slots: [0, 1].map((i) => {
         const id = c.ids[i];
         const wi = id ? (`weapon_${id}` as ItemId) : null;
-        return { key: i === 0 ? 'E' : 'Q', name: id ? WEAPONS[id].name : 'vazio', ...(wi && ITEMS[wi] ? { rarity: ITEMS[wi].rarity } : {}) };
+        return { key: keyLabel(this.app.input.keyFor(i === 0 ? 'weapon1' : 'weapon2')), name: id ? WEAPONS[id].name : 'vazio', ...(wi && ITEMS[wi] ? { rarity: ITEMS[wi].rarity } : {}) };
       }),
     });
     this.app.audio.play('ui.click');
@@ -491,7 +492,8 @@ export class LootDirector {
     const w = this.app.combat.weapon;
     if (def.kind === 'weapon') {
       const free = w.ids.findIndex((x) => !x);
-      this.hud.setPrompt({ action: free < 0 ? 'Trocar de arma' : 'Pegar arma', item: def.name, rarity: def.rarity, note: free < 0 ? 'escolha E ou Q' : `vai para ${free === 0 ? 'E' : 'Q'}` });
+      const weaponKeys = (['weapon1', 'weapon2'] as const).map((action) => keyLabel(this.app.input.keyFor(action)));
+      this.hud.setPrompt({ action: free < 0 ? 'Trocar de arma' : 'Pegar arma', item: def.name, rarity: def.rarity, note: free < 0 ? `escolha ${weaponKeys[0]} ou ${weaponKeys[1]}` : `vai para ${weaponKeys[free]}` });
     } else if (def.kind === 'ammo') {
       const full = w.reserve[def.ammo!] >= AMMO[def.ammo!].max;
       const mine = w.ids.find((id) => id && WEAPONS[id].ammo === def.ammo);
@@ -499,7 +501,8 @@ export class LootDirector {
     } else {
       const k = CONSUMABLE_ORDER.indexOf(def.consumable!);
       const full = (this.counts[k] ?? 0) >= CONSUMABLES[def.consumable!].maxStack;
-      this.hud.setPrompt({ action: 'Coletar', item: def.name, rarity: def.rarity, qty: t.item.qty, note: full ? 'limite atingido' : `usar com ${CONSUMABLES[def.consumable!].key}` });
+      const action = (['item1', 'item2', 'item3'] as const)[k]!;
+      this.hud.setPrompt({ action: 'Coletar', item: def.name, rarity: def.rarity, qty: t.item.qty, note: full ? 'limite atingido' : `usar com ${keyLabel(this.app.input.keyFor(action))}` });
     }
   }
 

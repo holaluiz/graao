@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Input } from './Input';
+import { DEFAULT_BINDINGS } from './KeyBindings';
 
 class ElementStub extends EventTarget {
   isContentEditable = false;
@@ -21,7 +22,7 @@ class DocumentStub extends EventTarget {
   pointerLockElement: ElementStub | null = null;
 }
 
-describe('spectator keyboard input', () => {
+describe('desktop keyboard input', () => {
   let keyboard: EventTarget;
   let documentStub: DocumentStub;
   let surface: ElementStub;
@@ -148,5 +149,172 @@ describe('spectator keyboard input', () => {
     } else documentStub.dispatchEvent(new Event('pointerlockchange'));
     expect(input.consume('spectateNext')).toBe(false);
     expect(input.isDown('spectateNext')).toBe(false);
+  });
+
+  it('remaps movement and actions immediately, including their keyup', () => {
+    input.setBindings({ ...DEFAULT_BINDINGS, forward: 'KeyI', jump: 'KeyJ', reload: 'KeyK' });
+    key('KeyW');
+    key('ArrowUp');
+    key('Space');
+    key('KeyR');
+    expect(input.isDown('forward')).toBe(false);
+    expect(input.consume('jump')).toBe(false);
+    expect(input.consume('reload')).toBe(false);
+    key('KeyI');
+    key('KeyJ');
+    key('KeyK');
+    expect(input.isDown('forward')).toBe(true);
+    expect(input.consume('jump')).toBe(true);
+    expect(input.consume('reload')).toBe(true);
+    key('KeyI', 'keyup');
+    expect(input.isDown('forward')).toBe(false);
+    expect(input.keyFor('forward')).toBe('KeyI');
+  });
+
+  it('keeps an action held when one of two physical keys is released', () => {
+    key('KeyW');
+    expect(input.consume('forward')).toBe(true);
+    key('ArrowUp');
+    expect(input.consume('forward')).toBe(false);
+    key('KeyW', 'keyup');
+    expect(input.isDown('forward')).toBe(true);
+    key('ArrowUp', 'keyup');
+    expect(input.isDown('forward')).toBe(false);
+    key('ShiftLeft');
+    key('ShiftRight');
+    key('ShiftRight', 'keyup');
+    expect(input.isDown('sprint')).toBe(true);
+    key('ShiftLeft', 'keyup');
+    expect(input.isDown('sprint')).toBe(false);
+  });
+
+  it('gives explicit keys priority over the default sprint and ready aliases', () => {
+    input.setBindings({ ...DEFAULT_BINDINGS, jump: 'ShiftRight', interact: 'NumpadEnter' });
+    key('ShiftRight');
+    key('NumpadEnter');
+    expect(input.consume('jump')).toBe(true);
+    expect(input.consume('interact')).toBe(true);
+    expect(input.isDown('sprint')).toBe(false);
+    expect(input.consume('ready')).toBe(false);
+    key('ShiftLeft');
+    key('Enter');
+    expect(input.isDown('sprint')).toBe(true);
+    expect(input.consume('ready')).toBe(true);
+  });
+
+  it('retires aliases when their original action is remapped', () => {
+    input.setBindings({ ...DEFAULT_BINDINGS, sprint: 'ControlLeft', ready: 'KeyP', left: 'KeyH' });
+    key('ShiftRight');
+    key('NumpadEnter');
+    key('ArrowLeft');
+    expect(input.isDown('sprint')).toBe(false);
+    expect(input.consume('ready')).toBe(false);
+    expect(input.isDown('left')).toBe(false);
+    input.spectatorEnabled = true;
+    key('ArrowLeft');
+    expect(input.consume('spectatePrevious')).toBe(true);
+    key('ControlLeft');
+    key('KeyP');
+    expect(input.isDown('sprint')).toBe(true);
+    expect(input.consume('ready')).toBe(true);
+  });
+
+  it('clears held keys, pending taps and camera motion when bindings change', () => {
+    key('KeyW');
+    key('Space');
+    key('Space', 'keyup');
+    input.mouseDX = 100;
+    input.mouseDY = 30;
+    const bindings = { ...DEFAULT_BINDINGS, forward: 'KeyI' };
+    input.setBindings(bindings);
+    bindings.forward = 'KeyT';
+    const snapshot = input.bindings;
+    snapshot.forward = 'KeyO';
+    expect(input.keyFor('forward')).toBe('KeyI');
+    expect(input.isDown('forward')).toBe(false);
+    expect(input.consume('jump')).toBe(false);
+    expect(input.takeLook()).toEqual({ yaw: -0, pitch: -0 });
+    key('KeyW', 'keyup');
+    key('KeyI');
+    expect(input.isDown('forward')).toBe(true);
+  });
+
+  it('consumes a remapped rapid tap once and ignores key repeat', () => {
+    input.setBindings({ ...DEFAULT_BINDINGS, jump: 'KeyJ' });
+    key('KeyJ');
+    key('KeyJ', 'keydown', surface, true);
+    key('KeyJ', 'keyup');
+    expect(input.isDown('jump')).toBe(false);
+    expect(input.consume('jump')).toBe(true);
+    expect(input.consume('jump')).toBe(false);
+  });
+
+  it('prevents Space activating a focused button even when assigned to another action', () => {
+    input.setBindings({ ...DEFAULT_BINDINGS, jump: 'KeyJ', ready: 'Space' });
+    const button = new ElementStub('button');
+    expect(key('Space', 'keydown', button).defaultPrevented).toBe(true);
+    expect(input.consume('ready')).toBe(true);
+    expect(input.consume('jump')).toBe(false);
+  });
+
+  it('does not carry keys typed in disabled menus or text fields into gameplay', () => {
+    input.enabled = false;
+    key('KeyW');
+    key('Space');
+    input.enabled = true;
+    expect(input.isDown('forward')).toBe(false);
+    expect(input.consume('jump')).toBe(false);
+    const textbox = new ElementStub('input');
+    key('KeyW', 'keydown', textbox);
+    expect(input.isDown('forward')).toBe(false);
+  });
+
+  it('keeps fire and aim fixed to the locked game mouse after remapping', () => {
+    input.setBindings({ ...DEFAULT_BINDINGS, jump: 'KeyJ' });
+    function mouse(type: string, button: number, target: EventTarget): void {
+      const event = new Event(type);
+      Object.defineProperty(event, 'button', { value: button });
+      target.dispatchEvent(event);
+    }
+    mouse('mousedown', 0, surface);
+    expect(input.consume('fire')).toBe(false);
+    documentStub.pointerLockElement = surface;
+    mouse('mousedown', 0, surface);
+    mouse('mousedown', 2, surface);
+    expect(input.isDown('fire')).toBe(true);
+    expect(input.consume('fire')).toBe(true);
+    expect(input.isDown('aim')).toBe(true);
+    mouse('mouseup', 0, keyboard);
+    mouse('mouseup', 2, keyboard);
+    expect(input.isDown('fire')).toBe(false);
+    expect(input.isDown('aim')).toBe(false);
+  });
+
+  it('keeps Tab, Escape and F3 fixed after remapping and returns Tab to native menu navigation', () => {
+    input.setBindings({ ...DEFAULT_BINDINGS, jump: 'KeyJ' });
+    expect(key('Tab').defaultPrevented).toBe(false);
+    expect(input.isDown('scoreboard')).toBe(false);
+    input.scoreboardEnabled = true;
+    expect(key('Tab').defaultPrevented).toBe(true);
+    expect(input.isDown('scoreboard')).toBe(true);
+    key('Escape');
+    expect(input.consume('menu')).toBe(true);
+    expect(key('F3').defaultPrevented).toBe(true);
+    expect(input.consume('debug')).toBe(true);
+    input.scoreboardEnabled = false;
+    expect(input.isDown('scoreboard')).toBe(false);
+    expect(key('Tab').defaultPrevented).toBe(false);
+  });
+
+  it('releases arrow movement when spectator mode takes ownership, preserving another held movement key', () => {
+    key('ArrowLeft');
+    key('KeyA');
+    input.spectatorEnabled = true;
+    expect(input.isDown('left')).toBe(true);
+    key('KeyA', 'keyup');
+    expect(input.isDown('left')).toBe(false);
+    key('ArrowLeft', 'keyup');
+    key('ArrowLeft');
+    expect(input.consume('spectatePrevious')).toBe(true);
   });
 });

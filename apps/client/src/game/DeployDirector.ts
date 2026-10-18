@@ -21,6 +21,7 @@ import { SpeedLines } from '../render/SpeedLines';
 import { DecalMode, Shape } from '../render/vfx/GRAVFXSystem';
 import { UfoModel } from '../world/UfoModel';
 import { UfoRoutePath } from '../world/UfoRoutePath';
+import { keyLabel } from './KeyBindings';
 
 export type DeployMode = 'none' | 'reveal' | 'ship' | 'dive' | 'landed';
 
@@ -473,13 +474,15 @@ export class DeployDirector {
       hud.setDeploy({
         title: asked ? 'SALTANDO…' : 'SALTE QUANDO QUISER',
         line: `Salto automático em ${Math.ceil(left / 1000)} s · escolha onde cair no planeta`,
-        key: 'ESPAÇO',
+        key: keyLabel(this.app.input.keyFor('jump')),
         keyLabel: 'SALTAR',
         progress: left / Math.max(1, r.close - r.open),
         tone: left < 4000 ? 'urgent' : 'relevant',
       });
     } else if (this.mode === 'dive') {
-      hud.setDeploy({ title: 'QUEDA', line: `${Math.round(this.groundDist)} m · WASD planar · SHIFT mergulho rápido`, altitude: this.groundDist, tone: 'quiet' });
+      const steerKeys = (['forward', 'left', 'back', 'right'] as const).map((action) => keyLabel(this.app.input.keyFor(action))).join('/');
+      const diveKey = keyLabel(this.app.input.keyFor('sprint'));
+      hud.setDeploy({ title: 'QUEDA', line: `${Math.round(this.groundDist)} m · ${steerKeys} planar · ${diveKey} mergulho rápido`, altitude: this.groundDist, tone: 'quiet' });
     } else if (this.mode === 'landed') {
       const waiting = aboard + falling;
       hud.setDeploy(

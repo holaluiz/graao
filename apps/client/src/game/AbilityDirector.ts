@@ -48,8 +48,8 @@ import type { AbilitySlotView } from '../ui/Hud';
 import { DecalMode, Shape } from '../render/vfx/GRAVFXSystem';
 import type { UltimateMark } from '../render/vfx/UltimateMarks';
 import { AbilityController } from './AbilityController';
+import { keyLabel } from './KeyBindings';
 
-const KEYS = ['1', '2', '3', '4'];
 const ACTIONS = ['ability1', 'ability2', 'ability3', 'ultimate'] as const;
 
 const mmToV = (p: [number, number, number], out = new THREE.Vector3()) => out.set(p[0] / POS_SCALE, p[1] / POS_SCALE, p[2] / POS_SCALE);
@@ -841,7 +841,7 @@ export class AbilityDirector {
       const def = ABILITIES[id];
       const left = this.ctl.cooldownLeft(i, now);
       const state: AbilitySlotView['state'] = !alive || !fight ? 'locked' : casting && i === this.ctl.castSlot ? 'casting' : left > 0 ? 'cooldown' : mana < def.manaCost ? 'nomana' : 'ready';
-      return { key: KEYS[i]!, name: def.name, icon: def.presentation.icon, color: def.presentation.color, cost: def.manaCost, ultimate: i === ULTIMATE_SLOT, cd: this.ctl.cooldownFrac(i, now), secondsLeft: left, state };
+      return { key: keyLabel(this.app.input.keyFor(ACTIONS[i]!)), name: def.name, icon: def.presentation.icon, color: def.presentation.color, cost: def.manaCost, ultimate: i === ULTIMATE_SLOT, cd: this.ctl.cooldownFrac(i, now), secondsLeft: left, state };
     });
     hud.setAbilities(slots);
     hud.setEffects(Math.max(0, (this.ctl.slowEnd - now) / 1000), this.ctl.slowFactor);

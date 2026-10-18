@@ -21,6 +21,7 @@
  */
 import type { AbilityIcon } from '@graao/game-data';
 import { HitKind } from '@graao/shared';
+import { DEFAULT_BINDINGS, keyLabel, type KeyBindings } from '../game/KeyBindings';
 import { ABILITY_ICONS } from './abilityIcons';
 import { TormentaMap, type TormentaMapView } from './TormentaMap';
 import '../styles/tormenta.css';
@@ -194,6 +195,7 @@ export class Hud {
   private readonly weaponsEl = el('div', 'weapons', this.el);
   private readonly slots: { root: HTMLElement; name: HTMLElement; ammo: HTMLElement; fill: HTMLElement; key: HTMLElement; rarity: HTMLElement; last: string }[] = [];
   private readonly ammoHint = el('div', 'ammo-hint', this.el);
+  private reloadKey = keyLabel(DEFAULT_BINDINGS.reload);
 
   // Overlays.
   private readonly deathEl = el('div', 'death', this.el);
@@ -288,6 +290,21 @@ export class Hud {
 
   show(v: boolean): void {
     this.el.hidden = !v;
+  }
+
+  setKeyBindings(bindings: KeyBindings): void {
+    const previousHint = `SEM MUNIÇÃO · ${this.reloadKey}`;
+    this.reloadKey = keyLabel(bindings.reload);
+    if (this.ammoHint.textContent === previousHint) this.ammoHint.textContent = `SEM MUNIÇÃO · ${this.reloadKey}`;
+    this.slots.forEach((slot, i) => {
+      slot.key.textContent = keyLabel(bindings[i === 0 ? 'weapon1' : 'weapon2']);
+      slot.last = '';
+    });
+    const actions = ['ability1', 'ability2', 'ability3', 'ultimate'] as const;
+    this.abSlots.forEach((slot, i) => {
+      slot.key.textContent = keyLabel(bindings[actions[i]!]);
+      slot.last = '';
+    });
   }
 
   /** Combat widgets (vitals, weapons, abilities, reticle) hide aboard the UFO and during the drop. */
@@ -555,7 +572,7 @@ export class Hud {
     const a = slots[active];
     const dry = !!a && !a.empty && a.ammo === 0 && reload < 0;
     this.ammoHint.hidden = !(dry || reload >= 0);
-    this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : a && a.reserve <= 0 ? 'SEM MUNIÇÃO · procure caixas de munição' : 'SEM MUNIÇÃO · R';
+    this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : a && a.reserve <= 0 ? 'SEM MUNIÇÃO · procure caixas de munição' : `SEM MUNIÇÃO · ${this.reloadKey}`;
   }
 
   /** Ability slots 1–4. The views mirror the server (cooldowns, Mana, wind-up); the HUD never decides. */
