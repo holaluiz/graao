@@ -1,7 +1,7 @@
 /** Authoritative per-player state on the server (movement, vitals, weapons, abilities). */
 import type { Client } from '@colyseus/core';
-import { manaShown, newInput, newVitals, type AbilityActor, type CharacterBody, type CharacterInput, type CharacterState, type Vitals } from '@graao/game-core';
-import { LOADOUT_SLOTS, MOVEMENT, WEAPONS, WEAPON_SLOTS, type Loadout } from '@graao/game-data';
+import { manaShown, newInput, newInventory, newVitals, type AbilityActor, type CharacterBody, type CharacterInput, type CharacterState, type Inventory, type LootActor, type Vitals } from '@graao/game-core';
+import { AMMO_TYPES, BOT_KIT, CONSUMABLE_ORDER, LOADOUT_SLOTS, MOVEMENT, STARTING_KIT, WEAPON_SLOT_COUNT, type Loadout } from '@graao/game-data';
 import { DeployState, type CharacterAppearance, type InputCmd, type SelfStatusMsg, type Vec3 } from '@graao/shared';
 
 /** A dash accepted by the ability system, started when movement command `seq` is simulated. */
@@ -15,7 +15,7 @@ export interface PendingDash {
 /** Server-controlled players only need an identity and a sink for private messages. */
 export type PlayerConnection = Pick<Client, 'sessionId' | 'send'>;
 
-export class ServerPlayer implements AbilityActor {
+export class ServerPlayer implements AbilityActor, LootActor {
   readonly queue: InputCmd[] = [];
   lastSeq = -1;
   budget = 2;
@@ -33,11 +33,18 @@ export class ServerPlayer implements AbilityActor {
 
   /** Equipped weapon slot (0 = E, 1 = Q). */
   weapon = 0;
-  readonly ammo: number[] = WEAPON_SLOTS.map((id) => WEAPONS[id].magazine);
+  /** Weapons (with their magazines), reserve ammunition and consumables (GRAInventory). */
+  inv: Inventory;
   /** Slot being reloaded, or -1. */
   reloading = -1;
   reloadEndsAt = 0;
-  readonly lastShotAt: number[] = WEAPON_SLOTS.map(() => 0);
+  readonly lastShotAt: number[] = new Array<number>(WEAPON_SLOT_COUNT).fill(0);
+  /** Consumable in use (see LootActor). */
+  useUntil = 0;
+  useItem = -1;
+  readonly useReadyAt: number[] = CONSUMABLE_ORDER.map(() => 0);
+  lootSeq = -1;
+  lootAt = 0;
   lastShotSeq = -1;
   /** Last FIRE sequence received (accepted or refused), echoed in the status so clients can reconcile ammo. */
   lastFireSeen = -1;
@@ -80,12 +87,19 @@ export class ServerPlayer implements AbilityActor {
     public body: CharacterBody,
     public loadout: Loadout,
     readonly bot = false,
-  ) {}
+  ) {
+    this.inv = this.freshInventory();
+  }
+
+  /** A fresh life's inventory: the starting kit (bots: the classic two weapons, reserve never runs out). */
+  freshInventory(): Inventory {
+    return this.bot ? newInventory(BOT_KIT, true) : newInventory(STARTING_KIT);
+  }
 
   status(): SelfStatusMsg {
     return {
       weapon: this.weapon,
-      ammo: [...this.ammo],
+      ammo: this.inv.slots.map((s) => s?.ammo ?? 0),
       reloading: this.reloading >= 0,
       reloadEndsAt: this.reloading >= 0 ? this.reloadEndsAt : 0,
       alive: this.vitals.alive,
@@ -97,6 +111,11 @@ export class ServerPlayer implements AbilityActor {
       abilitySeq: this.lastAbilitySeq,
       slowUntil: this.slowUntil,
       slow: Math.round(this.slowFactor * 100),
+      wpn: this.inv.slots.map((s) => s?.id ?? ''),
+      res: AMMO_TYPES.map((t) => this.inv.reserve[t]),
+      inv: CONSUMABLE_ORDER.map((c) => this.inv.consumables[c]),
+      useUntil: this.useUntil,
+      useItem: this.useItem,
     };
   }
 

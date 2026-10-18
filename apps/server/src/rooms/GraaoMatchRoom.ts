@@ -13,11 +13,16 @@
  * Abilities: ABILITY_REQUEST is validated and executed by the GRAAbilitySystem (game-core) with this room as its
  * host: Mana, cooldowns, wind-ups, server projectiles, areas, and dashes started on the movement stream.
  *
- * Match flow: warmup (FREE_ROAM, respawns on) → everyone READY → ABILITY_DRAFT (4 simultaneous rounds, the drafted
- * loadouts replace the warmup ones) → UFO (the ship flies a route over the arena; each participant jumps when they
+ * Loot: the GRALootSystem (game-core) with this room as its host owns the chests, the items on the ground and every
+ * transfer into an inventory (INTERACT, USE_ITEM). A new loot generation (chests rolled from a fresh seed) starts with
+ * the room, with every match (boarding, or the start without the UFO) and back in the lobby. Weapons live in each
+ * player's inventory slots (E, Q) with their magazines; a reload takes from the reserve of the weapon's ammunition.
+ *
+ * Match flow: LOBBY (planned bots, human readiness) → host START_MATCH → ABILITY_DRAFT (4 simultaneous rounds) →
+ * PREPARATION (every human acknowledges loaded assets/world) → UFO (the ship flies a route over the arena; each participant jumps when they
  * like inside the window, or is dropped when it closes, and skydives down under their own control) → everyone
  * landed → MATCH (countdown, then weapons unlock, no respawns) → last participant standing wins → RESULTS (the
- * MatchLedger's summary goes to everyone and, once, to Supabase) → back to the warmup lobby when everyone asks
+ * MatchLedger's summary goes to everyone and, once, to Supabase) → back to LOBBY when everyone asks
  * (RETURN_LOBBY) or the results time runs out. Rules live in `@graao/game-core` (match.ts, draft.ts, deploy.ts).
  *
  * Identity: `onAuth` verifies the Supabase access token (JWKS); a player without a valid one is a guest (or is
@@ -62,6 +67,10 @@ import {
   ufoPosition,
   ufoSpeed,
   falloff,
+  finishReload,
+  reloadAmount,
+  GRALootSystem,
+  type LootHost,
   latLonToDir,
   muzzlePoint,
   newVitals,
@@ -76,7 +85,7 @@ import {
   type PlayerHitTarget,
   type TormentaConfig,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, MOVEMENT, SPAWNS, TORMENTA, UFO, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, randomAppearance, validateAppearance, type AbilityId, type TormentaPhaseDef } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, ITEMS, LOOT_RULES, MATCH_SPAWNS, MOVEMENT, SPAWNS, TORMENTA, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
 import {
   AbilityReject,
   AIM_SCALE,
@@ -89,6 +98,8 @@ import {
   FACING_SCALE,
   INPUT_JITTER_BUFFER,
   JoinError,
+  LootAction,
+  LootReject,
   MAX_INPUT_BACKLOG,
   MAX_MESSAGES_PER_SECOND,
   MAX_PLAYERS,
@@ -116,24 +127,32 @@ import {
   v3projectOnPlane,
   validateAbilityRequest,
   validateAppearanceUpdate,
+  validateDevLoot,
   validateDraftPick,
   validateFire,
+  validateInteract,
   validateInputMsg,
   validatePing,
   validateReady,
+  validateRoomSettings,
+  validatePrepared,
   validateReturnLobby,
   validateSwitch,
   validateUfoJump,
+  validateUseItem,
   type AbilityResultMsg,
   type DamageCause,
   type EventsMsg,
   type GameEvent,
   type JoinOptions,
+  type LootResultMsg,
   type MatchSummaryMsg,
   type NoticeMsg,
   type PlayerPublic,
   type PlayerSnap,
   type RoomStateMsg,
+  type RoomMetadata,
+  type PreparationState,
   type SnapshotMsg,
   type UfoRouteMsg,
   type Vec3,
@@ -144,7 +163,7 @@ import { serverConfig } from '../config';
 import { matchStore } from '../persistence/MatchStore';
 import { ServerPlayer, type PlayerConnection } from '../sim/ServerPlayer';
 import { botIntent } from '../sim/BotBrain';
-import { getWorld } from '../world';
+import { getChestSpots, getWorld } from '../world';
 import { log } from '../log';
 
 /** What `onAuth` hands to `onJoin` (as `client.auth`). */
@@ -165,9 +184,17 @@ function newCode(): string {
 }
 
 export interface RoomCreateOptions {
+  roomName?: string;
+  visibility?: 'public' | 'private';
+  /** Explicit development/test warmup. Competitive rooms always start in LOBBY. */
+  legacyWarmup?: boolean;
+  /** Bounded, real client loading acknowledgement window. */
+  preparationTimeoutMs?: number;
   maxPlayers?: number;
   /** Private practice room: one human and this many server-controlled opponents. Zero keeps ordinary multiplayer. */
   soloBots?: number;
+  /** Room joinable by code with this many bots in the free seats (in the warmup a bot gives its seat to a person). */
+  bots?: number;
   /** Overrides for tests and dev (clamped to sane ranges). */
   countdownMs?: number;
   resultsMs?: number;
@@ -199,6 +226,10 @@ export interface RoomCreateOptions {
   tormentaFinal?: { lat: number; lon: number };
   tormentaOff?: boolean;
   matchSpawns?: { lat: number; lon: number }[];
+  /** Dev/tests only: a fixed loot seed (every generation uses it), spot ids that must hold a chest, and the chest count. */
+  lootSeed?: number;
+  lootSpots?: string[];
+  chestCount?: number;
 }
 
 /** Dev/tests may pick a loadout on join (JoinOptions.loadout); production always uses the server's (draft) loadout. */
@@ -233,9 +264,25 @@ export class GraaoMatchRoom extends Room {
   private world!: GameWorld;
   private motor!: CharacterMotor;
   private readonly players = new Map<string, ServerPlayer>();
-  private soloBotCount = 0;
+  /** Private practice: one human, no one else may join. */
+  private solo = false;
+  /** Bots this room keeps in its free seats (warmup only: they never arrive or leave mid-match). */
+  private botTarget = 0;
+  /** Seats for people and bots together. */
+  private seats: number = MAX_PLAYERS;
+  /** Whether the running match had bots in it (practice: not saved to anyone's history). */
+  private botsInMatch = false;
   private readonly bots = new Map<number, BotRuntime>();
-  private phase: MatchPhase = MatchPhase.FREE_ROAM;
+  private phase: MatchPhase = MatchPhase.LOBBY;
+  private legacyWarmup = false;
+  private hostSessionId = '';
+  private lobbyName = '';
+  private visibility: 'public' | 'private' = 'public';
+  private lastMetadata = '';
+  private preparation: PreparationState | null = null;
+  private preparationId = 0;
+  private preparationTimeoutMs = 45000;
+  private preparationAfterDraft = true;
   private phaseEndsAt = 0;
   private startsAt = 0;
   private winner = -1;
@@ -270,34 +317,54 @@ export class GraaoMatchRoom extends Room {
   private events: GameEvent[] = [];
   /** Damage updates share one public-state broadcast per simulation tick. */
   private roomStateDirty = false;
+  /** Chests and items on the ground (authoritative). */
+  private loot!: GRALootSystem;
+  private lootSeed: number | null = null;
+  private lootSpots: string[] = [];
+  private chestCount: number = LOOT_RULES.chestsPerMatch;
 
   override async onCreate(options: RoomCreateOptions = {}): Promise<void> {
-    if (options.soloBots !== undefined && (typeof options.soloBots !== 'number' || !Number.isFinite(options.soloBots) || options.soloBots < 0)) {
-      throw new ServerError(4004, 'invalid solo bot count');
-    }
-    this.soloBotCount = options.soloBots ? Math.max(1, Math.min(MAX_SOLO_BOTS, Math.floor(options.soloBots))) : 0;
+    const botCount = (v: unknown, what: string): number => {
+      if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new ServerError(4004, `invalid ${what} count`);
+      return v ? Math.max(1, Math.min(MAX_SOLO_BOTS, Math.floor(v))) : 0;
+    };
+    const soloBots = botCount(options.soloBots, 'solo bot');
+    const bots = botCount(options.bots, 'bot');
+    this.solo = soloBots > 0;
     this.roomId = newCode();
     activeCodes.add(this.roomId);
     const requestedPlayers = typeof options.maxPlayers === 'number' && Number.isFinite(options.maxPlayers) ? options.maxPlayers : MAX_PLAYERS;
-    this.maxClients = this.soloBotCount ? 1 : Math.max(1, Math.min(MAX_PLAYERS, Math.floor(requestedPlayers)));
-    if (this.soloBotCount) await this.setPrivate(true);
+    this.maxClients = this.solo ? 1 : Math.max(1, Math.min(MAX_PLAYERS, Math.floor(requestedPlayers)));
+    this.seats = this.solo ? MAX_PLAYERS : this.maxClients;
+    this.botTarget = Math.min(soloBots || bots, this.seats - 1);
+    this.legacyWarmup = DEV && options.legacyWarmup === true;
+    this.phase = this.legacyWarmup ? MatchPhase.FREE_ROAM : MatchPhase.LOBBY;
+    this.lobbyName = typeof options.roomName === 'string' ? options.roomName.replace(/\p{Cc}/gu, '').trim().slice(0, 56) : '';
+    this.visibility = this.solo || options.visibility === 'private' ? 'private' : 'public';
+    await this.setPrivate(this.visibility === 'private');
+    if (DEV && typeof options.preparationTimeoutMs === 'number' && Number.isFinite(options.preparationTimeoutMs)) this.preparationTimeoutMs = Math.max(100, Math.min(90000, options.preparationTimeoutMs));
     this.countdownMs = clampMs(options.countdownMs, MATCH_RULES.countdownMs);
     this.resultsMs = clampMs(options.resultsMs, MATCH_RULES.resultsMs);
     this.closeSpawns = options.closeSpawns === true;
     if (typeof options.ultimateChargeMs === 'number' && Number.isFinite(options.ultimateChargeMs)) this.ultimateChargeMs = Math.max(0, Math.min(60000, Math.round(options.ultimateChargeMs)));
-    this.skipDraft = options.skipDraft === true;
+    this.skipDraft = DEV && options.skipDraft === true;
     for (const [k, v] of [['pickMs', options.draftPickMs], ['repickMs', options.draftRepickMs], ['revealMs', options.draftRevealMs]] as const) {
-      if (typeof v === 'number' && Number.isFinite(v)) this.draftTimings[k] = clampMs(v, 0);
+      if (typeof v === 'number' && Number.isFinite(v)) this.draftTimings[k] = Math.max(0, Math.min(120000, Math.round(v)));
     }
-    this.skipUfo = options.skipUfo === true;
+    this.skipUfo = DEV && options.skipUfo === true;
     if (typeof options.ufoRevealMs === 'number') this.ufoTimings.revealMs = clampMs(options.ufoRevealMs, UFO.revealMs);
     if (typeof options.ufoWindowMs === 'number') this.ufoTimings.windowMs = Math.max(1, clampMs(options.ufoWindowMs, UFO.windowMs));
     this.landTimeoutMs = clampMs(options.ufoLandTimeoutMs, UFO.landTimeoutMs);
     if (typeof options.reconnectSeconds === 'number' && Number.isFinite(options.reconnectSeconds)) this.reconnectSeconds = Math.max(0, Math.min(120, options.reconnectSeconds));
     if (DEV) this.configureTormenta(options);
+    if (DEV) this.configureLoot(options);
     this.world = await getWorld();
     this.motor = new CharacterMotor(this.world.physics);
     this.abilities = new GRAAbilitySystem(this.abilityHost());
+    this.loot = new GRALootSystem(this.lootHost(), getChestSpots(this.world));
+    // The server's world is shared by every room: this room's characters only bump into this room's chests.
+    this.motor.chestFilter = this.loot.colliders;
+    this.newLootGeneration();
 
     this.onMessage(C2S.PLAYER_INPUT, (c, m) => this.onInput(c, m));
     this.onMessage(C2S.APPEARANCE_UPDATE, (c, m) => this.onAppearance(c, m));
@@ -305,10 +372,16 @@ export class GraaoMatchRoom extends Room {
     this.onMessage(C2S.RELOAD, (c) => this.onReload(c));
     this.onMessage(C2S.SWITCH_WEAPON, (c, m) => this.onSwitch(c, m));
     this.onMessage(C2S.READY, (c, m) => this.onReady(c, m));
+    this.onMessage(C2S.START_MATCH, (c, m) => this.onStartMatch(c, m));
+    this.onMessage(C2S.ROOM_SETTINGS, (c, m) => this.onRoomSettings(c, m));
+    this.onMessage(C2S.PREPARED, (c, m) => this.onPrepared(c, m));
     this.onMessage(C2S.ABILITY_REQUEST, (c, m) => this.onAbility(c, m));
     this.onMessage(C2S.DRAFT_PICK, (c, m) => this.onDraftPick(c, m));
     this.onMessage(C2S.UFO_JUMP, (c, m) => this.onUfoJump(c, m));
     this.onMessage(C2S.RETURN_LOBBY, (c, m) => this.onReturnLobby(c, m));
+    this.onMessage(C2S.INTERACT, (c, m) => this.onInteract(c, m));
+    this.onMessage(C2S.USE_ITEM, (c, m) => this.onUseItem(c, m));
+    this.onMessage(C2S.DEV_LOOT, (c, m) => this.onDevLoot(c, m));
     this.onMessage(C2S.PING, (c, m) => {
       const v = validatePing(m);
       if (v) c.send(S2C.PONG, { c: v.c, t: Date.now(), tick: Math.round(this.tickCost * 100) / 100 });
@@ -317,6 +390,7 @@ export class GraaoMatchRoom extends Room {
 
     this.lastTickAt = performance.now();
     this.setSimulationInterval(() => this.update(), SERVER_TICK_MS);
+    await this.setMetadata({ ...this.roomMetadata(), phase: this.phase });
     log('room created', { code: this.roomId, maxClients: this.maxClients });
   }
 
@@ -335,11 +409,16 @@ export class GraaoMatchRoom extends Room {
   }
 
   override onJoin(client: Client, options?: JoinOptions): void {
-    if (this.soloBotCount && this.players.size) throw new ServerError(4004, 'solo practice is private');
+    if (this.solo && this.players.size) throw new ServerError(4004, 'solo practice is private');
     if (!options || options.protocol !== PROTOCOL_VERSION) {
       throw new ServerError(4001, `${JoinError.VERSION_MISMATCH}: server speaks protocol ${PROTOCOL_VERSION}`);
     }
     if (!validateAppearance(options.appearance)) throw new ServerError(4003, `${JoinError.BAD_APPEARANCE}: unknown appearance ids`);
+    if (!this.legacyWarmup && this.phase !== MatchPhase.LOBBY) throw new ServerError(4004, `${JoinError.IN_PROGRESS}: a partida já começou`);
+    // Every seat taken (bots fill them): in the warmup a bot gives its seat to the person; later it waits for the lobby.
+    if (this.players.size >= this.seats && (this.phase !== MatchPhase.FREE_ROAM || !this.removeBot())) {
+      throw new ServerError(4004, `${JoinError.ROOM_FULL}: room is full until the match ends`);
+    }
     const used = new Set([...this.players.values()].map((p) => p.index));
     let index = 0;
     while (used.has(index)) index++;
@@ -351,7 +430,11 @@ export class GraaoMatchRoom extends Room {
     p.profileId = (client.auth as PlayerAuth | undefined)?.profileId ?? null;
     resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
     this.players.set(client.sessionId, p);
-    if (this.soloBotCount) this.createBots();
+    if (!this.hostSessionId) {
+      this.hostSessionId = client.sessionId;
+      if (!this.lobbyName) this.lobbyName = `Sala de ${name}`;
+    }
+    this.syncBots();
     const welcome: WelcomeMsg & { spawn: [number, number, number] } = {
       you: client.sessionId,
       index,
@@ -365,6 +448,7 @@ export class GraaoMatchRoom extends Room {
     };
     client.send(S2C.WELCOME, welcome);
     client.send(S2C.SELF, p.statusIfChanged());
+    client.send(S2C.LOOT_STATE, this.loot.view());
     this.broadcastRoomState();
     // Joining mid-draft: watch it (not a seat; plays from the next match).
     if (this.draft) client.send(S2C.DRAFT_STATE, this.draft.view(index));
@@ -374,11 +458,23 @@ export class GraaoMatchRoom extends Room {
   override onLeave(client: Client): void {
     const p = this.players.get(client.sessionId);
     if (!p) return;
+    if (!this.legacyWarmup && client.sessionId === this.hostSessionId && this.phase !== MatchPhase.CLOSED) {
+      this.phase = MatchPhase.CLOSED;
+      this.abilities.clear();
+      this.tormenta.stop();
+      this.preparation = null;
+      this.broadcast(S2C.NOTICE, { kind: 'error', code: NoticeCode.HOST_LEFT, text: 'O host saiu. A sala foi encerrada.' } satisfies NoticeMsg);
+      this.broadcastRoomState();
+      void this.disconnect();
+      return;
+    }
+    // Leaving a match with things in the pockets: they stay in the world (same as a death drop).
+    if (this.phase === MatchPhase.MATCH && p.inMatch && p.vitals.alive) this.loot.dropAll(p);
     p.body.dispose();
     this.players.delete(client.sessionId);
     this.abilities.cancelFor(p.index);
-    if (this.soloBotCount) {
-      // Bots are not Colyseus clients, so they must never keep an abandoned practice room alive.
+    if (this.bots.size && this.players.size === this.bots.size) {
+      // Bots are not Colyseus clients, so they must never keep an abandoned room alive (or play on by themselves).
       for (const bot of this.players.values()) bot.body.dispose();
       this.players.clear();
       this.bots.clear();
@@ -387,6 +483,7 @@ export class GraaoMatchRoom extends Room {
       this.tormenta.stop();
       return;
     }
+    this.syncBots();
     this.broadcastRoomState();
     log('leave', { code: this.roomId, id: client.sessionId });
     // The opponent leaving can end a match (the one still standing wins); in warmup the rest may now all be ready;
@@ -397,6 +494,7 @@ export class GraaoMatchRoom extends Room {
       // The one who left may have been the last one still in the air.
       this.maybeBeginFight();
     } else if (this.phase === MatchPhase.ABILITY_DRAFT) this.onDraftLeave(p.index);
+    else if (this.phase === MatchPhase.PREPARATION) this.updatePreparation();
     else if (this.phase === MatchPhase.RESULTS) this.maybeEndResults();
     else this.maybeStartMatch();
   }
@@ -430,27 +528,57 @@ export class GraaoMatchRoom extends Room {
     log('reconnect', { code: this.roomId, id: client.sessionId, name: p.name });
     this.broadcastRoomState();
     client.send(S2C.SELF, p.statusIfChanged(true));
+    client.send(S2C.LOOT_STATE, this.loot.view());
     if (this.draft) client.send(S2C.DRAFT_STATE, this.draft.view(p.index));
   }
 
   override onDispose(): void {
+    // Chest colliders live in the process-wide world: they must leave with the room.
+    this.loot?.clear();
     for (const p of this.players.values()) p.body.dispose();
     this.bots.clear();
     activeCodes.delete(this.roomId);
     log('room disposed', { code: this.roomId });
   }
 
-  private createBots(): void {
-    for (let index = 1; index <= this.soloBotCount; index++) {
-      const connection: PlayerConnection = { sessionId: `bot-${index}`, send: () => {} };
-      const state = this.spawnState(index);
-      const p = new ServerPlayer(connection, index, `Bot ${index}`, randomAppearance(), state, this.motor.createBody(state), defaultLoadout(index), true);
-      p.ready = true;
-      p.simTime = Date.now() - 60;
-      resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
-      this.players.set(connection.sessionId, p);
-      this.bots.set(index, { seq: 0, fireSeq: 0, acc: 0, target: -1, acquiredAt: 0, nextShotAt: 0 });
-    }
+  /** Warmup only: bots fill the seats people leave free, up to the room's bot count. */
+  private syncBots(): void {
+    if (!this.legacyWarmup || !this.botTarget || this.phase !== MatchPhase.FREE_ROAM) return;
+    const people = this.players.size - this.bots.size;
+    // The last person left: the room is about to be disposed.
+    if (!people) return;
+    const want = Math.max(0, Math.min(this.botTarget, this.seats - people));
+    while (this.bots.size > want && this.removeBot());
+    while (this.bots.size < want) this.addBot();
+  }
+
+  private addBot(): void {
+    const used = new Set([...this.players.values()].map((p) => p.index));
+    let index = 0;
+    while (used.has(index)) index++;
+    const names = new Set([...this.players.values()].filter((p) => p.bot).map((p) => p.name));
+    let n = 1;
+    while (names.has(`Bot ${n}`)) n++;
+    const connection: PlayerConnection = { sessionId: `bot-${index}`, send: () => {} };
+    const state = this.spawnState(index);
+    const p = new ServerPlayer(connection, index, `Bot ${n}`, randomAppearance(), state, this.motor.createBody(state), defaultLoadout(index), true);
+    p.ready = true;
+    p.simTime = Date.now() - 60;
+    resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
+    this.players.set(connection.sessionId, p);
+    this.bots.set(index, { seq: 0, fireSeq: 0, acc: 0, target: -1, acquiredAt: 0, nextShotAt: 0 });
+  }
+
+  /** Takes out the newest bot (highest seat). False when there is none. */
+  private removeBot(): boolean {
+    let last: ServerPlayer | undefined;
+    for (const p of this.players.values()) if (p.bot && (!last || p.index > last.index)) last = p;
+    if (!last) return false;
+    last.body.dispose();
+    this.players.delete(last.client.sessionId);
+    this.bots.delete(last.index);
+    this.abilities.cancelFor(last.index);
+    return true;
   }
 
   /** Dev/tests: Tormenta overrides (validated and clamped; a bad value keeps the default). */
@@ -484,6 +612,13 @@ export class GraaoMatchRoom extends Room {
       const spawns = o.matchSpawns.map(latLon);
       if (spawns.length && spawns.every((s) => s)) this.matchSpawns = spawns as { lat: number; lon: number }[];
     }
+  }
+
+  /** Dev/tests: loot overrides (validated; a bad value keeps the default). */
+  private configureLoot(o: RoomCreateOptions): void {
+    if (typeof o.lootSeed === 'number' && Number.isFinite(o.lootSeed)) this.lootSeed = o.lootSeed >>> 0;
+    if (Array.isArray(o.lootSpots)) this.lootSpots = o.lootSpots.filter((x): x is string => typeof x === 'string').slice(0, 32);
+    if (typeof o.chestCount === 'number' && Number.isFinite(o.chestCount)) this.chestCount = Math.max(1, Math.min(32, Math.floor(o.chestCount)));
   }
 
   private spawnState(index: number, avoid?: Vec3, match = false) {
@@ -521,6 +656,7 @@ export class GraaoMatchRoom extends Room {
   private onInput(c: Client, m: unknown): void {
     const p = this.players.get(c.sessionId);
     if (!p) return;
+    if (!this.legacyWarmup && this.phase !== MatchPhase.MATCH && this.phase !== MatchPhase.UFO) return;
     const v = validateInputMsg(m);
     if (!v) return;
     for (const cmd of v.i) {
@@ -534,15 +670,16 @@ export class GraaoMatchRoom extends Room {
   private onAppearance(c: Client, m: unknown): void {
     const p = this.players.get(c.sessionId);
     const v = validateAppearanceUpdate(m);
-    if (!p || !v || !validateAppearance(v.appearance)) return;
+    if (!p || !v || !validateAppearance(v.appearance) || (!this.legacyWarmup && this.phase !== MatchPhase.LOBBY)) return;
     p.appearance = v.appearance;
+    if (!this.legacyWarmup) p.ready = false;
     this.broadcastRoomState();
   }
 
   private onReady(c: Client, m: unknown): void {
     const p = this.players.get(c.sessionId);
     const v = validateReady(m);
-    if (!p || !v || this.phase !== MatchPhase.FREE_ROAM) return;
+    if (!p || !v || (this.phase !== MatchPhase.LOBBY && this.phase !== MatchPhase.FREE_ROAM)) return;
     const ready = v.r === 1;
     if (p.ready === ready) return;
     p.ready = ready;
@@ -552,7 +689,46 @@ export class GraaoMatchRoom extends Room {
 
   // ------------------------------------------------------------------------------------------------ match flow
 
+  private roomMetadata(): RoomMetadata {
+    const humans = [...this.players.values()].filter((p) => !p.bot);
+    const botsPlanned = this.phase === MatchPhase.LOBBY ? Math.min(this.botTarget, this.seats - humans.length) : this.bots.size;
+    const unready = humans.filter((p) => !p.ready || p.dropped || !p.connected);
+    const startReason = this.phase !== MatchPhase.LOBBY ? 'A partida já começou.' : humans.length + botsPlanned < MATCH_RULES.minPlayers ? 'São necessários pelo menos dois participantes.' : unready.length ? `Aguardando ${unready.map((p) => p.name).join(', ')} confirmar.` : '';
+    return {
+      name: this.lobbyName || 'Sala de graao', visibility: this.visibility,
+      hostSessionId: this.hostSessionId, hostName: this.players.get(this.hostSessionId)?.name ?? '',
+      humans: humans.length, botsDesired: this.botTarget, botsPlanned, capacity: this.seats, protocol: PROTOCOL_VERSION,
+      available: this.phase === MatchPhase.LOBBY && !this.solo && humans.length < this.maxClients,
+      canStart: !startReason, startReason,
+    };
+  }
+
+  private onRoomSettings(c: Client, m: unknown): void {
+    const v = validateRoomSettings(m);
+    if (!v || c.sessionId !== this.hostSessionId || this.phase !== MatchPhase.LOBBY) return;
+    this.botTarget = Math.min(v.bots, this.seats - 1);
+    this.broadcastRoomState();
+  }
+
+  private onStartMatch(c: Client, m: unknown): void {
+    if (c.sessionId !== this.hostSessionId || this.phase !== MatchPhase.LOBBY || !validateReturnLobby(m)) return;
+    const reason = this.roomMetadata().startReason;
+    if (reason) {
+      c.send(S2C.NOTICE, { kind: 'error', code: NoticeCode.START_REJECTED, text: reason } satisfies NoticeMsg);
+      return;
+    }
+    // Planned bot seats become real participants only after the host freezes this roster.
+    const want = Math.min(this.botTarget, this.seats - this.players.size);
+    while (this.bots.size < want) this.addBot();
+    if (!this.skipDraft) this.startDraft();
+    else {
+      for (const p of this.players.values()) p.inMatch = p.connected;
+      this.startPreparation(false);
+    }
+  }
+
   private maybeStartMatch(): void {
+    if (!this.legacyWarmup) return;
     if (this.phase !== MatchPhase.FREE_ROAM) return;
     if (!everyoneReady([...this.players.values()])) return;
     if (!this.skipDraft) this.startDraft();
@@ -626,8 +802,44 @@ export class GraaoMatchRoom extends Room {
     this.sendDraftStates();
     this.draft = null;
     log('draft done', { code: this.roomId, loadouts: [...this.players.values()].map((p) => `${p.name}: ${p.loadout.join(',')}`) });
-    if (this.skipUfo) this.startMatch(true);
+    if (!this.legacyWarmup) this.startPreparation(true);
+    else if (this.skipUfo) this.startMatch(true);
     else this.startDeploy(true);
+  }
+
+  private startPreparation(afterDraft: boolean): void {
+    this.phase = MatchPhase.PREPARATION;
+    this.preparationAfterDraft = afterDraft;
+    this.phaseEndsAt = Date.now() + this.preparationTimeoutMs;
+    this.preparation = { id: ++this.preparationId, deadline: this.phaseEndsAt, ready: [], waiting: [...this.players.values()].filter((p) => !p.bot && p.inMatch).map((p) => p.index) };
+    this.broadcastRoomState();
+  }
+
+  private onPrepared(c: Client, m: unknown): void {
+    const p = this.players.get(c.sessionId);
+    const v = validatePrepared(m);
+    const prep = this.preparation;
+    if (!p || !v || !prep || this.phase !== MatchPhase.PREPARATION || v.id !== prep.id || !p.inMatch) return;
+    if (!v.ok) {
+      this.broadcast(S2C.NOTICE, { kind: 'error', code: NoticeCode.LOAD_FAILED, text: `${p.name} não conseguiu carregar a partida. Tente iniciar novamente.` } satisfies NoticeMsg);
+      this.returnToWarmup();
+      return;
+    }
+    if (!prep.ready.includes(p.index)) prep.ready.push(p.index);
+    this.updatePreparation();
+  }
+
+  private updatePreparation(): void {
+    const prep = this.preparation;
+    if (!prep || this.phase !== MatchPhase.PREPARATION) return;
+    const humans = [...this.players.values()].filter((p) => !p.bot && p.inMatch);
+    prep.ready = prep.ready.filter((i) => humans.some((p) => p.index === i && !p.dropped));
+    prep.waiting = humans.filter((p) => !prep.ready.includes(p.index)).map((p) => p.index);
+    if (!humans.length || this.players.size < MATCH_RULES.minPlayers) return this.returnToWarmup();
+    if (prep.waiting.length) return this.broadcastRoomState();
+    this.preparation = null;
+    if (this.skipUfo) this.startMatch(this.preparationAfterDraft);
+    else this.startDeploy(this.preparationAfterDraft);
   }
 
   private sendDraftStates(): void {
@@ -663,6 +875,7 @@ export class GraaoMatchRoom extends Room {
       this.refresh(p, now);
     }
     this.beginLedger(now);
+    this.newLootGeneration();
     this.broadcastRoomState();
     log('ufo deploy', { code: this.roomId, riders: [...this.players.values()].filter((p) => p.inMatch).map((p) => p.name), opensIn: route.open - now, closesIn: route.close - now });
   }
@@ -670,11 +883,20 @@ export class GraaoMatchRoom extends Room {
   /** Full vitals, ammo and abilities, nothing pending (boarding, fight start). */
   private refresh(p: ServerPlayer, now: number): void {
     p.vitals = newVitals();
-    p.ammo.forEach((_, i) => (p.ammo[i] = WEAPONS[WEAPON_SLOTS[i]!].magazine));
-    p.reloading = -1;
+    this.freshKit(p);
     p.respawnAt = 0;
     p.queue.length = 0;
     this.resetAbilities(p, now);
+  }
+
+  /** The starting kit in hand (E equipped), nothing reloading, nothing being used. */
+  private freshKit(p: ServerPlayer): void {
+    p.inv = p.freshInventory();
+    p.weapon = 0;
+    p.reloading = -1;
+    p.useUntil = 0;
+    p.useItem = -1;
+    p.useReadyAt.fill(0);
   }
 
   private onUfoJump(c: Client, m: unknown): void {
@@ -785,6 +1007,7 @@ export class GraaoMatchRoom extends Room {
       if (p.inMatch) this.resetForSpawn(p, this.spawnState(slot++, undefined, !this.closeSpawns));
     }
     this.beginLedger(now);
+    this.newLootGeneration();
     this.startTormenta();
     this.broadcastRoomState();
     log('match start', { code: this.roomId, players: this.players.size });
@@ -798,6 +1021,7 @@ export class GraaoMatchRoom extends Room {
       now,
     );
     this.roster = new Map(entrants.map((p) => [p.index, { profileId: p.profileId, appearance: { ...p.appearance } }]));
+    this.botsInMatch = entrants.some((p) => p.bot);
   }
 
   private checkMatchEnd(): void {
@@ -820,7 +1044,8 @@ export class GraaoMatchRoom extends Room {
     if (summary) this.broadcast(S2C.MATCH_SUMMARY, summary);
     this.broadcastRoomState();
     log('match end', { code: this.roomId, winner: w?.name ?? '-', durationS: summary ? Math.round(summary.durationMs / 1000) : 0 });
-    if (summary && !this.soloBotCount) void this.persist(summary, this.roster);
+    // Matches with bots are practice: they do not go to anyone's history.
+    if (summary && !this.botsInMatch) void this.persist(summary, this.roster);
   }
 
   /**
@@ -859,7 +1084,9 @@ export class GraaoMatchRoom extends Room {
 
   /** Results over: everyone back on their feet in the warmup lobby, ready flags cleared. */
   private returnToWarmup(): void {
-    this.phase = MatchPhase.FREE_ROAM;
+    this.phase = this.legacyWarmup ? MatchPhase.FREE_ROAM : MatchPhase.LOBBY;
+    this.preparation = null;
+    if (!this.legacyWarmup) while (this.removeBot());
     this.phaseEndsAt = 0;
     this.startsAt = 0;
     this.winner = -1;
@@ -879,40 +1106,54 @@ export class GraaoMatchRoom extends Room {
       if (!p.vitals.alive || airborne) this.respawn(p);
       else {
         p.vitals = newVitals();
-        p.ammo.forEach((_, i) => (p.ammo[i] = WEAPONS[WEAPON_SLOTS[i]!].magazine));
+        this.freshKit(p);
         this.resetAbilities(p, Date.now());
       }
     }
+    // Seats people left during the match go back to bots.
+    this.syncBots();
+    this.newLootGeneration();
     this.broadcastRoomState();
   }
 
   /** May this player deal or take damage right now? */
   private canFight(p: ServerPlayer, now: number): boolean {
+    if (!this.legacyWarmup) return this.phase === MatchPhase.MATCH && p.inMatch && now >= this.startsAt;
     if (this.phase === MatchPhase.RESULTS || this.phase === MatchPhase.ABILITY_DRAFT || this.phase === MatchPhase.UFO) return false;
     if (this.phase === MatchPhase.MATCH) return p.inMatch && now >= this.startsAt;
     return true;
   }
 
   private onSwitch(c: Client, m: unknown): void {
+    if (!this.legacyWarmup && this.phase !== MatchPhase.MATCH) return;
     const p = this.players.get(c.sessionId);
     const v = validateSwitch(m);
-    if (!p || !v || !p.vitals.alive || v.w === p.weapon) return;
-    p.weapon = v.w;
+    if (!p || !v || !p.vitals.alive || v.w === p.weapon || !p.inv.slots[v.w]) return;
+    this.equip(p, v.w, Date.now());
+  }
+
+  /** `slot` becomes the weapon in hand, after the equip delay (switch, or a weapon just picked up). */
+  private equip(p: ServerPlayer, slot: number, now: number): void {
+    const s = p.inv.slots[slot];
+    if (!s) return;
+    p.weapon = slot;
     p.reloading = -1;
-    const w = WEAPONS[WEAPON_SLOTS[v.w]!];
-    const now = Date.now();
+    const w = WEAPONS[s.id];
     // Equip delay: treat the switch as a recent shot.
-    p.lastShotAt[v.w] = Math.max(p.lastShotAt[v.w]!, now - (1000 / w.fireRate) * FIRE_RATE_TOLERANCE + SWITCH_DELAY_MS);
+    p.lastShotAt[slot] = Math.max(p.lastShotAt[slot]!, now - (1000 / w.fireRate) * FIRE_RATE_TOLERANCE + SWITCH_DELAY_MS);
   }
 
   private onReload(c: Client): void {
+    if (!this.legacyWarmup && this.phase !== MatchPhase.MATCH) return;
     const p = this.players.get(c.sessionId);
     if (p && p.vitals.alive) this.startReload(p);
   }
 
   private startReload(p: ServerPlayer): void {
-    const w = WEAPONS[WEAPON_SLOTS[p.weapon]!];
-    if (p.reloading >= 0 || p.ammo[p.weapon]! >= w.magazine) return;
+    const s = p.inv.slots[p.weapon];
+    // Nothing to reload: a full magazine, an empty slot, or no reserve of this weapon's ammunition.
+    if (!s || p.reloading >= 0 || reloadAmount(p.inv, p.weapon) <= 0) return;
+    const w = WEAPONS[s.id];
     p.reloading = p.weapon;
     p.reloadEndsAt = Date.now() + w.reloadTime * 1000;
     this.events.push({ e: 'reload', by: p.index, w: p.weapon });
@@ -926,14 +1167,16 @@ export class GraaoMatchRoom extends Room {
     if (!p.vitals.alive) return;
     if (f.w !== p.weapon || p.reloading >= 0) return;
     if (!this.canFight(p, Date.now())) return;
-    // Hands are busy while swimming and while an ability winds up.
+    // Hands are busy while swimming, while an ability winds up and while a consumable is being used.
     if (p.state.swimming) return;
-    if (Date.now() < p.castUntil) return;
+    if (Date.now() < p.castUntil || Date.now() < p.useUntil) return;
     if (p.lastShotSeq >= 0 && !seqGreater(f.s, p.lastShotSeq)) return;
-    const w = WEAPONS[WEAPON_SLOTS[f.w]!];
+    const slot = p.inv.slots[f.w];
+    if (!slot) return;
+    const w = WEAPONS[slot.id];
     const now = Date.now();
     if (now - p.lastShotAt[f.w]! < (1000 / w.fireRate) * FIRE_RATE_TOLERANCE) return;
-    if (p.ammo[f.w]! <= 0) {
+    if (slot.ammo <= 0) {
       this.startReload(p);
       return;
     }
@@ -946,7 +1189,7 @@ export class GraaoMatchRoom extends Room {
 
     p.lastShotSeq = f.s;
     p.lastShotAt[f.w] = now;
-    p.ammo[f.w]! -= 1;
+    slot.ammo -= 1;
     p.fireUntil = now + 160;
     // The shooter faces the aim when firing (the controller turns toward it too).
     const flat = v3projectOnPlane(dir, up);
@@ -970,14 +1213,14 @@ export class GraaoMatchRoom extends Room {
         perTarget.set(r.target, acc);
       }
     }
-    this.events.push({ e: 'shot', by: p.index, w: f.w, s: f.s, from: mm(muzzle), to, t: hitT });
+    this.events.push({ e: 'shot', by: p.index, w: f.w, id: slot.id, s: f.s, from: mm(muzzle), to, t: hitT });
     this.ledger?.shot(p.index, perTarget.size > 0);
 
     for (const [ti, dmg] of perTarget) {
       const q = this.byIndex(ti);
       if (q && this.dealDamage(p, q, dmg.amount, dmg.crit, now)) eliminated = true;
     }
-    if (p.ammo[f.w] === 0) this.startReload(p);
+    if (slot.ammo === 0) this.startReload(p);
     if (eliminated) {
       this.broadcastRoomState(); // kill counts
       this.checkMatchEnd();
@@ -1015,8 +1258,85 @@ export class GraaoMatchRoom extends Room {
     q.state.dashSteps = 0;
     this.abilities.cancelFor(q.index);
     this.events.push({ e: 'elim', by: by.index, target: q.index, ...cause });
+    // Everything the fallen player carried goes to the ground (the same pickups as a chest's).
+    this.loot.dropAll(q);
     log('elimination', { code: this.roomId, by: by.name, target: q.name, ability: ability ?? hazard ?? '-' });
     return true;
+  }
+
+  // ------------------------------------------------------------------------------------------------ loot
+
+  private lootHost(): LootHost {
+    return {
+      physics: this.world.physics,
+      actors: () => this.players.values(),
+      gate: (a, now) => this.lootGate(a as ServerPlayer, now),
+      emit: (e) => this.events.push(e),
+      // SELF goes out with the reply (handlers) or at the end of the tick; the hand others see rides in ROOM_STATE.
+      changed: (_a, weapons) => {
+        if (weapons) this.roomStateDirty = true;
+      },
+      equip: (a, slot, now) => this.equip(a as ServerPlayer, slot, now),
+    };
+  }
+
+  /** May this player open, take or use right now? */
+  private lootGate(p: ServerPlayer, _now: number): LootReject {
+    if (!this.legacyWarmup && this.phase !== MatchPhase.MATCH) return LootReject.PHASE;
+    if (!p.vitals.alive) return LootReject.DEAD;
+    if (this.phase === MatchPhase.ABILITY_DRAFT || this.phase === MatchPhase.RESULTS) return LootReject.PHASE;
+    if (this.phase === MatchPhase.MATCH && !p.inMatch) return LootReject.PHASE;
+    // Aboard the UFO or still in the air.
+    if (p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING || p.state.diving) return LootReject.PHASE;
+    return LootReject.OK;
+  }
+
+  /**
+   * A fresh loot generation (seeded; dev rooms may fix the seed): new chests, nothing on the ground. Loot events of
+   * the old generation still waiting for this tick's flush are dropped, so nobody applies them to the new one.
+   */
+  private newLootGeneration(): void {
+    this.events = this.events.filter((e) => e.e !== 'chest' && e.e !== 'items' && e.e !== 'take');
+    const seed = this.lootSeed ?? Math.floor(Math.random() * 0x100000000);
+    this.loot.generate(seed, this.chestCount, this.lootSpots);
+    this.broadcast(S2C.LOOT_STATE, this.loot.view());
+    log('loot generation', { code: this.roomId, gen: this.loot.gen, seed: this.loot.seed, chests: this.loot.chests.length });
+  }
+
+  private onInteract(c: Client, m: unknown): void {
+    const p = this.players.get(c.sessionId);
+    const v = validateInteract(m);
+    if (!p || !v) return;
+    const r = this.loot.interact(p, v, Date.now());
+    c.send(S2C.LOOT_RESULT, r);
+    const st = p.statusIfChanged();
+    if (st) c.send(S2C.SELF, st);
+  }
+
+  private onUseItem(c: Client, m: unknown): void {
+    const p = this.players.get(c.sessionId);
+    const v = validateUseItem(m);
+    if (!p || !v) return;
+    const now = Date.now();
+    // Hands busy with a cast (the loot system checks everything else).
+    const r: LootResultMsg = now < p.castUntil ? { s: v.s, a: LootAction.USE, ok: false, r: LootReject.BUSY, id: v.c } : this.loot.use(p, v, now);
+    c.send(S2C.LOOT_RESULT, r);
+    const st = p.statusIfChanged();
+    if (st) c.send(S2C.SELF, st);
+  }
+
+  /** Dev builds only: regenerate, open everything, reveal contents, or drop an item at the requester's feet. */
+  private onDevLoot(c: Client, m: unknown): void {
+    if (!DEV) return;
+    const p = this.players.get(c.sessionId);
+    const v = validateDevLoot(m);
+    if (!p || !v) return;
+    if (v.op === 'regen') {
+      if (v.seed !== undefined) this.lootSeed = v.seed;
+      this.newLootGeneration();
+    } else if (v.op === 'open_all') this.loot.devOpenAll(Date.now());
+    else if (v.op === 'give' && v.item && v.item in ITEMS) this.loot.devGive(p, v.item as ItemId);
+    c.send(S2C.LOOT_DEV, this.loot.devView());
   }
 
   // ------------------------------------------------------------------------------------------------ abilities
@@ -1058,7 +1378,7 @@ export class GraaoMatchRoom extends Room {
     const dir = v.d ? v3normalize({ x: v.d[0] / DIR_SCALE, y: v.d[1] / DIR_SCALE, z: v.d[2] / DIR_SCALE }) : undefined;
     const point = v.p ? { x: v.p[0] / POS_SCALE, y: v.p[1] / POS_SCALE, z: v.p[2] / POS_SCALE } : undefined;
     // No casting while swimming (the hands are stroking); the client locks its slots in the water too.
-    if (p.state.swimming) return reply(AbilityReject.BUSY);
+    if (p.state.swimming || now < p.useUntil) return reply(AbilityReject.BUSY);
     const r = this.abilities.request(p,{ slot: v.k, id: v.a, seq: v.s, cmdSeq: v.c, dir, point }, now);
     if (r === AbilityReject.OK) {
       p.castUltimate = v.k === ULTIMATE_SLOT;
@@ -1101,8 +1421,10 @@ export class GraaoMatchRoom extends Room {
       if (picked) this.sendDraftStates();
       return;
     }
-    if (this.phase === MatchPhase.RESULTS) return;
-    const human = [...this.players.values()].find((p) => !p.bot);
+    if (this.phase === MatchPhase.RESULTS || this.phase === MatchPhase.PREPARATION || this.phase === MatchPhase.LOBBY || this.phase === MatchPhase.CLOSED) return;
+    // People who already left the UFO: bots follow them out of the hatch and steer toward their landing.
+    const outOfShip = (q: ServerPlayer) => !q.bot && q.inMatch && q.deploy !== DeployState.SHIP;
+    const anyoneOut = [...this.players.values()].some(outOfShip);
     for (const [index, brain] of this.bots) {
       const p = this.byIndex(index);
       if (!p?.vitals.alive) {
@@ -1111,21 +1433,19 @@ export class GraaoMatchRoom extends Room {
       }
       if (p.deploy === DeployState.SHIP) {
         brain.acc = 0;
-        // Follow the human out of the hatch, with a short stagger, and steer toward their landing.
-        if (this.ufo && human && human.deploy !== DeployState.SHIP && jumpOpen(this.ufo, now) && now >= this.ufo.open + index * 160) this.jump(p, now, false);
+        // Out of the hatch after the first person, with a short stagger.
+        if (this.ufo && anyoneOut && jumpOpen(this.ufo, now) && now >= this.ufo.open + index * 160) this.jump(p, now, false);
         continue;
       }
       let target: ServerPlayer | undefined;
-      if (this.phase === MatchPhase.UFO) target = human;
-      else {
-        let nearest = Infinity;
-        for (const q of this.players.values()) {
-          if (q === p || !q.connected || !q.vitals.alive || (this.phase === MatchPhase.MATCH && !q.inMatch)) continue;
-          const distance = Math.hypot(q.state.pos.x - p.state.pos.x, q.state.pos.y - p.state.pos.y, q.state.pos.z - p.state.pos.z);
-          if (distance < nearest) {
-            nearest = distance;
-            target = q;
-          }
+      let nearest = Infinity;
+      for (const q of this.players.values()) {
+        if (q === p || !q.connected || !q.vitals.alive || (this.phase === MatchPhase.MATCH && !q.inMatch)) continue;
+        if (this.phase === MatchPhase.UFO && !outOfShip(q)) continue;
+        const distance = Math.hypot(q.state.pos.x - p.state.pos.x, q.state.pos.y - p.state.pos.y, q.state.pos.z - p.state.pos.z);
+        if (distance < nearest) {
+          nearest = distance;
+          target = q;
         }
       }
       if ((target?.index ?? -1) !== brain.target) {
@@ -1163,11 +1483,21 @@ export class GraaoMatchRoom extends Room {
     this.lastTickAt = t0;
     this.tick++;
     const wall = Date.now();
+    if (this.phase === MatchPhase.CLOSED) return;
     if (this.phase === MatchPhase.RESULTS && wall >= this.phaseEndsAt) this.returnToWarmup();
+    if (this.phase === MatchPhase.PREPARATION && this.preparation && wall >= this.preparation.deadline) {
+      this.broadcast(S2C.NOTICE, { kind: 'error', code: NoticeCode.LOAD_TIMEOUT, text: 'O carregamento demorou demais. A sala voltou ao lobby; tente novamente.' } satisfies NoticeMsg);
+      this.returnToWarmup();
+    }
     this.updateBots(wall, dt);
     if (this.phase === MatchPhase.ABILITY_DRAFT && this.draft?.update(wall)) {
       this.sendDraftStates();
       this.checkDraftDone();
+    }
+    // Lobbies, draft and loading are intent/metadata only. No movement, physics, combat, loot or snapshots.
+    if (!this.legacyWarmup && (this.phase === MatchPhase.LOBBY || this.phase === MatchPhase.ABILITY_DRAFT || this.phase === MatchPhase.PREPARATION)) {
+      this.tickCost = this.tickCost * 0.9 + (performance.now() - t0) * 0.1;
+      return;
     }
     if (this.phase === MatchPhase.UFO && this.ufo) {
       // The window closed: whoever is still aboard is dropped; a diver still airborne long after is set down.
@@ -1180,7 +1510,7 @@ export class GraaoMatchRoom extends Room {
       p.budget = Math.min(p.budget + dt * SIM_HZ, MAX_INPUT_BACKLOG);
       // Reloads and respawns.
       if (p.reloading >= 0 && wall >= p.reloadEndsAt) {
-        p.ammo[p.reloading] = WEAPONS[WEAPON_SLOTS[p.reloading]!].magazine;
+        finishReload(p.inv, p.reloading);
         p.reloading = -1;
       }
       if (!p.vitals.alive) {
@@ -1243,6 +1573,7 @@ export class GraaoMatchRoom extends Room {
     }
 
     this.abilities.update(wall, dt);
+    this.loot.update(wall);
     if (this.roomStateDirty) this.broadcastRoomState();
 
     for (const p of this.players.values()) {
@@ -1292,8 +1623,7 @@ export class GraaoMatchRoom extends Room {
     p.vitals = newVitals();
     p.breath = MOVEMENT.breathTime;
     p.drownT = 0;
-    p.ammo.forEach((_, i) => (p.ammo[i] = WEAPONS[WEAPON_SLOTS[i]!].magazine));
-    p.reloading = -1;
+    this.freshKit(p);
     p.respawnAt = 0;
     p.queue.length = 0;
     p.simTime = Date.now() - 60;
@@ -1369,12 +1699,20 @@ export class GraaoMatchRoom extends Room {
       alive: p.vitals.alive,
       damageDealt: Math.round(p.damageDealt),
       loadout: [...p.loadout],
+      weapons: p.inv.slots.map((w) => w?.id ?? ''),
       deploy: p.deploy,
       wins: p.wins,
       back: p.back,
       ...(p.bot ? { bot: true } : {}),
     }));
-    const msg: RoomStateMsg = { code: this.roomId, phase: this.phase, phaseEndsAt: this.phaseEndsAt, startsAt: this.startsAt, winner: this.winner, players, ufo: this.ufo, tormenta: this.tormenta.view };
+    const room = this.roomMetadata();
+    const metadata = { ...room, phase: this.phase };
+    const encoded = JSON.stringify(metadata);
+    if (encoded !== this.lastMetadata) {
+      this.lastMetadata = encoded;
+      void this.setMetadata(metadata).catch((e: unknown) => log('room metadata failed', { code: this.roomId, error: String(e) }));
+    }
+    const msg: RoomStateMsg = { code: this.roomId, phase: this.phase, phaseEndsAt: this.phaseEndsAt, startsAt: this.startsAt, winner: this.winner, players, ufo: this.ufo, tormenta: this.tormenta.view, room, preparation: this.preparation };
     this.broadcast(S2C.ROOM_STATE, msg);
   }
 }

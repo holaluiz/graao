@@ -11,7 +11,7 @@
  */
 import * as THREE from 'three';
 import { muzzlePoint, resolvePellet, shotSeed, spreadDirections, type PlayerHitTarget } from '@graao/game-core';
-import { ATTRIBUTES, WEAPONS, WEAPON_SLOTS, type WeaponDefinition } from '@graao/game-data';
+import { ATTRIBUTES, BOT_KIT, ITEMS, RARITIES, STARTING_KIT, WEAPONS, weaponItem, type WeaponDefinition, type WeaponId } from '@graao/game-data';
 import {
   ActionState,
   DIR_SCALE,
@@ -34,7 +34,7 @@ import { WeaponHolder } from '../character/WeaponModels';
 import { Shape } from '../render/vfx/GRAVFXSystem';
 import type { ScoreboardState } from '../ui/Scoreboard';
 import { AbilityDirector } from './AbilityDirector';
-import { WeaponController } from './WeaponController';
+import { WeaponController, type WeaponKit } from './WeaponController';
 
 /** Camera response presets (shake and kick; always at full strength for every player). */
 const CAMERA_RESPONSE = {
@@ -84,6 +84,8 @@ export class CombatDirector {
   private readonly tmp2 = new THREE.Vector3();
   private readonly muzzleW = new THREE.Vector3();
   private blocked = false;
+  /** Fresh-life weapons: the starting kit online (the rest is found in chests), the classic pair offline. */
+  private kit: WeaponKit = STARTING_KIT;
 
   constructor(private readonly app: GraaoApp) {
     this.holder = new WeaponHolder();
@@ -108,11 +110,15 @@ export class CombatDirector {
     this.health = ATTRIBUTES.maxHealth;
     this.shield = ATTRIBUTES.maxShield;
     this.mana = ATTRIBUTES.maxMana;
-    this.phase = MatchPhase.FREE_ROAM;
+    this.phase = online ? MatchPhase.LOBBY : MatchPhase.FREE_ROAM;
     this.players = [];
     this.startsAt = 0;
     this.winner = -1;
-    this.weapon.reset();
+    this.kit = online ? STARTING_KIT : BOT_KIT;
+    // Offline there is no loot (no server): the classic pair and reloads that never run dry.
+    this.weapon.reset(this.kit, !online);
+    this.holder.setWeapons(this.weapon.ids);
+    this.holder.setSlot(this.weapon.slot);
     this.abilities.enter(online);
     this.summary = null;
     this.app.hud.setDeath(false);
@@ -133,6 +139,13 @@ export class CombatDirector {
     return this.app.net ? this.app.net.serverNow() : Date.now();
   }
 
+  /** May the local player open chests, pick things up and use consumables right now (the server checks again)? */
+  get lootAllowed(): boolean {
+    if (!this.online || !this.alive) return false;
+    if (this.app.deploy.riding || this.app.deploy.diving) return false;
+    return this.phase === MatchPhase.FREE_ROAM || (this.phase === MatchPhase.MATCH && this.inMatch);
+  }
+
   /** Movement input is ignored while eliminated. */
   get frozen(): boolean {
     return !this.alive;
@@ -140,12 +153,11 @@ export class CombatDirector {
 
   private canFire(): boolean {
     if (!this.alive || !this.app.input.locked) return false;
-    // Hands are busy while swimming and while an ability winds up (the server refuses shots then too).
-    if (this.app.local.state.swimming || this.abilities.casting()) return false;
+    // Hands are busy while swimming, while an ability winds up and while a consumable is used (the server refuses too).
+    if (this.app.local.state.swimming || this.abilities.casting() || this.app.loot.using) return false;
     if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
-    if (this.phase === MatchPhase.RESULTS || this.phase === MatchPhase.UFO) return false;
     if (this.phase === MatchPhase.MATCH) return this.serverNow() >= this.startsAt && !!this.me()?.inMatch;
-    return true;
+    return this.phase === MatchPhase.FREE_ROAM;
   }
 
   private me(): PlayerPublic | undefined {
@@ -205,10 +217,11 @@ export class CombatDirector {
       app.audio.play('reload');
       app.character.anim.playUpper('reload', clipSpeed(app.character.anim.clipDuration('reload'), this.weapon.weapon.reloadTime));
     }
-    if (r.empty) {
+    if (r.empty) app.audio.play('empty');
+    if (r.dry) {
       app.audio.play('empty');
-      app.hud.notice('SEM MUNIÇÃO');
-    }
+      app.hud.notice(this.weapon.armed ? `SEM ${WEAPON_AMMO_NAME(this.weapon.weapon).toUpperCase()}` : 'SEM ARMA', 1.3);
+    } else if (r.empty) app.hud.notice('SEM MUNIÇÃO');
     if (r.fire) this.fire(r.fire.seq, r.fire.slot, r.fire.weapon);
     this.abilities.update(dt);
 
@@ -251,7 +264,8 @@ export class CombatDirector {
     // Body, camera, audio.
     app.character.anim.playUpper('fire', 1.4);
     app.camera.kick(w.cameraProfile.kick * 4 * CAMERA_RESPONSE.MICRO.kick, (Math.random() - 0.5) * w.cameraProfile.kick);
-    app.audio.play(w.id === 'sunbeam' ? 'fire.sunbeam' : 'fire.petal');
+    const fc = fireCue(w);
+    app.audio.play(fc.cue, { pitch: fc.pitch });
   }
 
   /** Spawns queued shot visuals from the weapon's real muzzle. Call after the character pose and animation update. */
@@ -266,11 +280,13 @@ export class CombatDirector {
   private drawShot(muzzle: THREE.Vector3, dir: THREE.Vector3, w: WeaponDefinition, points: THREE.Vector3[], targets: number[], local: boolean): void {
     const vfx = this.app.vfx;
     const p = w.presentationProfile;
-    const sun = w.id === 'sunbeam';
+    // Single-projectile weapons draw a beam (heavier ones a thicker one); spray weapons a burst of petals.
+    const sun = w.pellets === 1;
+    const heavy = w.damage >= 60;
     vfx.flash(muzzle, p.flash, sun ? 0.42 : 0.55, sun ? 0.06 : 0.08);
     vfx.burst(muzzle, dir, { color: p.flash, count: sun ? 4 : 7, speed: sun ? 5 : 3.5, size: sun ? 0.06 : 0.09, life: 0.16, spread: 0.5, shape: sun ? Shape.SPARK : Shape.PETAL, drag: 6 });
     points.forEach((pt, i) => {
-      vfx.beam(muzzle, pt, p.tracer, sun ? 0.065 : 0.032, sun ? 0.13 : 0.17);
+      vfx.beam(muzzle, pt, p.tracer, heavy ? 0.12 : sun ? 0.065 : 0.032, heavy ? 0.22 : sun ? 0.13 : 0.17);
       const back = this.tmp2.copy(muzzle).sub(pt).normalize();
       if (targets[i]! < 0) {
         // World impact: a pigment puff and a few flecks.
@@ -320,7 +336,13 @@ export class CombatDirector {
     hud.setVitals(this.health, this.shield, this.abilities.ctl.manaShown, ATTRIBUTES.maxHealth, ATTRIBUTES.maxShield, ATTRIBUTES.maxMana);
     hud.setWeapons(
       this.weapon.slot,
-      WEAPON_SLOTS.map((id, i) => ({ key: i === 0 ? 'E' : 'Q', name: WEAPONS[id].name, ammo: this.weapon.ammo[i]!, magazine: WEAPONS[id].magazine })),
+      this.weapon.ids.map((id, i) => {
+        const key = i === 0 ? 'E' : 'Q';
+        if (!id) return { key, name: '', ammo: 0, magazine: 0, reserve: 0, empty: true };
+        const item = weaponItem(id);
+        const r = item ? RARITIES[ITEMS[item].rarity] : null;
+        return { key, name: WEAPONS[id].name, ammo: this.weapon.ammo[i]!, magazine: WEAPONS[id].magazine, reserve: this.weapon.infinite ? 999 : this.weapon.reserveFor(i), ...(r ? { rarity: { color: r.color, symbol: r.symbol, name: r.name } } : {}) };
+      }),
       this.weapon.reloadProgress(now),
     );
     const cam = app.r.camera;
@@ -396,7 +418,7 @@ export class CombatDirector {
 
   /** READY intent (ENTER or the lobby button); the server decides when everyone is. */
   setReady(ready: boolean): void {
-    if (!this.online || this.phase !== MatchPhase.FREE_ROAM || !this.app.net) return;
+    if (!this.online || (this.phase !== MatchPhase.LOBBY && this.phase !== MatchPhase.FREE_ROAM) || !this.app.net) return;
     this.app.net.sendReady(ready);
     this.app.audio.play(ready ? 'ui.ready' : 'ui.click');
   }
@@ -422,15 +444,13 @@ export class CombatDirector {
     this.phaseEndsAt = m.phaseEndsAt;
     this.winner = m.winner;
     if (prev !== m.phase) {
-      // The Ability Draft is a screen over the world; leaving it (match start, or called off) gives the world back.
-      this.app.setDraft(m.phase === MatchPhase.ABILITY_DRAFT);
       if (m.phase === MatchPhase.UFO) {
         // Boarding: fresh weapons and abilities arrive with SELF; nothing to fight with until everyone has landed.
-        this.weapon.reset();
+        this.weapon.reset(this.kit);
         this.abilities.onRespawn();
         this.app.results.hide();
       } else if (m.phase === MatchPhase.MATCH) {
-        this.weapon.reset();
+        this.weapon.reset(this.kit);
         this.abilities.onRespawn();
         this.eliminatedInMatch.clear();
         this.countdownShown = -1;
@@ -439,6 +459,10 @@ export class CombatDirector {
         const win = m.winner === this.myIndex;
         this.resultsAt = performance.now();
         this.app.audio.play(m.winner < 0 ? 'defeat' : win ? 'victory' : 'defeat');
+        this.app.hud.setDeath(false);
+      } else if (m.phase === MatchPhase.LOBBY) {
+        this.app.results.hide();
+        this.eliminatedInMatch.clear();
         this.app.hud.setDeath(false);
       } else if (m.phase === MatchPhase.FREE_ROAM) {
         this.app.results.hide();
@@ -455,7 +479,9 @@ export class CombatDirector {
     const net = this.app.net;
     if (!net) return;
     this.weapon.applyServer(s, performance.now(), net.rtt, (t) => performance.now() + (t - net.serverNow()));
+    this.holder.setWeapons(this.weapon.ids);
     this.holder.setSlot(this.weapon.slot);
+    this.app.loot.onSelf(s);
     if (!s.alive) this.respawnAt = s.respawnAt;
     this.abilities.onSelf(s);
   }
@@ -479,7 +505,8 @@ export class CombatDirector {
 
   private revive(): void {
     this.alive = true;
-    this.weapon.reset();
+    this.weapon.reset(this.kit);
+    this.holder.setWeapons(this.weapon.ids);
     this.abilities.onRespawn();
     this.app.hud.setDeath(false);
   }
@@ -489,7 +516,13 @@ export class CombatDirector {
     for (const e of events) {
       switch (e.e) {
         case 'shot':
-          if (e.by !== me) this.remoteShot(e.by, e.w, e.to, e.t);
+          if (e.by !== me) this.remoteShot(e.by, e.w, e.id, e.to, e.t);
+          break;
+        case 'chest':
+        case 'items':
+        case 'take':
+        case 'use':
+          this.app.loot.onEvent(e);
           break;
         case 'dmg':
           if (e.c === 'tormenta') this.onTormentaDamage(e.target, e.amount, e.health, e.shield);
@@ -521,18 +554,24 @@ export class CombatDirector {
         case 'reload':
           if (e.by !== me) {
             const r = this.app.net?.remote(e.by);
-            const w = WEAPONS[WEAPON_SLOTS[e.w]!];
-            r?.character.anim.playUpper('reload', clipSpeed(r.character.anim.clipDuration('reload'), w.reloadTime));
+            const id = r?.holder.ids[e.w];
+            if (r && id) r.character.anim.playUpper('reload', clipSpeed(r.character.anim.clipDuration('reload'), WEAPONS[id].reloadTime));
           }
           break;
       }
     }
   }
 
-  private remoteShot(by: number, slot: number, to: [number, number, number][], t: number[]): void {
+  private remoteShot(by: number, slot: number, id: string, to: [number, number, number][], t: number[]): void {
     const r = this.app.net?.remote(by);
     if (!r) return;
-    const w = WEAPONS[WEAPON_SLOTS[slot]!];
+    const w = WEAPONS[(id in WEAPONS ? id : 'sunbeam') as WeaponId];
+    // The shot names its weapon: the hand shows it even if the room state has not caught up yet.
+    if (r.holder.ids[slot] !== w.id) {
+      const ids = [...r.holder.ids];
+      ids[slot] = w.id;
+      r.holder.setWeapons(ids);
+    }
     r.setWeapon(slot);
     r.character.anim.playUpper('fire', 1.4);
     r.firedAt = performance.now();
@@ -543,7 +582,8 @@ export class CombatDirector {
     this.drawShot(muzzle, dir, w, pts, t, false);
     // Enemy fire is a threat: its own bus, panned and attenuated by distance.
     const { pan, dist } = this.spatial(muzzle);
-    this.app.audio.play(w.id === 'sunbeam' ? 'fire.sunbeam' : 'fire.petal', { threat: true, pan, volume: 1 / (1 + dist / 14), muffle: Math.min(0.8, dist / 90), pitch: 0.94 });
+    const fc = fireCue(w);
+    this.app.audio.play(fc.cue, { threat: true, pan, volume: 1 / (1 + dist / 14), muffle: Math.min(0.8, dist / 90), pitch: 0.94 * fc.pitch });
   }
 
   private spatial(p: THREE.Vector3): { pan: number; dist: number } {
@@ -661,6 +701,15 @@ export class CombatDirector {
     return Math.atan2(d.dot(f.right), d.dot(f.forward));
   }
 }
+
+/** Each weapon of the pack gets a voice from the three synthesized shots (pitch tells them apart). */
+function fireCue(w: WeaponDefinition): { cue: Cue; pitch: number } {
+  if (w.pellets > 1) return { cue: 'fire.petal', pitch: 1 };
+  if (w.damage >= 60) return { cue: 'fire.heavy', pitch: w.id === 'launcher' ? 0.8 : 1 };
+  return { cue: 'fire.sunbeam', pitch: w.id === 'pistol' ? 1.12 : w.id === 'smg' ? 1.22 : w.id === 'ak47' ? 0.82 : 1 };
+}
+
+const WEAPON_AMMO_NAME = (w: WeaponDefinition): string => ({ solar: 'cápsulas solares', petal: 'cartuchos de pétala', heavy: 'munição pesada' })[w.ammo];
 
 /** timeScale that makes a clip of `duration` last `seconds`. */
 function clipSpeed(duration: number, seconds: number): number {

@@ -22,6 +22,16 @@ export const C2S = {
   /** RESULTS: this player wants to go back to the lobby now (the room returns once everyone asked, or on the timer). */
   RETURN_LOBBY: 11,
   START_MATCH: 12,
+  /** Open a chest or pick an item up (F). */
+  INTERACT: 13,
+  /** Use a consumable (Z / X / C). */
+  USE_ITEM: 14,
+  /** Dev builds only (ignored in production): loot debugging commands. */
+  DEV_LOOT: 15,
+  /** LOBBY, host only: desired bots (humans replace planned bot seats). */
+  ROOM_SETTINGS: 16,
+  /** PREPARATION: client finished loading the world and the frozen roster. */
+  PREPARED: 17,
 } as const;
 export type C2SType = (typeof C2S)[keyof typeof C2S];
 
@@ -40,6 +50,12 @@ export const S2C = {
   DRAFT_STATE: 109,
   /** Server-authoritative summary of a finished match (sent once, when RESULTS starts). */
   MATCH_SUMMARY: 110,
+  /** Every chest and item on the ground for the current loot generation (on join, reconnect and each new generation). */
+  LOOT_STATE: 111,
+  /** Private answer to every INTERACT / USE_ITEM (accepted or refused, with the reason). */
+  LOOT_RESULT: 112,
+  /** Dev builds only: chest contents and spot diagnostics for the requester. */
+  LOOT_DEV: 113,
 } as const;
 export type S2CType = (typeof S2C)[keyof typeof S2C];
 
@@ -59,6 +75,8 @@ export const MatchPhase = {
   UFO: 2,
   MATCH: 3,
   RESULTS: 4,
+  PREPARATION: 5,
+  CLOSED: 6,
   /** Free roam: everyone spawns on the planet immediately (Phase 1–2 vertical slices and dev). */
   FREE_ROAM: 9,
 } as const;
@@ -121,6 +139,10 @@ export interface JoinOptions {
   token?: string;
   /** Create only: computer opponents in a private solo room (0 keeps a regular room). */
   soloBots?: number;
+  /** Create only: bots in the free seats of a room others join by code (they give their seat to people in the warmup). */
+  bots?: number;
+  roomName?: string;
+  visibility?: 'public' | 'private';
   /** Dev/tests only (ignored in production): ability ids for slots 1–4 instead of the default loadout. */
   loadout?: string[];
 }
@@ -222,6 +244,8 @@ export interface PlayerPublic {
   deaths: number;
   /** Ability ids for keys 1, 2, 3 (basics) and 4 (Ultimate). Public like draft picks; the Ultimate drives the mark. */
   loadout: string[];
+  /** Weapon ids in slots E and Q ('' = empty): what others see in this player's hand. */
+  weapons: string[];
   /** UFO deployment progress (aboard / diving / landed); NONE outside a deployment. */
   deploy: DeployState;
   /** Matches won in this room (the room's running score). */
@@ -290,7 +314,41 @@ export interface RoomStateMsg {
   ufo: UfoRouteMsg | null;
   /** MATCH only: the Tormenta's current phase (null otherwise). */
   tormenta: TormentaMsg | null;
+  room?: RoomMetadata;
+  preparation?: PreparationState | null;
 }
+
+export interface RoomMetadata {
+  name: string;
+  visibility: 'public' | 'private';
+  hostSessionId: string;
+  hostName: string;
+  humans: number;
+  botsDesired: number;
+  botsPlanned: number;
+  capacity: number;
+  protocol: number;
+  available: boolean;
+  canStart: boolean;
+  startReason: string;
+}
+
+/** Actual Colyseus room metadata, never a demonstration or a persisted occupancy count. */
+export interface RoomListing extends RoomMetadata {
+  code: string;
+  phase: MatchPhase;
+  region?: string;
+}
+
+export interface PreparationState {
+  id: number;
+  deadline: number;
+  ready: number[];
+  waiting: number[];
+}
+
+export interface RoomSettingsMsg { bots: number }
+export interface PreparedMsg { id: number; ok: boolean; error?: string }
 
 /** READY toggle (warmup): `{ r: 1 }` ready, `{ r: 0 }` not ready. */
 export interface ReadyMsg {
@@ -324,6 +382,11 @@ export interface NoticeMsg {
 export const NoticeCode = {
   /** The finished match was written to this player's history (Supabase). */
   MATCH_SAVED: 'MATCH_SAVED',
+  HOST_LEFT: 'HOST_LEFT',
+  ROOM_CLOSED: 'ROOM_CLOSED',
+  LOAD_FAILED: 'LOAD_FAILED',
+  LOAD_TIMEOUT: 'LOAD_TIMEOUT',
+  START_REJECTED: 'START_REJECTED',
 } as const;
 
 // ------------------------------------------------------------------------------------------------ match summary
@@ -418,6 +481,120 @@ export interface SelfStatusMsg {
   /** Server time when the current slow ends (0 = not slowed) and its speed factor × 100. */
   slowUntil: number;
   slow: number;
+  /** Weapon ids in slots E and Q ('' = empty); `ammo` is each slot's magazine. */
+  wpn: string[];
+  /** Reserve ammunition per type, in AMMO_TYPES order. */
+  res: number[];
+  /** Consumables carried, in CONSUMABLE_ORDER (keys Z, X, C). */
+  inv: number[];
+  /** Server time when the consumable being used takes effect (0 = none), and which one (CONSUMABLE_ORDER index, -1). */
+  useUntil: number;
+  useItem: number;
+}
+
+// ------------------------------------------------------------------------------------------------ loot
+
+/** Authoritative chest states. A chest opens once per loot generation and never rolls again. */
+export const ChestState = {
+  CLOSED: 0,
+  /** Unlatched by someone; the rewards appear when the lid is up (LOOT_RULES.openMs). */
+  OPENING: 1,
+  OPEN: 2,
+  /** Open and every reward taken. */
+  EMPTY: 3,
+} as const;
+export type ChestState = (typeof ChestState)[keyof typeof ChestState];
+
+/**
+ * One chest: `[id, x, y, z, ux, uy, uz, fx, fy, fz, state, region]` — base point on the ground (mm), its up and its
+ * front (unit × 10000; the front is where it opens and where the rewards land), ChestState, CHEST_REGIONS index.
+ */
+export type ChestTuple = [number, number, number, number, number, number, number, number, number, number, number, number];
+/** One item on the ground: `[id, def, qty, x, y, z]` — ITEM_IDS index, quantity, resting point (mm). */
+export type ItemTuple = [number, number, number, number, number, number];
+export const LOOT_DIR_SCALE = 10000;
+
+export interface LootStateMsg {
+  /** Loot generation: a new one (new chests, nothing on the ground) starts with every match and back in the lobby. */
+  gen: number;
+  chests: ChestTuple[];
+  items: ItemTuple[];
+}
+
+export const LootAction = { OPEN: 0, TAKE: 1, USE: 2 } as const;
+export type LootAction = (typeof LootAction)[keyof typeof LootAction];
+
+/** Why the server refused an INTERACT or a USE_ITEM. */
+export const LootReject = {
+  OK: 0,
+  DEAD: 1,
+  /** Draft, UFO ride or dive, results, or not taking part in the match. */
+  PHASE: 2,
+  TOO_FAR: 3,
+  /** Something solid between the player and the object. */
+  BLOCKED: 4,
+  /** Already opened or taken by someone else (or an old generation). */
+  GONE: 5,
+  /** Reserve or stack full (ammunition, consumables), or the vital it restores is already full. */
+  FULL: 6,
+  /** Both weapon slots hold a weapon: the request must name the slot to replace. */
+  SLOTS_FULL: 7,
+  /** Older than a request already handled. */
+  STALE: 8,
+  /** Using another consumable. */
+  BUSY: 9,
+  /** No such consumable in the inventory. */
+  NO_ITEM: 10,
+  COOLDOWN: 11,
+  /** Requests too close together. */
+  RATE: 12,
+} as const;
+export type LootReject = (typeof LootReject)[keyof typeof LootReject];
+
+/**
+ * INTERACT intent: `{ s, k, id, g, w? }` — request sequence, k = 0 chest / 1 item, the object id, the loot generation
+ * the client sees and, for a weapon when both slots are full, the slot to replace (0 = E, 1 = Q).
+ */
+export interface InteractMsg {
+  s: number;
+  k: 0 | 1;
+  id: number;
+  g: number;
+  w?: number;
+}
+
+/** USE_ITEM intent: `{ s, c }` — request sequence and the consumable (CONSUMABLE_ORDER index). */
+export interface UseItemMsg {
+  s: number;
+  c: number;
+}
+
+export interface LootResultMsg {
+  s: number;
+  a: LootAction;
+  ok: boolean;
+  r: LootReject;
+  /** Chest or item id (USE: the consumable index). */
+  id: number;
+  /** TAKE: what was taken (ITEM_IDS index), how many, and the slot a weapon went into. */
+  d?: number;
+  n?: number;
+  w?: number;
+}
+
+/** DEV_LOOT (dev builds only): regenerate (optional seed), open every closed chest, reveal contents, or drop an item at the feet. */
+export interface DevLootMsg {
+  op: 'regen' | 'open_all' | 'reveal' | 'give';
+  seed?: number;
+  item?: string;
+}
+
+/** LOOT_DEV: what the server rolled for each chest and how every authored spot resolved. */
+export interface LootDevMsg {
+  gen: number;
+  seed: number;
+  chests: { id: number; spot: string; region: string; state: ChestState; items: [string, number][] }[];
+  spots: { id: string; region: string; ok: boolean; moved: number; reason: string; x: number; y: number; z: number }[];
 }
 
 // ------------------------------------------------------------------------------------------------ abilities
@@ -545,8 +722,8 @@ export type StatusFx = 'shield' | 'heal' | 'slow' | 'knock' | 'dash';
 export type DamageCause = 'tormenta';
 
 export type GameEvent =
-  /** A shot happened. `to` are impact points (mm); `t` is the target index or -1 for world. */
-  | { e: 'shot'; by: number; w: number; s: number; from: [number, number, number]; to: [number, number, number][]; t: number[] }
+  /** A shot happened with weapon `id` from slot `w`. `to` are impact points (mm); `t` is the target index or -1 for world. */
+  | { e: 'shot'; by: number; w: number; id: string; s: number; from: [number, number, number]; to: [number, number, number][]; t: number[] }
   /** Damage dealt by `by` to `target`; kinds is the hit taxonomy. */
   | { e: 'dmg'; by: number; target: number; amount: number; kinds: HitKind[]; health: number; shield: number; a?: string; c?: DamageCause }
   /** An ability was accepted: everyone plays the cast; `until` is when the wind-up ends (server time). */
@@ -568,7 +745,15 @@ export type GameEvent =
    */
   | { e: 'jump'; target: number; at: [number, number, number]; v: [number, number, number]; auto: boolean }
   /** `target` touched the ground after a dive (`water` = in a lake or the sea). */
-  | { e: 'land'; target: number; at: [number, number, number]; water: boolean };
+  | { e: 'land'; target: number; at: [number, number, number]; water: boolean }
+  /** Chest `id` changed state (OPENING carries who unlatched it). */
+  | { e: 'chest'; id: number; st: ChestState; by: number }
+  /** Items appeared: from chest `src` (≥ 0), a death drop (-1) or a weapon swap (-2); `by` = player involved or -1. */
+  | { e: 'items'; src: number; by: number; it: ItemTuple[] }
+  /** `by` took from item `id`; `left` is what stays on the ground (0 = gone). */
+  | { e: 'take'; id: number; by: number; left: number }
+  /** `by` started (0), finished (1) or stopped (2) using consumable `c` (CONSUMABLE_ORDER index). */
+  | { e: 'use'; by: number; c: number; ph: 0 | 1 | 2 };
 
 export interface EventsMsg {
   t: number;

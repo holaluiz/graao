@@ -226,9 +226,8 @@ export class AbilityDirector {
     // Hands are stroking while swimming (the server refuses casts then too).
     if (this.app.local.state.swimming) return false;
     if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
-    if (c.phase === MatchPhase.RESULTS || c.phase === MatchPhase.UFO) return false;
     if (c.phase === MatchPhase.MATCH) return this.serverNow() >= c.matchStartsAt && c.inMatch;
-    return true;
+    return c.phase === MatchPhase.FREE_ROAM;
   }
 
   private press(slot: number): void {
@@ -236,6 +235,13 @@ export class AbilityDirector {
     if (!app.input.locked) return;
     if (app.local.state.swimming && app.combat.alive) {
       app.hud.notice('NADANDO · SEM MAGIAS NA ÁGUA', 1.1);
+      app.hud.abilityDenied(slot);
+      app.audio.play('ab.denied');
+      return;
+    }
+    // Hands busy with a consumable (the server refuses it too).
+    if (app.loot.using) {
+      app.hud.notice('MÃOS OCUPADAS', 0.9);
       app.hud.abilityDenied(slot);
       app.audio.play('ab.denied');
       return;
@@ -307,7 +313,7 @@ export class AbilityDirector {
     if (!a) return;
     const n = Date.now();
     this.ctl.applyServer(
-      { weapon: 0, ammo: [], reloading: false, reloadEndsAt: 0, alive: true, respawnAt: 0, shotSeq: -1, mana: Math.floor(a.vitals.mana + 1e-6), cd: [...a.cooldownEnds], castUntil: a.castUntil, abilitySeq: -1, slowUntil: a.slowUntil, slow: Math.round(a.slowFactor * 100) },
+      { weapon: 0, ammo: [], reloading: false, reloadEndsAt: 0, alive: true, respawnAt: 0, shotSeq: -1, mana: Math.floor(a.vitals.mana + 1e-6), cd: [...a.cooldownEnds], castUntil: a.castUntil, abilitySeq: -1, slowUntil: a.slowUntil, slow: Math.round(a.slowFactor * 100), wpn: [], res: [], inv: [], useUntil: 0, useItem: -1 },
       performance.now(),
       n,
       (t) => performance.now() + (t - n),

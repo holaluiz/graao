@@ -18,9 +18,9 @@ export const DRAFT_ROUNDS: readonly DraftKind[] = ['basic', 'basic', 'basic', 'u
 
 export const DRAFT_RULES = {
   /** Time to choose in a round (ms); the round resolves earlier once everyone has chosen. */
-  pickMs: 12000,
+  pickMs: 45000,
   /** Time a seat that lost a conflict has to choose again (ms). */
-  repickMs: 7000,
+  repickMs: 20000,
   /** How long a resolved round stays on screen before the next one opens (ms). */
   revealMs: 1600,
 } as const;

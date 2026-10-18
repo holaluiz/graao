@@ -1,0 +1,334 @@
+[
+  {
+    "screen": "lobby",
+    "requested": {
+      "width": 1366,
+      "height": 768
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1366,
+        768
+      ],
+      "scrolling": [],
+      "size": [
+        1366,
+        768
+      ]
+    }
+  },
+  {
+    "screen": "lobby",
+    "requested": {
+      "width": 1440,
+      "height": 900
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1440,
+        900
+      ],
+      "scrolling": [],
+      "size": [
+        1440,
+        900
+      ]
+    }
+  },
+  {
+    "screen": "lobby",
+    "requested": {
+      "width": 1920,
+      "height": 1080
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1920,
+        1080
+      ],
+      "scrolling": [],
+      "size": [
+        1920,
+        1080
+      ]
+    }
+  },
+  {
+    "screen": "lobby",
+    "requested": {
+      "width": 390,
+      "height": 844
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        390,
+        844
+      ],
+      "scrolling": [],
+      "size": [
+        390,
+        844
+      ]
+    }
+  },
+  {
+    "screen": "draft",
+    "requested": {
+      "width": 1366,
+      "height": 768
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1366,
+        768
+      ],
+      "size": [
+        1366,
+        768
+      ]
+    }
+  },
+  {
+    "screen": "draft",
+    "requested": {
+      "width": 1440,
+      "height": 900
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1440,
+        900
+      ],
+      "size": [
+        1440,
+        900
+      ]
+    }
+  },
+  {
+    "screen": "draft",
+    "requested": {
+      "width": 1920,
+      "height": 1080
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1920,
+        1080
+      ],
+      "size": [
+        1920,
+        1080
+      ]
+    }
+  },
+  {
+    "screen": "creator-clothing",
+    "requested": {
+      "width": 1366,
+      "height": 768
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1366,
+        768
+      ],
+      "size": [
+        1366,
+        768
+      ]
+    }
+  },
+  {
+    "screen": "creator-clothing",
+    "requested": {
+      "width": 1440,
+      "height": 900
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1440,
+        900
+      ],
+      "size": [
+        1440,
+        900
+      ]
+    }
+  },
+  {
+    "screen": "creator-clothing",
+    "requested": {
+      "width": 1920,
+      "height": 1080
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1920,
+        1080
+      ],
+      "size": [
+        1920,
+        1080
+      ]
+    }
+  },
+  {
+    "screen": "home",
+    "requested": {
+      "width": 1366,
+      "height": 768
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1366,
+        768
+      ],
+      "size": [
+        1366,
+        768
+      ]
+    }
+  },
+  {
+    "screen": "home",
+    "requested": {
+      "width": 1440,
+      "height": 900
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1440,
+        900
+      ],
+      "size": [
+        1440,
+        900
+      ]
+    }
+  },
+  {
+    "screen": "home",
+    "requested": {
+      "width": 1920,
+      "height": 1080
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1920,
+        1080
+      ],
+      "size": [
+        1920,
+        1080
+      ]
+    }
+  },
+  {
+    "screen": "home",
+    "requested": {
+      "width": 390,
+      "height": 844
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        390,
+        844
+      ],
+      "size": [
+        390,
+        844
+      ]
+    }
+  },
+  {
+    "screen": "room-browser-six-real-rooms",
+    "requested": {
+      "width": 1366,
+      "height": 768
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1366,
+        768
+      ],
+      "rows": 3,
+      "size": [
+        1366,
+        768
+      ]
+    }
+  },
+  {
+    "screen": "room-browser-six-real-rooms",
+    "requested": {
+      "width": 1440,
+      "height": 900
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1440,
+        900
+      ],
+      "rows": 5,
+      "size": [
+        1440,
+        900
+      ]
+    }
+  },
+  {
+    "screen": "room-browser-six-real-rooms",
+    "requested": {
+      "width": 1920,
+      "height": 1080
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        1920,
+        1080
+      ],
+      "rows": 5,
+      "size": [
+        1920,
+        1080
+      ]
+    }
+  },
+  {
+    "screen": "room-browser-six-real-rooms",
+    "requested": {
+      "width": 390,
+      "height": 844
+    },
+    "metrics": {
+      "outside": [],
+      "page": [
+        390,
+        844
+      ],
+      "rows": 3,
+      "size": [
+        390,
+        844
+      ]
+    }
+  }
+]

@@ -1,10 +1,8 @@
 /**
  * GraaoApp: owns the renderer, the shared world, the local character and the presentation phases.
- * Phases (GRAHudDirector): MENU → CHARACTER_CREATOR → MATCH (free roam / online). Each phase controls visible UI,
- * camera context and input. Inside MATCH the server's match phase (warmup lobby → draft → UFO → match → results)
- * drives the HUD through the CombatDirector; the UFO and DROP presentation phases belong to the DeployDirector
- * (aboard, the ride owns the camera and the local player is not simulated). Between matches, with the pointer free,
- * the room's lobby panel is up; after one, the results screen.
+ * MENU → ROOM_BROWSER → ROOM_LOBBY → ABILITY_DRAFT → LOADING → MATCH follows the server's room phase.
+ * Menus render a decorative avatar; only UFO/drop/match/results present the match world. Deployment owns its camera,
+ * and the local character is not simulated aboard. Customization returns to its originating menu or lobby.
  *
  * The player's name, look and settings live in localStorage and, when Supabase is reachable, in their cloud profile
  * (ProfileService): the cloud row wins at startup unless the player already changed something this session.
@@ -12,7 +10,7 @@
 import * as THREE from 'three';
 import { createGameWorld, latLonToDir, mulberry32, waterDepth, type GameWorld } from '@graao/game-core';
 import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance, validateAppearance } from '@graao/game-data';
-import { ActionState, MatchPhase, MovementState, v3angle, type CharacterAppearance, type DraftStateMsg, type Vec3 } from '@graao/shared';
+import { ActionState, MatchPhase, MovementState, v3angle, type CharacterAppearance, type DraftStateMsg, type NoticeMsg, type RoomStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
 import { GRAAnimationLibrary } from '../character/animation/GRAAnimationLibrary';
@@ -22,6 +20,7 @@ import type { AnimInput } from '../character/CharacterAnimationController';
 import { weaponTriangles } from '../character/WeaponModels';
 import { CombatDirector } from '../game/CombatDirector';
 import { DeployDirector } from '../game/DeployDirector';
+import { LootDirector } from '../game/LootDirector';
 import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
 import { LocalPlayer } from '../game/LocalPlayer';
@@ -39,18 +38,22 @@ import { Menu } from '../ui/Menu';
 import { DraftScreen } from '../ui/DraftScreen';
 import { ResultsScreen } from '../ui/ResultsScreen';
 import { Scoreboard } from '../ui/Scoreboard';
+import { RoomBrowser, type CreateRoomSettings } from '../ui/RoomBrowser';
+import { SettingsPanel, type GameSettings } from '../ui/SettingsPanel';
+import { PreparationScreen } from '../ui/PreparationScreen';
+import { Modal, Toast, button, field, node } from '../ui/components';
 import { PlanetView } from '../world/PlanetView';
 import { AmbientLife } from '../world/AmbientLife';
 import { autoInk } from '../ui/ink';
 import { AuthoredParts } from '../character/build/AuthoredParts';
-import { NetSession } from '../net/NetSession';
+import { NetSession, type RoomConnectOptions } from '../net/NetSession';
 import { ProfileService, type CloudProfile } from '../net/ProfileService';
-import { probeServer, serverTarget } from '../net/serverTarget';
+import { signalingConfigured } from '../net/host/signaling';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
 
-export type HudPhase = 'BOOT' | 'MENU' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
+export type HudPhase = 'BOOT' | 'MENU' | 'ROOM_BROWSER' | 'ROOM_LOBBY' | 'LOADING' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
 
-const STORAGE = { appearance: 'graao.appearance', name: 'graao.name', fpsCap: 'graao.fpsCap' };
+const STORAGE = { appearance: 'graao.appearance', name: 'graao.name', fpsCap: 'graao.fpsCap', settings: 'graao.settings' };
 
 function readStorage<T>(key: string, fallback: T, valid: (v: unknown) => v is T): T {
   try {
@@ -99,12 +102,23 @@ export class GraaoApp {
   water!: WaterDirector;
   /** The match's shrinking safe region: world pigment, curtain, HUD, sound (mirrors the server). */
   tormenta!: TormentaDirector;
+  /** Chests, items on the ground, pickups and consumables (mirrors the server). */
+  loot!: LootDirector;
   net: NetSession | null = null;
   phase: HudPhase = 'BOOT';
   appearance: CharacterAppearance;
   name: string;
   private dev!: DevOverlay;
   private menu!: Menu;
+  private browser!: RoomBrowser;
+  private settings!: SettingsPanel;
+  private pause!: Modal;
+  private training: Modal | null = null;
+  private readonly preparation = new PreparationScreen();
+  private readonly toast = new Toast();
+  private roomState: RoomStateMsg | null = null;
+  private creatorReturn: 'MENU' | 'ROOM_LOBBY' = 'MENU';
+  private preparationId = -1;
   private creator!: Creator;
   /** Ability Draft screen (over the world while the server runs the draft). */
   private draftUi!: DraftScreen;
@@ -117,7 +131,7 @@ export class GraaoApp {
   private creatorZoom = 3.1;
   private dragging = false;
   private menuFacing = new THREE.Vector3();
-  private spawn = new THREE.Vector3();
+  readonly spawn = new THREE.Vector3();
   private place = '';
   private readonly tmpPos = new THREE.Vector3();
   private readonly tmpFacing = new THREE.Vector3();
@@ -127,12 +141,16 @@ export class GraaoApp {
   readonly limiter = new FrameLimiter();
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: HTMLElement) {
-    // Players always get HIGH; `?quality=` stays as a dev override for benchmarks.
+    // Presentation settings live in their own screen; the development quality override remains available.
     const q = new URLSearchParams(location.search).get('quality')?.toUpperCase();
-    const quality = (['LOW', 'MEDIUM', 'HIGH'].includes(q ?? '') ? q : 'HIGH') as Quality;
+    const savedSettings = readStorage<Partial<GameSettings>>(STORAGE.settings, {}, (v): v is Partial<GameSettings> => !!v && typeof v === 'object');
+    const quality = (['LOW', 'MEDIUM', 'HIGH'].includes(q ?? '') ? q : ['LOW', 'MEDIUM', 'HIGH'].includes(savedSettings.quality ?? '') ? savedSettings.quality : 'HIGH') as Quality;
     this.r = new GRARenderer(canvas, quality);
     this.input = new Input(canvas);
     this.camera = new GraaoThirdPersonCamera(this.r.camera);
+    this.audio.setVolume(typeof savedSettings.volume === 'number' ? THREE.MathUtils.clamp(savedSettings.volume, 0, 1) : .8);
+    if (typeof savedSettings.sensitivity === 'number') this.input.sensitivity = THREE.MathUtils.clamp(savedSettings.sensitivity, .0005, .005);
+    this.input.invertY = savedSettings.invertY === true;
     // Saves from older catalogs keep every piece that still exists; new slots start empty.
     this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (_v): _v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
@@ -181,6 +199,16 @@ export class GraaoApp {
       console.warn('[graao] hero-parts.glb indisponível; usando as peças feitas em código', e);
     }
     mark('heroParts', t);
+    t = performance.now();
+    try {
+      await Promise.all([
+        this.assets.track(this.audio.loadAmbience(this.assets.url('audio/wind.mp3')), 'ambienceWind'),
+        this.assets.track(this.audio.loadBeach(this.assets.url('audio/beach.mp3')), 'ambienceBeach'),
+      ]);
+    } catch (e) {
+      console.warn('[graao] áudio ambiente indisponível', e);
+    }
+    mark('ambienceAudio', t);
     progress(0.88, 'Escolhendo a roupa…');
     await nextFrame();
     const s = SPAWNS[0]!;
@@ -197,6 +225,7 @@ export class GraaoApp {
     this.local = new LocalPlayer(this.world.physics, { x: ground.x + dir.x * 0.05, y: ground.y + dir.y * 0.05, z: ground.z + dir.z * 0.05 }, facing);
     this.character = new GraaoCharacter(this.parts, this.anims, this.appearance);
     this.r.scene.add(this.character.root);
+    this.loot = new LootDirector(this);
     this.combat = new CombatDirector(this);
     this.deploy = new DeployDirector(this);
     this.water = new WaterDirector(this);
@@ -253,64 +282,83 @@ export class GraaoApp {
   // ------------------------------------------------------------------------------------------------ ui
 
   private buildUi(): void {
-    this.menu = new Menu(
-      {
-        solo: (bots) => {
-          if (bots > 0) void this.online('solo', '', this.menu.name(), bots);
-          else this.playSolo();
-        },
-        create: (name) => void this.online('create', '', name),
-        join: (code, name) => void this.online('join', code, name),
-        customize: () => this.setPhase('CHARACTER_CREATOR'),
-        history: () => void this.openHistory(),
-        fpsCap: (c) => {
-          this.limiter.cap = c;
-          writeStorage(STORAGE.fpsCap, c);
-          this.profile.save({ settings: { fpsCap: c } });
-          const hz = Math.round(this.limiter.refreshHz);
-          this.menu.setNote(
-            c === 0
-              ? `Máximo: segue o monitor (${hz} Hz). O navegador não mostra mais quadros que isso.`
-              : c >= hz
-                ? `Seu monitor mostra até ${hz} Hz: o limite de ${c} não muda nada aqui.`
-                : `Limite de ${c} FPS (monitor de ${hz} Hz).${(hz / c) % 1 > 0.05 && (hz / c) % 1 < 0.95 ? ` Para movimento mais liso, prefira um valor que divida ${hz}.` : ''}`,
-          );
-        },
-        click: () => this.audio.play('ui.click'),
-      },
-      this.name,
-      this.limiter.cap,
-    );
-    this.creator = new Creator(
-      this.appearance,
-      (a) => this.applyAppearance(a),
-      () => this.setPhase('MENU'),
-      (cue) => this.audio.play(cue),
-    );
-    this.draftUi = new DraftScreen({
-      pick: (round, id) => this.net?.sendDraftPick(round, id),
+    this.menu = new Menu({
+      play: () => this.setPhase('ROOM_BROWSER'),
+      customize: () => this.openCreator(),
+      settings: () => this.settings.show(),
+      train: () => this.openTraining(),
+      name: (name) => this.rememberName(name),
+      click: () => this.audio.play('ui.click'),
+    }, this.name);
+    this.browser = new RoomBrowser({
+      back: () => this.setPhase('MENU'),
+      create: (settings) => void this.createRoom(settings),
+      join: (code, fallbackHosted) => void this.online('join', code, this.name, 0, { forceDedicated: true, fallbackHosted }),
+      click: () => this.audio.play('ui.click'),
+    });
+    this.browser.playerName = this.name;
+    this.browser.hostedAvailable = signalingConfigured();
+    this.settings = new SettingsPanel({
+      quality: this.r.quality, fpsCap: this.limiter.cap, volume: this.audio.volume,
+      sensitivity: this.input.sensitivity, invertY: this.input.invertY,
+    }, (settings) => {
+      this.r.setQuality(settings.quality);
+      this.vfx.setQuality(settings.quality);
+      this.limiter.cap = settings.fpsCap;
+      this.audio.setVolume(settings.volume);
+      this.input.sensitivity = settings.sensitivity;
+      this.input.invertY = settings.invertY;
+      writeStorage(STORAGE.settings, settings);
+      writeStorage(STORAGE.fpsCap, settings.fpsCap);
+      this.profile.save({ settings: { fpsCap: settings.fpsCap, quality: settings.quality } });
+    });
+    this.creator = new Creator(this.appearance, {
+      preview: (a) => this.character.setAppearance(a),
+      save: (a) => { this.applyAppearance(a); this.setPhase(this.creatorReturn); this.toast.show('Aparência salva'); },
+      discard: (a) => { this.character.setAppearance(a); this.setPhase(this.creatorReturn); },
+      resetView: () => { this.creatorYaw = 0; this.creatorZoom = 3.1; },
       sound: (cue) => this.audio.play(cue),
     });
-    this.results = new ResultsScreen({
-      lobby: () => this.net?.sendReturnLobby(),
-      leave: () => this.leaveRoom(),
-      click: () => this.audio.play('ui.click'),
-    });
+    this.draftUi = new DraftScreen({ pick: (round, id) => this.net?.sendDraftPick(round, id), sound: (cue) => this.audio.play(cue) });
+    this.results = new ResultsScreen({ lobby: () => this.net?.sendReturnLobby(), leave: () => this.leaveRoom(), click: () => this.audio.play('ui.click') });
     this.lobby = new LobbyPanel({
       ready: (on) => this.combat.setReady(on),
-      play: () => this.input.requestLock(),
+      start: () => this.net?.sendStartMatch(),
+      bots: (count) => this.net?.sendRoomSettings(count),
+      customize: () => this.openCreator(),
       leave: () => this.leaveRoom(),
       click: () => this.audio.play('ui.click'),
+      notify: (text) => this.toast.show(text),
     });
+    this.pause = new Modal('Um respiro', () => { this.input.enabled = this.phase === 'MATCH'; });
+    const pauseActions = node('div', 'pause-actions');
+    pauseActions.append(
+      button('Continuar', () => { this.pause.hide(); if (this.phase === 'MATCH') this.input.requestLock(); }, true),
+      button('Configurações', () => { this.pause.hide(); this.settings.show(); }),
+      button('Sair da sala', () => { this.pause.hide(); this.leaveRoom(); }),
+    );
+    this.pause.body.append(pauseActions);
     this.history = new HistoryPanel(() => this.history.show(false));
     this.hud.show(false);
-    this.ui.append(this.menu.el, this.history.el, this.creator.stage, this.creator.el, this.hud.el, this.lobby.el, this.draftUi.el, this.results.el, this.scoreboard.el);
+    this.ui.append(this.menu.el, this.browser.el, this.history.el, this.creator.stage, this.creator.el, this.hud.el,
+      this.lobby.el, this.draftUi.el, this.preparation.el, this.results.el, this.scoreboard.el, this.pause.el, this.settings.el, this.toast.el);
     autoInk(this.ui);
     this.dev = new DevOverlay({ renderer: this.r.renderer, extra: () => this.devStats() });
-
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || e.repeat || e.defaultPrevented) return;
+      this.input.consume('menu');
+      if (this.settings.visible) { this.settings.hide(); return; }
+      if (this.pause.visible) { this.pause.hide(); return; }
+      if (this.training?.visible) { this.training.hide(); return; }
+      if (this.phase === 'ROOM_BROWSER') { if (!this.browser.closeModal()) this.setPhase('MENU'); return; }
+      if (this.phase === 'CHARACTER_CREATOR') { this.character.setAppearance(this.appearance); this.setPhase(this.creatorReturn); return; }
+      if (this.net || this.phase === 'MATCH') {
+        this.input.exitLock(); this.input.releaseAll(); this.input.enabled = false; this.pause.show();
+      }
+    });
     const canvas = this.r.canvas;
     canvas.addEventListener('click', () => {
-      if (this.phase === 'MATCH' && !this.draftUi.visible) this.input.requestLock();
+      if (this.phase === 'MATCH' && !this.pause.visible && !this.settings.visible) this.input.requestLock();
     });
     canvas.addEventListener('pointerdown', (e) => {
       if (this.phase === 'CHARACTER_CREATOR') {
@@ -334,7 +382,7 @@ export class GraaoApp {
   private updateHint(): void {
     if (this.phase !== 'MATCH') return;
     const quiet = this.input.locked || this.results.visible;
-    this.hud.setHint(quiet ? '' : this.net ? 'Clique no mundo para jogar · Esc de novo sai da sala' : 'Clique para jogar · Esc de novo volta ao menu');
+    this.hud.setHint(quiet ? '' : this.net ? 'Clique no mundo para jogar · ESC abre opções' : 'Clique para jogar · ESC abre opções');
   }
 
   private applyAppearance(a: CharacterAppearance): void {
@@ -346,8 +394,10 @@ export class GraaoApp {
   }
 
   private rememberName(name: string): void {
-    this.name = name;
-    writeStorage(STORAGE.name, name);
+    this.name = name.trim().slice(0, 16);
+    this.menu.setName(this.name);
+    this.browser.playerName = this.name;
+    writeStorage(STORAGE.name, this.name);
     this.profile.save({ name });
   }
 
@@ -368,13 +418,13 @@ export class GraaoApp {
       this.name = row.name;
       writeStorage(STORAGE.name, row.name);
       this.menu.setName(row.name);
+      this.browser.playerName = row.name;
     }
     const look = migrateAppearance(row.appearance);
-    if (look && validateAppearance(look) && !changed.appearance) {
+    if (look && validateAppearance(look) && !changed.appearance && this.phase !== 'CHARACTER_CREATOR') {
       this.appearance = { ...look };
       this.character.setAppearance(look);
       writeStorage(STORAGE.appearance, look);
-      if (this.phase === 'CHARACTER_CREATOR') this.creator.setAppearance(look);
       this.net?.sendAppearance(look);
     }
     const fps = row.settings.fpsCap;
@@ -403,123 +453,217 @@ export class GraaoApp {
     }
   }
 
-  /** Leaves the online room (lobby/results buttons, Esc twice) and goes back to the menu. */
+  /** Leave the room explicitly; ESC only opens options. */
   leaveRoom(): void {
+    const online = !!this.net;
     this.combat.connectionLost = false;
     this.net?.leave();
     this.net = null;
+    this.roomState = null;
+    this.preparationId = -1;
+    this.local.outbox.length = 0;
+    this.loot.reset();
     this.hud.setRoom(null);
-    this.setPhase('MENU');
+    this.pause.hide();
+    this.setPhase(online ? 'ROOM_BROWSER' : 'MENU');
   }
 
-  /**
-   * The server opened (or closed) the Ability Draft: its screen covers the world, gameplay input is off and the
-   * pointer is released so cards can be clicked. Closing it hands the world back (a click locks the pointer again).
-   */
   setDraft(on: boolean): void {
-    if (this.draftUi.visible === on) return;
     this.draftUi.show(on);
-    this.hud.show(this.phase === 'MATCH' && !on);
-    this.input.releaseAll();
-    this.input.enabled = this.phase === 'MATCH' && !on;
-    if (on) this.input.exitLock();
-    else this.updateHint();
   }
 
-  /** DRAFT_STATE always follows the ROOM_STATE that opened the draft, so the screen is already up. */
   onDraftState(m: DraftStateMsg): void {
-    if (!this.net || this.phase !== 'MATCH' || this.combat.phase !== MatchPhase.ABILITY_DRAFT) return;
+    if (!this.net || this.phase !== 'ABILITY_DRAFT') return;
     this.draftUi.setState(m, this.net.myIndex, (i) => this.combat.nameOf(i));
   }
 
+  onRoomNotice(m: NoticeMsg): void {
+    if (m.text) this.toast.show(m.text, m.kind === 'error');
+  }
+
+  /** Presentation follows the authoritative room phase; only UFO onward runs the world. */
+  onRoomState(m: RoomStateMsg): void {
+    this.roomState = m;
+    if (!this.net) return;
+    if (m.phase === MatchPhase.LOBBY) {
+      this.preparationId = -1;
+      if (this.phase !== 'CHARACTER_CREATOR' || this.creatorReturn !== 'ROOM_LOBBY') this.setPhase('ROOM_LOBBY');
+      this.lobby.update(m, this.net.myIndex);
+    } else if (m.phase === MatchPhase.ABILITY_DRAFT) {
+      this.setPhase('ABILITY_DRAFT');
+    } else if (m.phase === MatchPhase.PREPARATION) {
+      this.setPhase('LOADING');
+      const prep = m.preparation;
+      if (prep) {
+        this.preparation.waiting(prep.ready.length, prep.ready.length + prep.waiting.length);
+        if (prep.id !== this.preparationId) void this.prepareMatch(prep.id);
+      }
+    } else if (m.phase === MatchPhase.UFO || m.phase === MatchPhase.MATCH || m.phase === MatchPhase.RESULTS || m.phase === MatchPhase.FREE_ROAM) {
+      this.setPhase('MATCH');
+    } else if (m.phase === MatchPhase.CLOSED) {
+      this.onDisconnected('A sala foi encerrada pelo anfitrião.');
+    }
+  }
+
+  private async prepareMatch(id: number): Promise<void> {
+    this.preparationId = id;
+    const net = this.net;
+    const current = () => this.net === net && this.preparationId === id && this.phase === 'LOADING';
+    const started = performance.now();
+    try {
+      this.preparation.step(0, 'Verificando o planeta e os recursos…');
+      await nextFrame();
+      if (!current()) return;
+      if (!this.world || !this.planet || !this.anims.clips.size) throw new Error('Os recursos do planeta não estão prontos.');
+      this.preparation.step(1, 'Conferindo os participantes e suas habilidades…');
+      await nextFrame();
+      if (!current()) return;
+      if (!this.roomState?.players.length) throw new Error('A lista de participantes não chegou.');
+      this.preparation.step(2, 'Preparando a imagem da partida…');
+      net?.preparePresentation();
+      this.compileShaders();
+      await nextFrame();
+      if (!current()) return;
+      this.loadMs.preparation = Math.round(performance.now() - started);
+      this.preparation.step(3, 'Tudo pronto. Aguardando os outros jogadores…');
+      net?.sendPrepared(id, true);
+    } catch (e) {
+      if (!current()) return;
+      const message = (e as Error).message || 'Não foi possível preparar a partida.';
+      this.toast.show(message, true);
+      net?.sendPrepared(id, false, message);
+    }
+  }
+
   setPhase(p: HudPhase): void {
+    if (this.phase === p) return;
+    const previous = this.phase;
     this.phase = p;
+    if (previous === 'CHARACTER_CREATOR' && p !== this.creatorReturn) this.character.setAppearance(this.appearance);
+    this.input.releaseAll();
+    this.local.outbox.length = 0;
+    this.pause.hide();
+    this.settings.hide();
+    this.menu.show(p === 'MENU');
+    this.browser.show(p === 'ROOM_BROWSER');
+    this.creator.show(p === 'CHARACTER_CREATOR');
+    if (p === 'CHARACTER_CREATOR') this.creator.setAppearance(this.appearance);
+    this.lobby.show(p === 'ROOM_LOBBY');
+    this.draftUi.show(p === 'ABILITY_DRAFT');
+    this.preparation.show(p === 'LOADING');
+    this.hud.show(p === 'MATCH');
+    this.history.show(false);
+    this.input.enabled = p === 'MATCH';
     if (p !== 'MATCH') {
       this.scoreboard.hide();
       this.input.scoreboardEnabled = false;
-      this.draftUi.show(false);
+      this.input.exitLock();
       this.deploy.reset();
       this.tormenta.reset();
       this.results.hide();
-      this.lobby.show(false);
+      this.character.root.visible = true;
     }
-    this.menu.show(p === 'MENU');
-    if (p !== 'MENU') this.history.show(false);
-    if (p === 'MENU') this.showProfileStatus();
-    this.creator.show(p === 'CHARACTER_CREATOR');
-    if (p === 'CHARACTER_CREATOR') this.creator.setAppearance(this.appearance);
-    this.hud.show(p === 'MATCH');
-    // Nothing pressed in menus carries into the world.
-    if (p === 'MATCH') this.input.releaseAll();
-    this.input.enabled = p === 'MATCH';
-    if (p !== 'MATCH') this.input.exitLock();
-    if (p === 'MATCH') {
-      this.combat.enter(!!this.net);
-      this.updateHint();
-      this.input.requestLock();
-    }
-    if (p === 'MENU') {
-      this.menu.setBusy(false);
-      void this.checkServer();
-    }
+    this.combat.holder.setVisible(p === 'MATCH');
+    this.net?.setPresentation(p === 'MATCH');
+    if (p === 'MATCH') this.updateHint();
+    if (p === 'MENU') { this.menu.setBusy(false); this.showProfileStatus(); }
+    if (p === 'ROOM_LOBBY' && this.roomState && this.net) this.lobby.update(this.roomState, this.net.myIndex);
   }
 
-  /** Is the match server up (and speaking our protocol)? Shown under the online buttons; never blocks the menu. */
-  private serverCheckedAt = -Infinity;
-  private async checkServer(force = false): Promise<void> {
-    if (!force && performance.now() - this.serverCheckedAt < 15000) return;
-    this.serverCheckedAt = performance.now();
-    const target = serverTarget();
-    this.menu.setServer('checking', 'Procurando o servidor de partidas…');
-    const st = await probeServer(target);
-    const where = target.official ? '' : ` (${new URL(target.url.replace(/^ws/, 'http')).host} · como convidado)`;
-    if (st.kind === 'online') this.menu.setServer('online', `Servidor online${where}${st.players ? ` · ${st.players} ${st.players === 1 ? 'jogador' : 'jogadores'} agora` : ''}`);
-    else if (st.kind === 'version') this.menu.setServer('version', 'O servidor roda outra versão do graao. Recarregue a página.');
-    else this.menu.setServer('offline', `Servidor de partidas fora do ar${where}. Explorar sozinho funciona normalmente.`);
+  private openCreator(): void {
+    this.creatorReturn = this.phase === 'ROOM_LOBBY' ? 'ROOM_LOBBY' : 'MENU';
+    if (this.creatorReturn === 'ROOM_LOBBY') this.combat.setReady(false);
+    this.creatorYaw = 0;
+    this.creatorZoom = 3.1;
+    this.setPhase('CHARACTER_CREATOR');
+  }
+
+  private openTraining(): void {
+    this.training?.el.remove();
+    const modal = new Modal('Treinar sozinho');
+    this.training = modal;
+    const bots = node('select', 'field');
+    for (let i = 0; i <= 9; i++) { const option = node('option', '', i ? `${i} ${i === 1 ? 'bot' : 'bots'}` : 'Sem bots · explorar o planeta'); option.value = String(i); bots.append(option); }
+    modal.body.append(node('p', 'gra-muted', 'Treino privado. Com bots, você monta a partida no lobby.'), field('Adversários', bots), button('Começar treino', () => {
+      modal.hide();
+      const count = Number(bots.value);
+      if (!count) this.playSolo();
+      else void this.online('solo', '', this.name, count, { hosted: true });
+    }, true));
+    this.ui.append(modal.el);
+    modal.show();
+  }
+
+  private async createRoom(settings: CreateRoomSettings): Promise<void> {
+    await this.online('create', '', this.name, settings.bots, {
+      roomName: settings.roomName, visibility: settings.visibility,
+      forceDedicated: !settings.hosted, hosted: settings.hosted,
+    });
   }
 
   private playSolo(): void {
-    this.rememberName(this.menu.name());
+    this.loot.reset();
+    this.roomState = null;
+    this.combat.enter(false);
     this.local.teleport({ x: this.spawn.x, y: this.spawn.y, z: this.spawn.z }, { x: this.menuFacing.x, y: this.menuFacing.y, z: this.menuFacing.z });
     this.camera.reset(this.spawn, this.menuFacing);
     this.hud.setRoom(null);
     this.setPhase('MATCH');
-    // Solo starts like a match: from the UFO (?nodrop skips it).
     if (!new URLSearchParams(location.search).has('nodrop')) this.deploy.startOffline();
+    this.input.requestLock();
   }
 
-  private async online(kind: 'create' | 'join' | 'solo', code: string, name: string, bots = 0): Promise<void> {
-    this.rememberName(name);
+  private async online(kind: 'create' | 'join' | 'solo', code: string, name: string, bots = 0, settings: RoomConnectOptions = {}): Promise<void> {
+    this.rememberName(name || 'Jogador');
     this.menu.setBusy(true);
-    this.menu.setNote(kind === 'solo' ? `Preparando partida com ${bots} ${bots === 1 ? 'bot' : 'bots'}…` : kind === 'create' ? 'Abrindo uma sala…' : `Entrando em ${code}…`);
+    this.browser.setBusy(true);
+    const text = kind === 'join' ? `Entrando em ${code}…` : 'Abrindo a sala…';
+    this.browser.message(text);
+    this.menu.setNote(text);
     try {
       this.net?.leave();
       this.net = null;
-      this.net = await NetSession.connect(this, kind, code, name || 'Jogador', bots);
-      this.hud.setRoom(this.net.solo ? 'SOLO · BOTS' : this.net.code);
+      this.roomState = null;
+      this.preparationId = -1;
+      this.loot.reset();
+      this.local.outbox.length = 0;
+      this.net = await NetSession.connect(this, kind, code, this.name, bots, settings);
+      this.combat.enter(true);
+      this.lobby.setConnection(false);
+      this.hud.setRoom(this.net.solo ? 'TREINO · BOTS' : this.net.code);
       this.menu.setNote('');
-      this.setPhase('MATCH');
+      this.browser.closeModal();
+      this.setPhase('ROOM_LOBBY');
       this.net.syncState();
     } catch (e) {
+      const message = (e as Error).message ?? String(e);
+      this.browser.message(message, true);
+      this.menu.setNote(message, true);
+      this.toast.show(message, true);
+    } finally {
       this.menu.setBusy(false);
-      this.menu.setNote((e as Error).message ?? String(e), true);
-      void this.checkServer(true);
+      this.browser.setBusy(false);
     }
   }
 
-  /** The socket dropped (true) and the SDK is reconnecting, or it came back (false). The room keeps our seat meanwhile. */
   onConnectionDrop(dropped: boolean): void {
     this.combat.connectionLost = dropped;
-    if (!dropped) this.hud.notice('RECONECTADO', 1.2);
+    this.lobby.setConnection(dropped);
+    this.toast.show(dropped ? 'Conexão interrompida. Tentando reconectar…' : 'Conexão restabelecida.', dropped);
   }
 
   onDisconnected(msg: string): void {
     this.combat.connectionLost = false;
     this.net?.leave();
     this.net = null;
+    this.roomState = null;
+    this.preparationId = -1;
+    this.local.outbox.length = 0;
+    this.loot.reset();
     this.hud.setRoom(null);
-    this.setPhase('MENU');
-    this.menu.setNote(msg, true);
+    this.setPhase('ROOM_BROWSER');
+    this.browser.message(msg, true);
+    this.toast.show(msg, true);
   }
 
   // ------------------------------------------------------------------------------------------------ frame
@@ -529,8 +673,9 @@ export class GraaoApp {
     const dt = this.lastT ? Math.min(0.1, (t - this.lastT) / 1000) : 1 / 60;
     this.lastT = t;
     this.time += dt;
+    this.input.enabled = this.phase === 'MATCH' && !this.pause.visible && !this.settings.visible;
     if (this.input.consume('debug')) this.dev.toggle();
-    if (this.phase === 'MATCH' && !this.input.locked && this.input.consume('menu')) this.leaveRoom();
+
 
     const feet = this.tmpPos;
     let facing = this.tmpFacing;
@@ -554,6 +699,8 @@ export class GraaoApp {
         facing = this.local.renderFacing(alpha, facing);
         this.camera.update(dt, feet, this.world.physics);
       }
+      // Loot first: its weapon replacement card may own E and Q this frame.
+      this.loot.update(dt, this.time);
       this.combat.update(dt);
       this.deploy.update(dt);
       const s = this.local.state;
@@ -601,7 +748,8 @@ export class GraaoApp {
     const orbit = this.r.setAltitude(PLANET.radius);
     this.planet.setOrbit(orbit, this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
     this.ambient.update(dt, this.time, this.phase === 'MATCH' ? feet : this.spawn);
-    this.audio.setAmbience((1 - orbit) * this.tormenta.ambience, this.time);
+    const envLevel = (1 - orbit) * this.tormenta.ambience;
+    this.audio.setAmbience(envLevel, envLevel * this.water.beachProximity, this.time);
     this.r.render();
     this.frameMs = performance.now() - t0;
     this.dev.frame();
@@ -637,17 +785,8 @@ export class GraaoApp {
     }
   }
 
-  /** The room's lobby panel: online, between matches, pointer free, nothing else over the world. */
-  private resultsUp = false;
   private updateLobby(): void {
-    if (this.results.visible !== this.resultsUp) {
-      this.resultsUp = this.results.visible;
-      this.updateHint();
-    }
-    const net = this.net;
-    const show = !!net && this.combat.phase === MatchPhase.FREE_ROAM && !this.input.locked && !this.draftUi.visible && !this.results.visible;
-    if (show !== this.lobby.visible) this.lobby.show(show);
-    if (show && net) this.lobby.update(net.code, [...this.combat.roomPlayers], net.myIndex);
+    if (this.lobby.visible !== (this.phase === 'ROOM_LOBBY')) this.lobby.show(this.phase === 'ROOM_LOBBY');
   }
 
   /** Menu framing: the character on the right third, the village and the sky behind. */
@@ -695,16 +834,24 @@ export class GraaoApp {
     const f = this.menuFacing;
     const side = new THREE.Vector3().crossVectors(up, f).normalize();
     // Sliding camera and target sideways by `shift` puts the character at NDC x = -shift / halfWidth.
-    const halfW = Math.tan(THREE.MathUtils.degToRad(40 / 2)) * this.creatorZoom * this.r.camera.aspect;
-    const shift = -this.creator.freeCenterX(this.r.canvas.getBoundingClientRect()) * halfW;
+    const view = this.r.canvas.getBoundingClientRect();
+    const bounds = this.creator.previewBounds();
+    // Fit the reserved preview by widening the lens, keeping the camera clear of village buildings.
+    const framing = Math.max(1, view.height / Math.max(110, bounds.height) * .95);
+    const fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(20)) * framing));
+    const distance = this.creatorZoom;
+    const halfH = Math.tan(THREE.MathUtils.degToRad(fov / 2)) * distance;
+    const shift = -this.creator.freeCenterX(view) * halfH * this.r.camera.aspect;
+    const centerY = 1 - ((bounds.top + bounds.height / 2 - view.top) / view.height) * 2;
+    const verticalShift = -centerY * halfH;
     // Whole body at the default distance; zooming in rises toward the face (hats, beards, glasses).
     const focus = THREE.MathUtils.clamp(THREE.MathUtils.mapLinear(this.creatorZoom, 3.1, 1.6, 0.9, 1.38), 0.9, 1.38);
-    const want = this.spawn.clone().addScaledVector(up, focus + 0.1).addScaledVector(f, this.creatorZoom).addScaledVector(side, shift);
+    const want = this.spawn.clone().addScaledVector(up, focus + verticalShift + 0.1).addScaledVector(f, distance).addScaledVector(side, shift);
     this.r.camera.position.lerp(want, 1 - Math.exp(-dt * 10));
     this.r.camera.up.copy(up);
-    this.r.camera.lookAt(this.spawn.clone().addScaledVector(up, focus).addScaledVector(side, shift));
-    if (this.r.camera.fov !== 40) {
-      this.r.camera.fov = 40;
+    this.r.camera.lookAt(this.spawn.clone().addScaledVector(up, focus + verticalShift).addScaledVector(side, shift));
+    if (Math.abs(this.r.camera.fov - fov) > .01) {
+      this.r.camera.fov = fov;
       this.r.camera.updateProjectionMatrix();
     }
   }
@@ -747,6 +894,7 @@ export class GraaoApp {
       'VFX ativos': this.vfx.active,
       habilidades: this.combat.abilities.stats(),
       tormenta: this.tormenta.stats(),
+      loot: this.loot.stats(),
       fase: this.deploy && this.deploy.mode !== 'none' ? `${this.phase} / ${this.deploy.mode}` : this.phase,
       'tris OVNI': this.deploy?.ufo.triangles ?? 0,
       posição: s ? `lat ${lat.toFixed(1)} lon ${lon.toFixed(1)} r ${Math.hypot(s.pos.x, s.pos.y, s.pos.z).toFixed(2)}` : '-',

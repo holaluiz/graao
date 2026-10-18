@@ -1,10 +1,12 @@
 /**
  * Desktop input: WASD move, mouse camera (pointer lock), Space jump, Shift sprint, LMB fire, RMB aim, E/Q weapon
- * slots, R reload, Enter ready (warmup), 1–4 abilities, Tab scoreboard, Esc menu. On focus loss every held input is released so nothing stays stuck.
+ * slots, R reload, Enter ready (warmup), 1–4 abilities, F interact (open a chest, pick up), Z/X/C consumables (Vida,
+ * Escudo, Mana), Tab scoreboard, Esc menu. On focus loss every held input is released so nothing stays stuck.
  */
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'fire' | 'aim'
-  | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard';
+  | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard'
+  | 'interact' | 'item1' | 'item2' | 'item3';
 
 const KEYS: Record<string, Action> = {
   KeyW: 'forward',
@@ -25,6 +27,10 @@ const KEYS: Record<string, Action> = {
   Digit3: 'ability3',
   Digit4: 'ultimate',
   KeyR: 'reload',
+  KeyF: 'interact',
+  KeyZ: 'item1',
+  KeyX: 'item2',
+  KeyC: 'item3',
   Enter: 'ready',
   NumpadEnter: 'ready',
   Escape: 'menu',
@@ -61,7 +67,7 @@ export class Input {
         e.preventDefault();
       }
       // Space never scrolls or presses a focused button (it jumps, also out of the UFO without pointer lock).
-      if (a === 'debug' || a === 'jump' || (this.locked && ['weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate'].includes(a))) e.preventDefault();
+      if (a === 'debug' || (a === 'jump' && this.enabled) || (this.locked && ['weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate', 'interact', 'item1', 'item2', 'item3'].includes(a))) e.preventDefault();
       if (!e.repeat) this.pressed.add(a);
       this.held.add(a);
     });

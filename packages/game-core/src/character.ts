@@ -143,7 +143,7 @@ export function decodeInput(cmd: InputCmd, out: CharacterInput): CharacterInput 
 export const newInput = (): CharacterInput => ({ wish: v3(), aim: { x: 0, y: 0, z: 1 }, buttons: 0 });
 
 const CAPSULE_CENTER = MOVEMENT.capsuleHalfHeight + MOVEMENT.capsuleRadius;
-const PLAYER_GROUPS = groups(Group.PLAYER, Group.TERRAIN | Group.PROP);
+const PLAYER_GROUPS = groups(Group.PLAYER, Group.TERRAIN | Group.PROP | Group.CHEST);
 
 /** One character's Rapier objects: a parentless capsule collider moved by the shared kinematic controller. */
 export interface CharacterBody {
@@ -162,6 +162,12 @@ export class CharacterMotor {
   private readonly tmpCenter = v3();
   private readonly tmpNewUp = v3();
   private snapping = true;
+  /**
+   * The chest colliders this motor's characters collide with. The server's world is shared by every room, so a room
+   * passes its own chests; null (the client: one room per world) collides with every chest.
+   */
+  chestFilter: ReadonlySet<number> | null = null;
+  private readonly predicate = (c: { handle: number }): boolean => !this.physics.chestHandles.has(c.handle) || !!this.chestFilter?.has(c.handle);
 
   constructor(private readonly physics: GamePhysics) {
     const c = physics.world.createCharacterController(MOVEMENT.skin);
@@ -322,7 +328,9 @@ export class CharacterMotor {
     }
     this.controller.setUp(up);
     this.placeCollider(body.collider, s.pos);
-    this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS);
+    // Another room's chests are invisible here (only checked when this world holds chests this motor does not own).
+    const foreign = this.chestFilter && this.physics.chestHandles.size > this.chestFilter.size;
+    this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS, foreign ? this.predicate : undefined);
     const mv = this.controller.computedMovement();
     const groundedNow = this.controller.computedGrounded();
 

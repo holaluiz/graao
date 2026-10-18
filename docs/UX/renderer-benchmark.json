@@ -1,0 +1,94 @@
+{
+  "before": {
+    "mode": "legacy FREE_ROAM",
+    "frames": 120,
+    "cpu": {
+      "mean": 6.8833333333488556,
+      "p95": 9.900000000372529
+    },
+    "interval": {
+      "mean": 16.641666666666666,
+      "p95": 19.09999999962747
+    },
+    "calls": {
+      "mean": 162,
+      "p95": 162
+    },
+    "triangles": {
+      "mean": 1222093,
+      "p95": 1222093
+    },
+    "memory": {
+      "geometries": 78,
+      "textures": 16
+    },
+    "heap": 192254615,
+    "load": {
+      "world": 630,
+      "planetView": 251,
+      "animations": 1563,
+      "heroParts": 139,
+      "ambienceAudio": 77,
+      "shaders": 65,
+      "total": 3283
+    },
+    "net": {
+      "sala": "GR-EMUQ",
+      "ping": "8 ms",
+      "rede entra/sai": "7.20 / 1.13 KB/s",
+      "snapshot": "41 B (#420, tick 1237)",
+      "entidades": 10,
+      "tick servidor": "3.62 ms",
+      "reconciliação": "reexecutados 3 · erro 0.0 cm",
+      "extrap. remoto": "150 ms",
+      "atraso remoto": "326 ms 299 ms 299 ms 299 ms 299 ms 299 ms 299 ms 299 ms 299 ms",
+      "relógio": "desvio -3 ms"
+    }
+  },
+  "after": {
+    "mode": "strict LOBBY",
+    "frames": 120,
+    "cpu": {
+      "mean": 4.816666666651145,
+      "p95": 6.599999999627471
+    },
+    "interval": {
+      "mean": 16.610833333339542,
+      "p95": 18.699999999254942
+    },
+    "calls": {
+      "mean": 121,
+      "p95": 121
+    },
+    "triangles": {
+      "mean": 771042,
+      "p95": 771042
+    },
+    "memory": {
+      "geometries": 78,
+      "textures": 16
+    },
+    "heap": 145531905,
+    "load": {
+      "world": 630,
+      "planetView": 251,
+      "animations": 1563,
+      "heroParts": 139,
+      "ambienceAudio": 77,
+      "shaders": 65,
+      "total": 3283
+    },
+    "net": {
+      "sala": "GR-GJCN",
+      "ping": "7 ms",
+      "rede entra/sai": "0.04 / 0.02 KB/s",
+      "snapshot": "41 B (#0, tick 0)",
+      "entidades": 1,
+      "tick servidor": "0.01 ms",
+      "reconciliação": "reexecutados 3 · erro 0.0 cm",
+      "extrap. remoto": "0 ms",
+      "atraso remoto": "-",
+      "relógio": "desvio -0 ms"
+    }
+  }
+}

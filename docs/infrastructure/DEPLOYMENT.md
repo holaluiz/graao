@@ -1,5 +1,13 @@
 # Deployment
 
+**Since 2026-10-18 online play needs only the client.** The player who creates a match hosts it in their browser and
+friends connect to them directly (see `docs/architecture/BROWSER_HOSTED_ROOMS.md`). Deploying = the client on Vercel
+with `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` set (players find each other through Supabase Realtime);
+optionally `VITE_ICE_SERVERS` with a TURN relay for networks that block direct connections. Do **not** set
+`VITE_SERVER_URL` unless a dedicated server should run every room again.
+
+The dedicated server below stays supported (tests, the network bot, a future official server that saves history):
+
 Two pieces, two hosts:
 
 | Piece | Host | Why |

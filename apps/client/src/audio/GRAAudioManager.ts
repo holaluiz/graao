@@ -14,7 +14,7 @@
  */
 import { Ambience } from './Ambience';
 
-export type AudioCategory = 'threat' | 'weapons' | 'abilities' | 'match' | 'ui' | 'music' | 'environment';
+export type AudioCategory = 'threat' | 'weapons' | 'abilities' | 'match' | 'ui' | 'music' | 'environment' | 'loot';
 export type AudioState = 'NORMAL' | 'LOW_HEALTH' | 'UFO' | 'POST_MATCH' | 'INSIDE_TORMENTA';
 
 export type Cue =
@@ -84,13 +84,23 @@ export type Cue =
   | 'tormenta.final'
   | 'tormenta.enter'
   | 'tormenta.exit'
-  | 'tormenta.hurt';
+  | 'tormenta.hurt'
+  | 'fire.heavy'
+  | 'loot.near'
+  | 'loot.open'
+  | 'loot.reveal'
+  | 'loot.pickup'
+  | 'loot.ammo'
+  | 'loot.equip'
+  | 'loot.use'
+  | 'loot.useDone'
+  | 'loot.full';
 
 /** Continuous layers driven every frame by a level (0 = silent): the dive's wind, the UFO's hum, the Tormenta's drone. */
 export type AudioLoop = 'wind' | 'hum' | 'tormenta';
 
-const VOICE_LIMIT: Record<AudioCategory, number> = { threat: 8, weapons: 10, abilities: 8, match: 4, ui: 4, music: 2, environment: 6 };
-const CATEGORY_GAIN: Record<AudioCategory, number> = { threat: 0.9, weapons: 0.75, abilities: 0.8, match: 0.9, ui: 0.55, music: 0.5, environment: 0.5 };
+const VOICE_LIMIT: Record<AudioCategory, number> = { threat: 8, weapons: 10, abilities: 8, match: 4, ui: 4, music: 2, environment: 6, loot: 5 };
+const CATEGORY_GAIN: Record<AudioCategory, number> = { threat: 0.9, weapons: 0.75, abilities: 0.8, match: 0.9, ui: 0.55, music: 0.5, environment: 0.5, loot: 0.7 };
 
 const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   'fire.sunbeam': 'weapons',
@@ -151,6 +161,16 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   'tormenta.enter': 'match',
   'tormenta.exit': 'ui',
   'tormenta.hurt': 'threat',
+  'fire.heavy': 'weapons',
+  'loot.near': 'loot',
+  'loot.open': 'loot',
+  'loot.reveal': 'loot',
+  'loot.pickup': 'loot',
+  'loot.ammo': 'loot',
+  'loot.equip': 'weapons',
+  'loot.use': 'loot',
+  'loot.useDone': 'loot',
+  'loot.full': 'ui',
 };
 
 export interface PlayOptions {
@@ -186,14 +206,70 @@ export class GRAAudioManager {
   volume = 0.8;
   /** The camera is under the water: the world is heard muffled (on top of the state's own filter). */
   private underwater = false;
-  /** Wind and birds (built on first use). */
+  /** Outdoor bed (wind loop and beach loop, built on first use). */
   private ambience: Ambience | null = null;
+  private windBuffer: AudioBuffer | null = null;
+  private beachBuffer: AudioBuffer | null = null;
+  private windArrayBuffer: ArrayBuffer | null = null;
+  private beachArrayBuffer: ArrayBuffer | null = null;
+  private ambienceUrl = '/assets/v1/audio/wind.mp3';
+  private beachUrl = '/assets/v1/audio/beach.mp3';
+
+  /** Loads or preloads the ambient wind audio bed from a URL. */
+  async loadAmbience(url: string): Promise<void> {
+    this.ambienceUrl = url;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const arrayBuf = await res.arrayBuffer();
+      this.windArrayBuffer = arrayBuf;
+      if (this.ctx) {
+        this.windBuffer = await this.ctx.decodeAudioData(arrayBuf.slice(0));
+        this.ambience?.setWindBuffer(this.windBuffer);
+      }
+    } catch (e) {
+      console.warn('[audio] Failed to load ambient wind audio:', e);
+    }
+  }
+
+  /** Loads or preloads the ambient beach/water audio bed from a URL. */
+  async loadBeach(url: string): Promise<void> {
+    this.beachUrl = url;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const arrayBuf = await res.arrayBuffer();
+      this.beachArrayBuffer = arrayBuf;
+      if (this.ctx) {
+        this.beachBuffer = await this.ctx.decodeAudioData(arrayBuf.slice(0));
+        this.ambience?.setBeachBuffer(this.beachBuffer);
+      }
+    } catch (e) {
+      console.warn('[audio] Failed to load ambient beach audio:', e);
+    }
+  }
 
   /** Creates/resumes the context; must run inside a user gesture (ENTER button). */
   unlock(): void {
     try {
       if (!this.ctx) this.build(new AudioContext());
       void this.ctx!.resume();
+      if (this.windArrayBuffer && !this.windBuffer) {
+        this.ctx!.decodeAudioData(this.windArrayBuffer.slice(0))
+          .then((buf) => {
+            this.windBuffer = buf;
+            this.ambience?.setWindBuffer(buf);
+          })
+          .catch((e) => console.warn('[audio] Failed to decode wind audio:', e));
+      }
+      if (this.beachArrayBuffer && !this.beachBuffer) {
+        this.ctx!.decodeAudioData(this.beachArrayBuffer.slice(0))
+          .then((buf) => {
+            this.beachBuffer = buf;
+            this.ambience?.setBeachBuffer(buf);
+          })
+          .catch((e) => console.warn('[audio] Failed to decode beach audio:', e));
+      }
     } catch {
       this.ctx = null;
     }
@@ -316,12 +392,20 @@ export class GRAAudioManager {
     });
   }
 
-  /** Outdoor bed (wind gusts, birds) at `level` (0 silent … 1 on the ground); `time` (s) drives the gusts. */
-  setAmbience(level: number, time: number): void {
+  /** Outdoor bed (wind loop and beach loop) at `windLevel` and `beachLevel` (0 silent … 1 full); `time` (s) drives updates. */
+  setAmbience(windLevel: number, beachLevel = 0, time = 0): void {
     const ctx = this.ctx;
-    if (!ctx || ctx.state !== 'running' || !this.noise) return;
-    this.ambience ??= new Ambience(ctx, this.buses.get('environment')!, this.noise);
-    this.ambience.update(level, time);
+    if (!ctx || ctx.state !== 'running') return;
+    this.ambience ??= new Ambience(
+      ctx,
+      this.buses.get('environment')!,
+      this.windBuffer,
+      this.beachBuffer,
+      this.ambienceUrl,
+      this.beachUrl,
+      this.noise ?? undefined,
+    );
+    this.ambience.update(windLevel, beachLevel, time);
   }
 
   /**
@@ -515,6 +599,63 @@ export class GRAAudioManager {
         this.noiseBurst(out, t, 0.06, 0.2, 'bandpass', 1400, 2200, 2);
         this.osc(out, 'triangle', t + 0.04, 900, 1100, 0.04, 0.08);
         return 0.09;
+      case 'fire.heavy':
+        // A deep crack: low boom, a bright transient and a short tail.
+        this.osc(out, 'sawtooth', t, 420 * p, 90 * p, 0.16, 0.3);
+        this.osc(out, 'sine', t, 110 * p, 40 * p, 0.3, 0.6);
+        this.noiseBurst(out, t, 0.08, 0.45, 'highpass', 2200);
+        this.noiseBurst(out, t + 0.02, 0.28, 0.18, 'lowpass', 900, 200);
+        return 0.32;
+      case 'loot.near':
+        // Something is here: a faint two-note shimmer.
+        this.osc(out, 'sine', t, 1568 * p, 1568 * p, 0.35, 0.05, 0.02);
+        this.osc(out, 'sine', t + 0.09, 2093 * p, 2093 * p, 0.4, 0.04, 0.02);
+        return 0.5;
+      case 'loot.open':
+        // Latch click, a wooden creak sliding up, a soft thump of the lid.
+        this.noiseBurst(out, t, 0.03, 0.45, 'bandpass', 3400, 3400, 5);
+        this.osc(out, 'square', t + 0.01, 1200 * p, 900 * p, 0.03, 0.08);
+        this.osc(out, 'sawtooth', t + 0.05, 180 * p, 310 * p, 0.26, 0.09, 0.04);
+        this.noiseBurst(out, t + 0.05, 0.26, 0.12, 'bandpass', 700 * p, 1400 * p, 3);
+        this.osc(out, 'sine', t + 0.34, 130 * p, 70 * p, 0.14, 0.4);
+        return 0.5;
+      case 'loot.reveal':
+        // Rewards: a bright rising arpeggio with a sparkle on top (pitch follows the best rarity).
+        [523.25, 659.25, 783.99, 1046.5].forEach((f, k) => this.osc(out, 'triangle', t + k * 0.055, f * p, f * p, 0.32, 0.13, 0.008));
+        this.noiseBurst(out, t + 0.1, 0.35, 0.08, 'highpass', 7000);
+        return 0.55;
+      case 'loot.pickup':
+        // Short, clear pop.
+        this.osc(out, 'sine', t, 880 * p, 1320 * p, 0.08, 0.22);
+        this.osc(out, 'triangle', t + 0.04, 1760 * p, 1760 * p, 0.08, 0.08);
+        return 0.13;
+      case 'loot.ammo':
+        // Rounds rattling into the pouch.
+        for (let k = 0; k < 3; k++) this.noiseBurst(out, t + k * 0.045, 0.03, 0.3, 'bandpass', 2800 + k * 300, 2800 + k * 300, 6);
+        this.osc(out, 'square', t + 0.13, 520, 470, 0.04, 0.05);
+        return 0.18;
+      case 'loot.equip':
+        // Slide and lock of a new weapon in hand.
+        this.noiseBurst(out, t, 0.09, 0.25, 'bandpass', 1300, 2600, 2.5);
+        this.noiseBurst(out, t + 0.12, 0.035, 0.45, 'bandpass', 2200, 2200, 5);
+        this.osc(out, 'square', t + 0.12, 380, 330, 0.04, 0.09);
+        return 0.18;
+      case 'loot.use':
+        // Uncorking / unsealing.
+        this.osc(out, 'sine', t, 600 * p, 900 * p, 0.07, 0.2);
+        this.noiseBurst(out, t + 0.02, 0.12, 0.12, 'bandpass', 1500 * p, 900 * p, 2);
+        return 0.15;
+      case 'loot.useDone':
+        // Restored: a warm rising chime.
+        this.osc(out, 'sine', t, 523.25 * p, 523.25 * p, 0.3, 0.16, 0.01);
+        this.osc(out, 'sine', t + 0.07, 783.99 * p, 783.99 * p, 0.35, 0.14, 0.01);
+        this.osc(out, 'triangle', t + 0.14, 1046.5 * p, 1046.5 * p, 0.3, 0.07, 0.01);
+        return 0.45;
+      case 'loot.full':
+        // Bonk: no room.
+        this.osc(out, 'triangle', t, 220, 170, 0.12, 0.25);
+        this.osc(out, 'triangle', t + 0.1, 190, 150, 0.12, 0.2);
+        return 0.24;
       case 'ui.click':
         this.osc(out, 'triangle', t, 1100, 900, 0.04, 0.16);
         return 0.05;

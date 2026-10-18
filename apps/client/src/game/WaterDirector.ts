@@ -36,6 +36,9 @@ interface Track {
 export class WaterDirector {
   readonly ripples: WaterRipples;
   private readonly tracks = new Map<GraaoCharacter, Track>();
+  private readonly shoreCoords: Float32Array;
+  /** 0 far inland … 1 right on the beach or in water. */
+  beachProximity = 0;
   private frameId = 0;
   private under = 0;
   private overlay: HTMLElement | null = null;
@@ -55,6 +58,31 @@ export class WaterDirector {
   constructor(private readonly app: GraaoApp) {
     this.ripples = new WaterRipples(app.world.terrain.seaRadius);
     app.r.scene.add(this.ripples.mesh);
+    this.shoreCoords = this.extractShoreline();
+  }
+
+  private extractShoreline(): Float32Array {
+    const mesh = this.app.world.mesh;
+    if (!mesh) return new Float32Array(0);
+    const { positions: pos, heights: hgt, indices: idx } = mesh;
+    const sea = this.app.world.terrain.seaRadius - this.app.world.terrain.radius;
+    const pts: number[] = [];
+    const visited = new Set<number>();
+    for (let i = 0; i < idx.length; i += 3) {
+      const i0 = idx[i]!, i1 = idx[i + 1]!, i2 = idx[i + 2]!;
+      const h0 = hgt[i0]!, h1 = hgt[i1]!, h2 = hgt[i2]!;
+      const hasWater = h0 < sea || h1 < sea || h2 < sea;
+      const hasLand = h0 >= sea || h1 >= sea || h2 >= sea;
+      if (hasWater && hasLand) {
+        for (const v of [i0, i1, i2]) {
+          if (!visited.has(v) && Math.abs(hgt[v]! - sea) < 1.6) {
+            visited.add(v);
+            pts.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
+          }
+        }
+      }
+    }
+    return new Float32Array(pts);
   }
 
   /** Splash visuals where something hit the water (`strength` 0..1: a step … a dive). Sound is the caller's. */
@@ -76,7 +104,7 @@ export class WaterDirector {
     this.frameId++;
     this.ripples.update(dt);
     // Swimmers' hands are stroking: the weapon is stowed in the water.
-    app.combat.holder.setVisible(!app.local.state.swimming);
+    app.combat.holder.setVisible(app.phase === 'MATCH' && !app.local.state.swimming);
     if (app.phase === 'MATCH' && !app.deploy.riding && app.character.root.visible) {
       const s = app.local.state;
       this.track(app.character, app.character.root.position, s.swimming, s.diving, true, dt);
@@ -84,12 +112,42 @@ export class WaterDirector {
     } else app.hud.setBreath(null);
     if (app.net) {
       for (const r of app.net.remotePlayers) {
-        r.holder.setVisible(!r.swimming);
+        r.holder.setVisible(app.phase === 'MATCH' && !r.swimming);
         if (r.character.root.visible) this.track(r.character, r.pos, r.swimming, r.diving, false, dt);
       }
     }
     for (const [c, t] of this.tracks) if (t.seen !== this.frameId) this.tracks.delete(c);
     this.updateUnderwater(dt);
+    this.updateBeachProximity();
+  }
+
+  private updateBeachProximity(): void {
+    const app = this.app;
+    const feet = app.phase === 'MATCH' ? app.character.root.position : app.spawn;
+    const depth = waterDepth(feet);
+    if (depth >= -0.2) {
+      this.beachProximity = 1;
+      return;
+    }
+    const coords = this.shoreCoords;
+    if (coords.length === 0) {
+      this.beachProximity = 0;
+      return;
+    }
+    let minD2 = Infinity;
+    const px = feet.x, py = feet.y, pz = feet.z;
+    for (let i = 0; i < coords.length; i += 3) {
+      const dx = px - coords[i]!;
+      const dy = py - coords[i + 1]!;
+      const dz = pz - coords[i + 2]!;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < minD2) minD2 = d2;
+    }
+    const dist = Math.sqrt(minD2);
+    // Smooth attenuation: 1 at 0m (shoreline) to 0 at 38m inland
+    const maxDist = 38;
+    const t = THREE.MathUtils.clamp(1 - dist / maxDist, 0, 1);
+    this.beachProximity = t * t * (3 - 2 * t);
   }
 
   private track(c: GraaoCharacter, feet: THREE.Vector3, swimming: boolean, diving: boolean, mine: boolean, dt: number): void {

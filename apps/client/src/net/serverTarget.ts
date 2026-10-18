@@ -1,6 +1,9 @@
 /**
- * Which match server this tab talks to, and whether it is reachable before the player clicks anything.
+ * Whether a dedicated match server runs the rooms (else the player who creates a room hosts it in their browser:
+ * see `host/RoomHost.ts`), which server that is, and whether it is reachable before the player clicks anything.
  *
+ * - Host mode is the default. A dedicated server is used when the build sets `VITE_SERVER_URL` or the tab is opened
+ *   with `?server=` (tests, the network bot, measurements).
  * - The official server of a build is `VITE_SERVER_URL` (set in the host, e.g. Vercel, for production builds).
  *   Without it the page's own host on port 2567 is assumed (local development, LAN tests with `pnpm dev`).
  * - `?server=ws://host:port` points a tab at another server: any ws/wss in development; in production builds only
@@ -28,6 +31,13 @@ export function serverTarget(search = location.search, dev = import.meta.env.DEV
   const q = new URLSearchParams(search).get('server')?.trim().replace(/\/+$/, '');
   if (q && WS_URL.test(q) && (dev || q.startsWith('wss://')) && q !== official) return { url: q, official: false };
   return { url: official, official: true };
+}
+
+/** A dedicated server runs the rooms (the build names one, or `?server=` points this tab at one). */
+export function dedicatedServer(search = location.search, dev = import.meta.env.DEV, env: { VITE_SERVER_URL?: string } = import.meta.env): boolean {
+  if (env.VITE_SERVER_URL?.trim()) return true;
+  const q = new URLSearchParams(search).get('server')?.trim().replace(/\/+$/, '');
+  return !!q && WS_URL.test(q) && (dev || q.startsWith('wss://'));
 }
 
 /** HTTP base of a ws(s) URL (Colyseus serves its routes, including `/health`, on the same port). */

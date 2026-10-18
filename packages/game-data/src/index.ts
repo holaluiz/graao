@@ -5,3 +5,4 @@ export * from './weapons';
 export * from './abilities';
 export * from './ufo';
 export * from './tormenta';
+export * from './loot';

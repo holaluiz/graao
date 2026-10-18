@@ -1,8 +1,53 @@
 # graao MVP status
 
+## 2026-10-18 — Pre-match redesign verified locally
+
+The current competitive journey is **Menu → Rooms → Lobby → Ability Draft → Preparation → UFO → Drop → Combat →
+Results → Lobby**. The menu, real room browser, host lobby, customization, settings and ability draft have been
+reworked around that journey while preserving the spherical world, characters, animation rig, weapons, abilities,
+UFO, loot, Tormenta, networking and existing Supabase persistence.
+
+- Rooms hold **10 participants** in total, including up to **9 bots**. The lobby shows bots as planned seats;
+  humans can replace those seats before the host explicitly starts the Draft. Ready alone does not start a match.
+- `LOBBY`, `ABILITY_DRAFT` and `PREPARATION` avoid world/combat simulation and periodic snapshots. Preparation waits
+  for the real human clients' loading acknowledgements before deployment. The host leaving closes the room.
+- Public discovery uses the real Colyseus registry through `GET /rooms`. The existing private browser-hosted
+  fallback is offered explicitly when signaling is configured; those rooms are not presented as public registry
+  entries. Supabase signaling continues to negotiate those private connections, rather than inventing occupancy.
+- The draft keeps all four personal slots visible, separates local preview from confirmation, and shows persistent
+  ability details and participant status. Defaults are **45 s** to choose, **20 s** to repick and **1.6 s** to reveal.
+  The MVP catalog remains **8 basics + 3 ultimates**: when it cannot support global uniqueness, abilities may repeat
+  across players, never within the same player's build. This applies to both categories in a ten-player room.
+- Customization returns to the menu or lobby it came from. Existing `ProfileService` cloud persistence and
+  localStorage fallback are preserved. Changing appearance in the lobby clears that participant's Ready state.
+
+**Validation:** build and typecheck passed. The complete suite passed with **219 tests across 24 files** using
+`pnpm exec vitest run --configLoader native --pool threads --silent` (145.50 s). Two browser clients completed the
+new flow locally; host departure and the hold-Tab match scoreboard were also checked. Main screens were checked at
+1366×768, 1440×900 and 1920×1080; recorded layout measurements are in
+[responsive-checks.json](UX/responsive-checks.json).
+
+**Measured preparation cost:** in sequential local windows of approximately **8 seconds**, the preserved legacy
+warmup with one human and nine instantiated bots produced **127 snapshots** (100,577 bytes of decoded JSON snapshot
+payload); the new lobby with one human and nine planned bots produced **0 snapshots**. This measures server/network
+preparation behavior, not browser FPS. Reproduction, samples and measurement limits are in
+[PERFORMANCE.md](UX/PERFORMANCE.md) and [prematch-benchmark.json](UX/prematch-benchmark.json).
+
+Implementation references: [pre-match flow](UX/PRE_MATCH_FLOW.md), [room discovery and private fallback](UX/ROOM_BROWSER.md),
+[screen specifications](UX/SCREEN_SPECIFICATIONS.md) and [Ability Draft UX](UX/ABILITY_DRAFT.md).
+
+Browser captures: [public room browser](UX/screenshots/room-browser-public.png),
+[one human + nine bots lobby](UX/screenshots/lobby-1-human-9-bots-1366.png),
+[customization](UX/screenshots/customization-1366.png), [draft round 1](UX/screenshots/draft-round1-1366.png),
+[draft round 4](UX/screenshots/draft-round4-1366.png), [UFO after draft](UX/screenshots/ufo-after-draft.png) and
+[Tab scoreboard](UX/screenshots/scoreboard-tab.png).
+
+Public production deployment, testing on two external machines/networks and a real external Mixamo FBX clip remain
+separate release checks; this update does not mark them complete.
+
 Status values: TODO · IN_PROGRESS · TESTING · BLOCKED · DONE (DONE only after a test or a measured check).
-Last update: 2026-10-17. Language: the game (UI, HUD, catalog, regions, weapons) is Portuguese (pt-BR); code and these
-docs stay in English.
+Last update: 2026-10-18. Language: the game (UI, HUD, catalog, regions, weapons) is Portuguese (pt-BR); code and most
+technical docs are English, while the redesign specifications in `docs/UX` are Portuguese.
 
 ## Gates
 
@@ -10,11 +55,11 @@ docs stay in English.
 |---|---|---|---|
 | 1 · First visual | A customized graao character runs around a beautiful spherical world with Mixamo-compatible animation | TESTING | Built and seen in the browser (village, grass, houses, curved horizon, run/idle). Animation runs on `GRA_Rig_MixamoCompatible` via the retargeter (CC0 UAL clips). A real **Mixamo FBX** clip has not been loaded yet: no Mixamo animation files exist on this machine (see Blockers). |
 | 2 · Two players | Two customized characters run smoothly around the same world in two windows | TESTING | Two browser tabs in one room saw each other with nameplates and their own outfits; integration tests (two SDK clients) pass: join by code, replication, uniform motion, 60 Hz interpolation replay. Not yet tested on LAN / two machines. |
-| 3 · Shooting | A shoots B, server confirms, Shield/Health change, B dies, A wins | TESTING | Integration test "a complete 1v1 match (gate 3: A wins)" passes: ready → countdown (shots refused) → A's hitscan confirmed by the server → shield then health → elimination, no respawn in the match → RESULTS with winner A → warmup. In the browser (two tabs, own server on 2568): 17 predicted shots, 10 server-confirmed hits, 200 damage, elimination logged by the server, match end with winner; HUD, shield-break VFX, countdown and aim pose seen. Not yet played on two machines. |
+| 3 · Shooting | A shoots B, server confirms, Shield/Health change, B dies, A wins | TESTING | Integration test "a complete 1v1 match (gate 3: A wins)" preserves the legacy development flow: ready → countdown (shots refused) → A's hitscan confirmed by the server → shield then health → elimination, no respawn in the match → RESULTS with winner A → warmup. Current competitive matches return to LOBBY, as covered by the pre-match flow tests. Earlier browser evidence (two tabs, own server on 2568): 17 predicted shots, 10 server-confirmed hits, 200 damage, elimination logged by the server, match end with winner; HUD, shield-break VFX, countdown and aim pose seen. Not yet played on two external machines. |
 | 4 · Abilities | Guns and magic | TESTING | 8 basics + 3 Ultimates from 8 primitives, executed by the server's GRAAbilitySystem. Integration test "abilities through the authoritative server" passes (ownership, phase, cooldown, Mana, server projectile hit, areas with warning → damage, slow, knockback, elimination by abilities only → A wins). In the browser against a bot: Orbe Solar hit confirmed (hitmarker with ability diamonds), Mana/cooldown sweep, Explosão de Pólen and Meteoro Solar ground warnings, Ultimate Marks on both players. Not yet played person vs person on two machines. |
-| 5 · Creator | Two visibly different avatars seen correctly by each other | TESTING | Creator UI works (tabs, instant parts/colors, drag/zoom); appearance replicates on join and on change. Cloud persistence written (`ProfileService`: anonymous sign-in, `profiles` row with name, look and settings, RLS own-row) but not exercised live yet: anonymous sign-ins are still off in the Supabase project (see Blockers); localStorage meanwhile. |
-| 6 · Draft | Players enter with drafted abilities | TESTING | `AbilityDraft` rules unit-tested (7 tests); integration test "ability draft through the authoritative server" passes (hidden picks, a disputed ability kept by priority and the loser repicking, a timeout pick, the match starting with the drafted loadouts, ownership enforced). In the browser against the bot: READY → draft screen → picks by click, server picks on timeout, reveal → match with the drafted loadout in the HUD and the drafted Ultimate's mark. Not yet drafted person vs person. |
-| 7 · UFO | Creator → draft → UFO → drop → combat as one flow | TESTING | Integration test "UFO deployment through the authoritative server (gate 7)" passes: READY boards both onto the UFO (route over the arena, riders not simulated, no fighting), a jump before the hatch opens is refused, A's jump starts exactly at the shared `diveStart(route, t)`, A dives under its own control and lands, B is dropped at the close and lands, the match starts where they landed, an opponent leaving mid-deployment hands the win. In the browser against the network bot (own server on 2569): READY → draft → world reveal → ride → jump → skydive (reconciliation error 0.1 cm) → landing → bot dropped and landed → countdown → fight, all seen; solo starts with the same ritual. Not yet played person vs person on two machines. See `docs/gameplay/UFO_DEPLOYMENT.md`. |
+| 5 · Creator | Two visibly different avatars seen correctly by each other | TESTING | Full customization screen with category options, instant parts/colors, drag/zoom, explicit save and return to the menu or lobby origin. Appearance replicates on join and change; changing it in the lobby clears Ready. Existing `ProfileService` implements anonymous sign-in, `profiles` name/look/settings and own-row RLS, with localStorage fallback. The redesign preserves that implementation; live authenticated cloud-profile validation remains a separate check. See [screen specifications](UX/SCREEN_SPECIFICATIONS.md). |
+| 6 · Draft | Players enter with drafted abilities | TESTING | Core rules and client selection helpers are unit-tested (12 tests); integration covers hidden picks, priority conflicts and repicks, timeout, valid final loadouts and ownership enforcement. The browser flow now has local preview → Confirm / Change Selection, four persistent build slots, effects/range details, a ten-participant strip and 45/20/1.6 timings. Two browser clients exercised the local flow. The 8+3 catalog preserves shared ownership when needed for larger rooms. See [Ability Draft UX](UX/ABILITY_DRAFT.md). |
+| 7 · UFO | Lobby → draft → preparation → UFO → drop → combat as one flow | TESTING | Existing UFO integration covers route, jump window, shared dive timing, landing, combat gating and departure. New pre-match integration covers the host's explicit start and every human's preparation ACK before UFO. Two browser clients exercised the complete local flow; [UFO after draft](UX/screenshots/ufo-after-draft.png). Earlier deployment measurements and detailed mechanics remain in `docs/gameplay/UFO_DEPLOYMENT.md`. External two-machine testing remains pending. |
 | 8 · Complete match | Victory/Defeat/Lobby/summary | TESTING | Integration test "a complete match loop (gate 8)" passes: elimination → the same server-counted `MATCH_SUMMARY` for both (shots, hits and damage equal to the server's own events, placements, room score) → persisted once with the verified identity only (a forged token plays as a guest; only the signed-in player gets MATCH_SAVED) → RETURN_LOBBY waits for everyone, then returns at once with the room score kept. In the browser against the network bot (own server on 2570 with Supabase): lobby panel → ready → draft → UFO → landing → elimination → results card after 1.4 s (VITÓRIA!, 1:25, per-player table with loadout icons, "Placar da sala Luiz 1 × Beto 0") → VOLTAR AO LOBBY ("Esperando Beto (1/2)") → back in the lobby the moment the bot asked, ♛ 1 kept; both matches stored in Supabase (`matches` + `match_players`). Signed-in history not exercised live (anonymous sign-ins off). Not yet played person vs person on two machines. |
 | 9 · Public deploy | Public URL works | TODO | |
 | 10 · External test | Two PCs, two networks | TODO | |
@@ -23,7 +68,7 @@ docs stay in English.
 
 | System | Status | Notes |
 |---|---|---|
-| Monorepo (pnpm, TS strict, Vite, Vitest, ESLint) | DONE | `pnpm dev / build / test / lint / typecheck` pass; 132 tests (the 60 Hz interpolation smoothness test is timing-sensitive and can fail under heavy machine load; it passes when rerun). Test files run sequentially (`fileParallelism: false`) so the real-time integration suite is not starved by world generation in parallel workers |
+| Monorepo (pnpm, TS strict, Vite, Vitest, ESLint) | DONE | Build and typecheck passed; complete suite: 219 tests in 24 files via `pnpm exec vitest run --configLoader native --pool threads --silent`. Test files run sequentially (`fileParallelism: false`) to avoid starving real-time integration with world-generation work. Timing-sensitive interpolation assertions were preserved. |
 | Spherical world (terrain, features, layout, colliders) | DONE | Deterministic; identical on client/server (tested). Spawn points are kept free of props (tested with a capsule overlap query) |
 | GraaoSphericalCharacterController | DONE | Radial gravity, Rapier KCC with per-step up; full-lap test passes |
 | Third-person camera on the sphere | DONE | Transported heading, terrain pull-in, aim FOV/shoulder, recoil kick and shake (always full for every player) |
@@ -32,18 +77,20 @@ docs stay in English.
 | Retargeter | DONE | Bone directions preserved within 4° (test) |
 | Mixamo FBX loader | TESTING | Code path exists (manifest + FBXLoader + same retargeter); needs a real Mixamo clip |
 | Modular character (body, 3 faces, 4 hair, 4 tops, 4 bottoms, 3 shoes, 3 accessories, palettes) | DONE | One merged skinned mesh per character, ≈ 10 k triangles |
-| Character creator UI | DONE | Instant switches; Supabase persistence TODO |
+| Character creator UI | DONE | Full customization screen, instant switches, save/discard and return to menu/lobby. Existing Supabase `ProfileService` persistence and localStorage fallback preserved; live authenticated cloud-profile check remains separate. |
 | GRAStylizedMaterial family | DONE | world / terrain / foliage / character + outline |
 | Sky, sun rig, water, grass | DONE | Local golden-hour sun; grass bends around the local player |
 | F3 dev overlay | DONE | FPS, frame ms, draw calls, triangles, character and weapon cost, active VFX, ping, KB/s, snapshot size, server tick |
 | Colyseus room, codes, prediction, reconciliation, interpolation | DONE | Tested (integration) |
 | Weapons (Raio de Sol, Rajada de Pétalas), server hitscan, ammo, reload, switch | TESTING | Server rules tested; client prediction reconciles ammo by FIRE sequence (`shotSeq`); code-authored models on the hand bone |
-| Match flow (warmup → ready → countdown → match → results → warmup) | TESTING | `match.ts` rules unit-tested; full flow integration-tested |
+| Match flow (lobby → host start → draft → preparation → UFO → drop → combat → results → lobby) | TESTING | New competitive flow and legacy development path are integration-tested. Current flow waits for all human loading ACKs, freezes the roster on host start and closes on host departure. Two browser clients completed the local flow. See [pre-match flow](UX/PRE_MATCH_FLOW.md). |
+| Public room browser and private browser-host fallback | DONE | Real Colyseus `/rooms` registry, authoritative occupancy, 10 total seats, public/private visibility, create/join errors and explicit private fallback when signaling is available. See [room browser](UX/ROOM_BROWSER.md). |
+| Lobby, planned bots and loading preparation | DONE | Host controls 0–9 bots and explicit start; all humans Ready; no combat bots or periodic snapshots in the lobby. Two-client browser validation plus occupancy, concurrent joins, preparation ACK/failure/timeout and host-exit integration tests. |
 | Combat HUD (vitals, weapons, reticles, hitmarkers by kind, damage numbers and direction, kill feed, banners, death, results) | TESTING | DOM/CSS/SVG; seen in the browser |
 | GRAVFXSystem (beams + particles, 2 draw calls) | TESTING | Tracers, flashes, impacts, shield shards/ring, elimination burst |
 | GRAAudioManager (synthesized cues, buses, voice limits, LOW_HEALTH / POST_MATCH states) | TESTING | Audible check by a person still pending |
 | GRAAbilitySystem + Ultimate Marks | TESTING | See `docs/architecture/ABILITY_SYSTEM.md` |
-| Ability Draft (rules, server, screen) | TESTING | See `docs/gameplay/ABILITY_DRAFT.md`; the network bot drafts too (`--ready`, `--pick`) |
+| Ability Draft (rules, server, screen) | TESTING | [UX](UX/ABILITY_DRAFT.md), [server rules/protocol](gameplay/ABILITY_DRAFT.md); local preview and explicit confirmation, persistent 3+1 build, 45 s choices / 20 s repicks, shared ownership across players when the 8+3 catalog requires it. Server bots draft too. |
 | Camera obstruction near the camera | DONE | Props within 1.1 m of the camera fade (Rapier ball query), measured: 0.9 m → fades, 3 m → not |
 | UFO deployment (route, ride, jump, skydive, landing, reveal) | TESTING | Shared `deploy.ts` (9 unit tests) + room UFO phase (5 integration tests); client `DeployDirector`, code-authored `UfoModel`, dotted route, landmark labels, speed lines, orbit sky by altitude. Measured: reveal 79 draw calls / 313 k tris |
 | Tormenta (shrinking safe region: server phases and damage, world pigment, curtain, audio, HUD card, planet map) | TESTING | Shared `tormenta.ts` (9 unit tests: geodesic inside/outside, nesting, walkable final, reachability, one pulse per interval) + integration test with two players on opposite sides of the planet (only the one outside is hurt, Health only; death by the Tormenta hands the win). In the browser against the network bot: card, map, way back, bleached world, `INSIDE_TORMENTA`, "ELIMINADO · pela Tormenta", DERROTA for the one outside; client and server flip inside/outside 50 ms apart. Measured: +0.02 ms GPU inside, +0.33 ms on the boundary, ≤ +0.25 ms fully outside at ≈ 2 MPx (RX 570). See `docs/gameplay/TORMENTA.md` |
@@ -56,7 +103,7 @@ docs stay in English.
 - Hit registration has no lag compensation (rewind): at high ping, shots at fast-moving targets may miss on the server
   although the client predicted a hit (the hitmarker only appears on confirmation, so feedback stays honest).
 - Nameplates hide behind walls and the planet's curve (line-of-sight ray per remote per frame).
-- Docs are English; only the game is Portuguese.
+- Technical docs are mostly English; the game and the new UX specifications are Portuguese.
 
 ## Blockers / needs from the user
 
@@ -64,6 +111,8 @@ docs stay in English.
    (FBX, *Without Skin*, *In Place* ticked): Idle, Running, Jumping, Rifle Aiming Idle, Firing Rifle, Reloading, Hit
    Reaction, Dying. Put them in `apps/client/public/assets/v1/animations/mixamo/` with a `manifest.json` such as
    `{ "idle": "Idle.fbx", "run": "Running.fbx" }`. They override the CC0 clips automatically.
-2. **Supabase anonymous sign-ins** — in the Supabase dashboard, project *graao* → *Authentication* → *Sign In /
-   Providers* → turn on **Allow anonymous sign-ins**. Until then every player is a guest (matches are still recorded).
+2. **Live Supabase profile check** — cloud profile persistence already exists. The last recorded environment check
+   had anonymous sign-ins disabled; this redesign did not change that project setting or repeat live authenticated
+   persistence validation. Confirm **Allow anonymous sign-ins** in the project's authentication settings for that
+   check. Without a cloud session, appearance/settings keep using localStorage and players join as guests.
 3. **Cloudflare R2 bucket + Pages** and a Node host for the public deploy (credentials).

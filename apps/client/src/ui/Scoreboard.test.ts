@@ -7,7 +7,7 @@ function player(index: number, patch: Partial<PlayerPublic> = {}): PlayerPublic 
   return {
     index, sessionId: `p${index}`, name: `Jogador ${index}`, appearance: DEFAULT_APPEARANCE,
     ready: true, connected: true, inMatch: true, kills: 0, deaths: 0,
-    loadout: [], deploy: DeployState.LANDED, wins: 0, back: false, ...patch,
+    loadout: [], weapons: ['sunbeam', ''], deploy: DeployState.LANDED, wins: 0, back: false, ...patch,
   };
 }
 

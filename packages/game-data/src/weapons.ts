@@ -4,11 +4,16 @@
  */
 export type WeaponId = 'sunbeam' | 'petal' | 'pistol' | 'ak47' | 'sniper' | 'smg' | 'launcher';
 
+/** Reserve ammunition families (see `AMMO` in loot.ts): a reload takes from the reserve of the weapon's type. */
+export type AmmoType = 'solar' | 'petal' | 'heavy';
+
 export interface WeaponDefinition {
   id: WeaponId;
   name: string;
-  /** Input slot: E = 0, Q = 1. */
+  /** Slot it occupies in the classic two-weapon loadout (E = 0, Q = 1); looted weapons go in any free slot. */
   slot: 0 | 1;
+  /** Reserve this weapon reloads from. */
+  ammo: AmmoType;
   /** Damage per bullet/pellet on the body. */
   damage: number;
   /** Multiplier on head hits (CRITICAL). */
@@ -39,6 +44,7 @@ export interface WeaponDefinition {
 export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   sunbeam: {
     id: 'sunbeam',
+    ammo: 'solar',
     name: 'Raio de Sol',
     slot: 0,
     damage: 16,
@@ -63,6 +69,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
   petal: {
     id: 'petal',
+    ammo: 'petal',
     name: 'Rajada de Pétalas',
     slot: 1,
     damage: 11,
@@ -87,6 +94,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
   pistol: {
     id: 'pistol',
+    ammo: 'solar',
     name: 'Pistola Tática',
     slot: 1,
     damage: 24,
@@ -111,6 +119,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
   ak47: {
     id: 'ak47',
+    ammo: 'heavy',
     name: 'Fuzil Kalash',
     slot: 0,
     damage: 22,
@@ -135,6 +144,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
   sniper: {
     id: 'sniper',
+    ammo: 'heavy',
     name: 'Fuzil de Precisão',
     slot: 0,
     damage: 75,
@@ -159,6 +169,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
   smg: {
     id: 'smg',
+    ammo: 'solar',
     name: 'Submetralhadora',
     slot: 1,
     damage: 13,
@@ -183,6 +194,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
   launcher: {
     id: 'launcher',
+    ammo: 'heavy',
     name: 'Lança-Foguetes',
     slot: 1,
     damage: 85,
@@ -207,7 +219,10 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
   },
 };
 
+/** The classic two-weapon loadout (bots, and the reference for HUD/key order). Players start from `STARTING_KIT`. */
 export const WEAPON_SLOTS: WeaponId[] = ['sunbeam', 'petal'];
+/** Weapon slots per player: E and Q. */
+export const WEAPON_SLOT_COUNT = 2;
 
 export const ATTRIBUTES = {
   maxHealth: 100,
