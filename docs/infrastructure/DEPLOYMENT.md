@@ -45,7 +45,9 @@ environment).
 
 ## 2. Client on Vercel
 
-Environment variables (Project → Settings → Environment Variables), then redeploy:
+The Supabase values are committed in `apps/client/.env.production` (publishable only; Vite reads it in every
+production build), so the site needs no Vercel variables to play online. Variables set in the Vercel project
+(Project → Settings → Environment Variables, then redeploy) override that file:
 
 | Variable | Value |
 |---|---|
