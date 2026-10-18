@@ -34,6 +34,83 @@ float graHash2(vec2 p) {
 }
 `;
 
+/**
+ * The Tormenta as one world state every world material reads (shared uniform objects, like an engine's material
+ * parameter collection): the safe region (centre direction + angular radius), the region it closes onto, and a
+ * global switch. The TormentaDirector writes them once per frame; nothing is set per material or per object.
+ */
+export const TORMENTA_UNIFORMS = {
+  /** xyz: centre (unit direction from the planet centre); w: angular radius (rad). */
+  uTorm: { value: new THREE.Vector4(0, 1, 0, Math.PI) },
+  /** The region the current phase closes onto (w ≤ 0: not shown). */
+  uTormNext: { value: new THREE.Vector4(0, 1, 0, -1) },
+  /** x: 0..1 the Tormenta is live; y: time (s); z: planet radius (m). */
+  uTormOn: { value: new THREE.Vector3(0, 0, 100) },
+};
+
+/** GLSL for the Tormenta (needs GLSL_NOISE): distance to the boundary and the loss of pigment. */
+export const GLSL_TORMENTA = /* glsl */ `
+uniform vec4 uTorm;
+uniform vec4 uTormNext;
+uniform vec3 uTormOn;
+
+// Metres outside the safe region along the surface (negative inside): the geodesic angle, never a flat distance.
+float graTormentaMetres(vec3 wp, vec4 region) {
+  return (acos(clamp(dot(normalize(wp), region.xyz), -1.0, 1.0)) - region.w) * uTormOn.z;
+}
+
+// The same with a torn-paper edge that slowly crawls (±1.2 m of world-space noise). Past the band where ±1.2 m can
+// still change the bleach (it starts at −0.6 m and saturates at 7 m), the noise is skipped: deep inside and deep
+// outside cost no noise here, with no seam.
+float graTormentaEdge(vec3 wp, float m) {
+  if (m < -1.9 || m > 8.4) return m;
+  return m + (graNoise3(wp * 0.42 + vec3(0.0, uTormOn.y * 0.15, 0.0)) - 0.5) * 2.4;
+}
+
+// The world losing its pigment. Inside: untouched. Over a ~7 m band the colour drains, blobs of bare paper letting go
+// ahead of the rest (fragments). Outside: a pale, low-contrast wash of the same values (shapes still read, the hue is
+// gone) with faint pencil hatching where it was dark: the painting turned back into its sketch.
+vec3 graTormentaBleach(vec3 col, vec3 wp, float e) {
+  float k = smoothstep(-0.6, 7.0, e);
+  float erased = step(graNoise3(wp * 1.9 + 3.7), k * 1.35 - 0.3);
+  float l = dot(col, vec3(0.299, 0.587, 0.114));
+  vec3 paper = vec3(0.93, 0.915, 0.875);
+  vec3 washed = mix(vec3(l * 0.9 + 0.08), paper, 0.5);
+  washed = mix(washed, col, 0.1);
+  float hatchLine = step(fract((gl_FragCoord.x + gl_FragCoord.y) * 0.125), 0.16);
+  washed = mix(washed, vec3(0.42, 0.4, 0.44), hatchLine * smoothstep(0.55, 0.25, l) * 0.35 * k);
+  float f = clamp(k * 0.88 + erased * 0.4, 0.0, 1.0);
+  col = mix(col, washed, f);
+  // The tear itself: a ragged graphite line on the boundary and a lighter paper lip just outside it.
+  float tear = 1.0 - smoothstep(0.1, 0.38, abs(e));
+  float lip = smoothstep(0.3, 0.6, e) * (1.0 - smoothstep(0.6, 1.6, e));
+  col = mix(col, vec3(0.3, 0.28, 0.32), tear * 0.8);
+  col = mix(col, paper, lip * 0.45);
+  return col;
+}
+
+// Chalk dashes on the ground where the region being closed onto ends (the "next circle").
+vec3 graTormentaNextLine(vec3 col, vec3 wp) {
+  if (uTormNext.w <= 0.0) return col;
+  float m = graTormentaMetres(wp, uTormNext);
+  float line = 1.0 - smoothstep(0.1, 0.24, abs(m));
+  if (line <= 0.0) return col;
+  vec3 c = uTormNext.xyz;
+  vec3 t1 = normalize(cross(c, abs(c.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+  vec3 t2 = cross(c, t1);
+  vec3 d = normalize(wp);
+  float bearing = atan(dot(d, t2), dot(d, t1));
+  float dashes = max(8.0, floor(6.2832 * uTormOn.z * sin(uTormNext.w) / 1.6));
+  float dash = step(0.45, fract(bearing / 6.2832 * dashes));
+  return mix(col, vec3(1.0, 0.98, 0.93), line * dash * 0.9);
+}
+`;
+
+/** Shares the Tormenta uniforms into a material's uniform table (by reference: one write reaches every material). */
+export function useTormenta(uniforms: Record<string, THREE.IUniform>): void {
+  Object.assign(uniforms, TORMENTA_UNIFORMS);
+}
+
 const vertex = /* glsl */ `
 #include <common>
 #include <color_pars_vertex>
@@ -114,6 +191,23 @@ const fragment = /* glsl */ `
 #include <shadowmap_pars_fragment>
 
 ${GLSL_NOISE}
+#ifdef USE_TORMENTA
+${GLSL_TORMENTA}
+#endif
+
+vec3 graRgb2Hsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+vec3 graHsv2Rgb(vec3 c) {
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
 
 uniform vec3 uSunColor;
 uniform vec3 uShadowTint;
@@ -190,9 +284,22 @@ void main() {
   vec3 L = up;
   #if NUM_DIR_LIGHTS > 0
     L = normalize(inverseTransformDirection(directionalLights[0].direction, viewMatrix));
+    float sunFacing = dot(N, L);
+    #ifdef USE_PALETTE
+      // Characters are lit for the camera (a portrait key light): mostly the sun, raised, and pulled toward the view, so
+      // faces read and the shade wraps the far side of the body instead of cutting across the face.
+      L = normalize(L * 0.4 + up * 0.3 + V * 0.75);
+    #endif
     ndl = dot(N, L);
     #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
       shadow = receiveShadow ? getShadow(directionalShadowMap[0], directionalLightShadows[0].shadowMapSize, directionalLightShadows[0].shadowIntensity, directionalLightShadows[0].shadowBias, directionalLightShadows[0].shadowRadius, vDirectionalShadowCoord[0]) : 1.0;
+    #endif
+  #endif
+  #ifdef USE_PALETTE
+    #if NUM_DIR_LIGHTS > 0
+      // The real sun's shadow map only where the surface faces that sun (shade from trees and houses); on the far side
+      // it would only be the body shadowing itself, which the portrait light already shapes.
+      shadow = mix(1.0, shadow, smoothstep(0.05, 0.35, sunFacing));
     #endif
   #endif
   float lit = smoothstep(uRampCenter - uRampSoftness, uRampCenter + uRampSoftness, ndl) * shadow;
@@ -205,9 +312,14 @@ void main() {
     base = mix(base, base * vec3(1.06, 0.98, 0.9), (macro - 0.5) * uMacro * 2.0);
   #endif
 
+  // Two flat tones, like ink and wash: the lit color, and a shadow color that is the same pigment darker, a touch
+  // warmer in hue and richer (HSV), plus a little cool sky bounce on surfaces facing up.
   float hemi = dot(N, up) * 0.5 + 0.5;
-  vec3 fill = mix(uGroundFill, uSkyFill, hemi);
-  vec3 shade = base * fill * uShadowTint;
+  vec3 hsv = graRgb2Hsv(base);
+  hsv.x = fract(hsv.x - 0.02 + 1.0);
+  hsv.y = min(1.0, hsv.y * 1.12);
+  hsv.z *= 0.6;
+  vec3 shade = graHsv2Rgb(hsv) * uShadowTint + base * mix(uGroundFill, uSkyFill, hemi) * 0.08;
   vec3 sun = base * uSunColor;
   vec3 col = mix(shade, sun, lit);
 
@@ -223,6 +335,18 @@ void main() {
   }
 
   col = mix(col, base, vUnlit);
+
+  // The Tormenta takes the pigment (world materials only; characters and telegraphs stay crisp). Deep inside the
+  // safe region it costs one acos.
+  #ifdef USE_TORMENTA
+    if (uTormOn.x > 0.001) {
+      float tm = graTormentaMetres(vWorldPos, uTorm);
+      if (tm > -4.0) col = mix(col, graTormentaBleach(col, vWorldPos, graTormentaEdge(vWorldPos, tm)), uTormOn.x);
+      #ifdef USE_TERRAIN
+        col = mix(col, graTormentaNextLine(col, vWorldPos), uTormOn.x);
+      #endif
+    }
+  #endif
 
   // Paper dissolve for obstruction (instance fade or material fade).
   float fade = max(vFade, uFade);
@@ -246,14 +370,17 @@ export interface GRAStylizedOptions {
   pigment?: number;
   edgePooling?: number;
   side?: THREE.Side;
+  /** Reads the Tormenta (default: every non-character variant). Held weapons opt out, like characters. */
+  tormenta?: boolean;
 }
 
 /** Look constants shared by every GRAStylizedMaterial (golden hour). */
 export const LOOK = {
-  sun: new THREE.Color('#ffe2b8').multiplyScalar(1.08),
-  shadowTint: new THREE.Color('#a39ccc'),
-  skyFill: new THREE.Color('#d6e2ff'),
-  groundFill: new THREE.Color('#c99c86'),
+  sun: new THREE.Color('#fff7ea'),
+  /** Multiplies the HSV shadow color (a faint cool cast keeps shade from going muddy). */
+  shadowTint: new THREE.Color('#eef4ff'),
+  skyFill: new THREE.Color('#bfe6ef'),
+  groundFill: new THREE.Color('#d8c9a8'),
   rimWarm: new THREE.Color('#ffd7a3'),
 };
 
@@ -263,6 +390,8 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
   if (o.variant === 'world' || o.variant === 'terrain' || o.variant === 'foliage') defines.USE_PIGMENT = '';
   if (o.variant === 'terrain') defines.USE_TERRAIN = '';
   if (o.instanceFade) defines.USE_INSTANCE_FADE = '';
+  const tormenta = o.tormenta ?? o.variant !== 'character';
+  if (tormenta) defines.USE_TORMENTA = '';
 
   const uniforms = THREE.UniformsUtils.merge([
     THREE.UniformsLib.lights,
@@ -274,13 +403,14 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
       uShadowTint: { value: LOOK.shadowTint.clone() },
       uSkyFill: { value: LOOK.skyFill.clone() },
       uGroundFill: { value: LOOK.groundFill.clone() },
-      uRampCenter: { value: o.variant === 'character' ? 0.08 : 0.02 },
-      uRampSoftness: { value: o.variant === 'character' ? 0.07 : o.variant === 'foliage' ? 0.35 : 0.22 },
-      uPigment: { value: o.pigment ?? (o.variant === 'terrain' ? 0.16 : 0.12) },
+      // Characters: a hard cut between light and shade (graphic); the world a little softer so moving shadows ease.
+      uRampCenter: { value: o.variant === 'character' ? -0.12 : 0.04 },
+      uRampSoftness: { value: o.variant === 'character' ? 0.02 : o.variant === 'foliage' ? 0.14 : 0.06 },
+      uPigment: { value: o.pigment ?? (o.variant === 'terrain' ? 0.12 : 0.06) },
       uPigmentScale: { value: o.variant === 'foliage' ? 0.35 : 0.22 },
-      uMacro: { value: o.variant === 'character' ? 0 : 0.35 },
-      uEdgePooling: { value: o.edgePooling ?? (o.variant === 'character' ? 0.0 : o.variant === 'terrain' ? 0.05 : 0.14) },
-      uRim: { value: o.variant === 'character' ? 0.12 : 0.0 },
+      uMacro: { value: o.variant === 'character' ? 0 : 0.2 },
+      uEdgePooling: { value: o.edgePooling ?? 0.0 },
+      uRim: { value: 0.0 },
       uRimColor: { value: LOOK.rimWarm.clone() },
       uFade: { value: 0 },
       uTime: { value: 0 },
@@ -290,13 +420,14 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
       uWetLine: { value: 0 },
       uFeet: { value: new THREE.Vector3() },
       uBodyUp: { value: new THREE.Vector3(0, 1, 0) },
-      uGrassColor: { value: new THREE.Color('#72b04e') },
-      uGrassDry: { value: new THREE.Color('#a9b852') },
-      uSandColor: { value: new THREE.Color('#e6cf9c') },
-      uRockColor: { value: new THREE.Color('#a09482') },
-      uCliffColor: { value: new THREE.Color('#8a7a72') },
+      uGrassColor: { value: new THREE.Color('#69ad55') },
+      uGrassDry: { value: new THREE.Color('#a6c46a') },
+      uSandColor: { value: new THREE.Color('#ead9b0') },
+      uRockColor: { value: new THREE.Color('#a7a49a') },
+      uCliffColor: { value: new THREE.Color('#8c8a86') },
     },
   ]);
+  if (tormenta) useTormenta(uniforms);
 
   const m = new THREE.ShaderMaterial({
     name: `GRAStylized/${o.variant}`,

@@ -3,9 +3,11 @@
  * long thin limbs, small hands, ≈ 5.6 heads tall). Garments are built from the SAME ring specs with offsets, so they
  * follow the body exactly.
  */
-import * as THREE from 'three';
 import type { RigProportions } from '../rig/GRARig';
 import type { RingSpec, V3 } from './PartBuilder';
+import { makeHead, type HeadShape } from './head';
+
+export { makeHead, type HeadLandmarks, type HeadShape } from './head';
 
 export interface BodyShape {
   p: RigProportions;
@@ -19,47 +21,8 @@ export interface BodyShape {
   head: HeadShape;
 }
 
-export interface HeadShape {
-  center: V3;
-  /** Half extents of the skull ellipsoid. */
-  a: number;
-  b: number;
-  c: number;
-  /** Surface point for a unit direction (head-local frame = rig frame). */
-  surface(dir: THREE.Vector3, scale?: number): V3;
-  /** Point on the face surface seen from the front at head-local (u, v) relative to the center; null off the face. */
-  frontPoint(u: number, v: number, lift?: number): { p: V3; n: V3 } | null;
-}
-
-export function makeHead(center: V3): HeadShape {
-  const a = 0.123;
-  const b = 0.148;
-  const c = 0.129;
-  // Jaw taper below the equator and a gentle chin; the back of the skull is fuller.
-  const sx = (dy: number) => (dy < 0 ? 1 - 0.3 * Math.pow(-dy, 1.6) : 1 - 0.06 * dy * dy);
-  const sz = (dy: number, dz: number) => (dz < 0 ? 1.06 : dy < 0 ? 1 - 0.12 * Math.pow(-dy, 2) : 1);
-  const chin = (dy: number) => (dy < -0.55 ? 0.01 * (1 - Math.abs(dy + 0.85) / 0.3) : 0);
-  const surface = (dir: THREE.Vector3, scale = 1): V3 => {
-    const x = dir.x * a * sx(dir.y) * scale;
-    const y = dir.y * b * scale;
-    const z = (dir.z * c * sz(dir.y, dir.z) + (dir.z > 0 ? Math.max(0, chin(dir.y)) * dir.z : 0)) * scale;
-    return [center[0] + x, center[1] + y, center[2] + z];
-  };
-  const frontPoint = (u: number, v: number, lift = 0.0018) => {
-    const dy = v / b;
-    if (Math.abs(dy) >= 1) return null;
-    const dx = u / (a * sx(dy));
-    const rem = 1 - dx * dx - dy * dy;
-    if (rem <= 0.02) return null;
-    const dz = Math.sqrt(rem);
-    const dir = new THREE.Vector3(dx, dy, dz);
-    const p = surface(dir);
-    // Normal from the ellipsoid gradient (good enough for a 2 mm lift).
-    const n = new THREE.Vector3((p[0] - center[0]) / (a * a), (p[1] - center[1]) / (b * b), (p[2] - center[2]) / (c * c)).normalize();
-    return { p: [p[0] + n.x * lift, p[1] + n.y * lift, p[2] + n.z * lift] as V3, n: [n.x, n.y, n.z] as V3 };
-  };
-  return { center, a, b, c, surface, frontPoint };
-}
+/** Arms hang on the side line of the chest (not behind it): shared by the rig, the arm rings and the hands. */
+export const ARM_Z = 0.004;
 
 export function makeBodyShape(p: RigProportions, sturdy: boolean): BodyShape {
   const g = sturdy ? 1.14 : 1;
@@ -85,7 +48,7 @@ export function makeBodyShape(p: RigProportions, sturdy: boolean): BodyShape {
     T(1.3, 0.06, 0.05, -0.014, 2.2, 'torso'),
   ];
   const y = p.shoulderY - 0.003;
-  const z = -0.015;
+  const z = ARM_Z;
   const A = (x: number, r: number, region: 'upper_arms' | 'forearms', rz = r): RingSpec => ({ p: [x, y, z], ra: r * g, rb: rz * g, region });
   const ex = p.elbowX;
   const wx = p.wristX;
@@ -117,6 +80,34 @@ export function makeBodyShape(p: RigProportions, sturdy: boolean): BodyShape {
     L(p.ankleY + 0.01, 0.029, 'lower_legs', -0.01),
   ];
   return { p, girth: g, torso, arm, leg, head: makeHead([0, p.headY + 0.112, 0.008]) };
+}
+
+/**
+ * Bare foot profile (heel → toes) at the foot's x: center height, half width and half height per station. Bottoms sit
+ * on y = 0 (a flat sole, never below the ground), the instep rises toward the ankle, the ball widens, the toes flatten.
+ */
+export const FOOT_STATIONS: { z: number; y: number; w: number; h: number }[] = [
+  { z: -0.05, y: 0.032, w: 0.028, h: 0.031 },
+  { z: -0.02, y: 0.038, w: 0.033, h: 0.038 },
+  { z: 0.025, y: 0.036, w: 0.036, h: 0.036 },
+  { z: 0.075, y: 0.026, w: 0.041, h: 0.026 },
+  { z: 0.115, y: 0.019, w: 0.042, h: 0.019 },
+  { z: 0.14, y: 0.016, w: 0.037, h: 0.016 },
+];
+
+/** Interpolated foot station at `z` (clamped to the foot). */
+export function footAt(z: number): { y: number; w: number; h: number } {
+  const st = FOOT_STATIONS;
+  if (z <= st[0]!.z) return st[0]!;
+  for (let i = 0; i < st.length - 1; i++) {
+    const a = st[i]!;
+    const b = st[i + 1]!;
+    if (z <= b.z) {
+      const t = (z - a.z) / (b.z - a.z);
+      return { y: a.y + (b.y - a.y) * t, w: a.w + (b.w - a.w) * t, h: a.h + (b.h - a.h) * t };
+    }
+  }
+  return st[st.length - 1]!;
 }
 
 /** Mirrors a left-side ring list to the right side (x → -x). */

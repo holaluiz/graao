@@ -26,6 +26,8 @@ third-person camera (the local player is not simulated until the server's `jump`
 
 ## Quality
 
+Players always run HIGH (the menu has no selector); LOW and MEDIUM are only reachable through `?quality=`.
+
 | | LOW | MEDIUM | HIGH |
 |---|---|---|---|
 | Pixel ratio cap | 1 | 1.25 | 2 |

@@ -9,11 +9,16 @@ pnpm dev          # client http://localhost:5173 + match server ws://localhost:2
 ```
 
 The game is in Portuguese. Open the client, press **ENTRAR NO GRAAO**. **Explorar sozinho** to run around and practice
-shooting; **Criar partida** gives a room code (`GR-XXXX`) that a second browser window can join with **Entrar**. In the
-warmup both players press **ENTER** when ready: 3-2-1, the last one standing wins. F3 shows the performance overlay.
+shooting; **Criar partida** gives a room code (`GR-XXXX`) that other players can join with **Entrar**, up to **10
+players** per room. In the warmup everyone presses **ENTER** when ready: 3-2-1, the last one standing wins. F3 shows the performance overlay.
 
 Controls: WASD move · mouse camera · Space jump · Shift sprint · left click fire · right click aim · E / Q weapons ·
-R reload · Enter ready · Esc release the mouse (twice: menu).
+R reload · Enter ready · hold Tab for the live scoreboard · Esc release the mouse (twice: menu).
+
+For a solo match against computer opponents, choose **1–9 bots** under **Bots na partida solo** and press **Jogar
+solo**. This creates a private room on the match server; press **Enter** (or **Estou pronto**) to start the ability
+draft, UFO drop and fight. Bots move, shoot and reload; the last survivor wins. Bot matches do not enter your match
+history. **Sem bots** keeps the offline exploration mode.
 
 Running a second local copy (ports in use): `pnpm --filter @graao/server exec tsx watch src/index.ts --port 2568` and
 `pnpm --filter @graao/client exec vite --port 5174`, then open `http://localhost:5174/?server=ws://localhost:2568`

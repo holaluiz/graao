@@ -82,24 +82,31 @@ export class LobbyPanel {
   /** Refreshes from the room state (rebuilds the list only when something visible changed). */
   update(code: string, players: PlayerPublic[], me: number): void {
     this.code = code;
-    if (this.codeEl.textContent !== code) this.codeEl.textContent = code;
+    const solo = players.some((p) => p.bot);
+    const title = solo ? 'SOLO · BOTS' : code;
+    if (this.codeEl.textContent !== title) this.codeEl.textContent = title;
+    this.copyBtn.hidden = solo;
     const here = players.filter((p) => p.connected).sort((a, b) => a.index - b.index);
+    this.el.classList.toggle('full-roster', here.length > 5);
     const mine = here.find((p) => p.index === me);
     this.ready = !!mine?.ready;
-    const key = JSON.stringify(here.map((p) => [p.index, p.name, p.ready, p.wins])) + me;
+    const key = JSON.stringify(here.map((p) => [p.index, p.name, p.ready, p.wins, p.dropped])) + me;
     if (key === this.lastKey) return;
     this.lastKey = key;
     this.list.innerHTML = '';
     for (const p of here) {
       const row = el('div', `lobby-row${p.index === me ? ' me' : ''}`, this.list);
-      el('span', 'lobby-name', row, p.name);
-      if (p.index === me) el('span', 'rt-tag', row, 'você');
-      if (p.wins > 0) el('span', 'lobby-wins', row, `♛ ${p.wins}`);
-      el('span', `lobby-state${p.ready ? ' on' : ''}`, row, p.ready ? 'PRONTO ✓' : 'aquecendo');
+      const identity = el('span', 'lobby-identity', row);
+      const name = el('span', 'lobby-name', identity, p.name);
+      name.title = p.name;
+      if (p.index === me) el('span', 'rt-tag', identity, 'você');
+      if (p.bot) el('span', 'rt-tag', identity, 'bot');
+      if (p.wins > 0) el('span', 'lobby-wins', identity, `♛ ${p.wins}`);
+      el('span', `lobby-state${p.ready ? ' on' : ''}`, row, p.dropped ? 'reconectando…' : p.ready ? 'PRONTO ✓' : 'aquecendo');
     }
     const ready = here.filter((p) => p.ready).length;
     this.hint.textContent =
-      here.length < 2 ? 'Mande o código para alguém entrar pelo menu (ENTRAR).' : ready === here.length ? 'Todos prontos: começando…' : `${ready} de ${here.length} prontos`;
+      solo ? 'Os bots estão prontos. Comece quando quiser.' : here.length < 2 ? 'Mande o código para alguém entrar pelo menu (ENTRAR).' : ready === here.length ? 'Todos prontos: começando…' : `${ready} de ${here.length} prontos`;
     this.readyBtn.textContent = this.ready ? 'Cancelar pronto' : 'Estou pronto';
     this.readyBtn.classList.toggle('primary', !this.ready);
   }

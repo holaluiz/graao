@@ -19,6 +19,7 @@ import { buildTop } from './parts/tops';
 import { buildBottom } from './parts/bottoms';
 import { buildShoes } from './parts/shoes';
 import { ACCESSORY_COLORS, buildAccessory } from './parts/accessories';
+import type { AuthoredParts } from './build/AuthoredParts';
 import { EXTRA_COLORS, buildExtra } from './parts/extras';
 
 export interface BuiltCharacter {
@@ -47,7 +48,18 @@ function partDeps(kind: PartKind, a: CharacterAppearance): string {
   }
 }
 
+/**
+ * Code-built stand-ins for the Blender-authored pieces (used until hero-parts.glb loads, and in tests/tools without it).
+ */
+const AUTHORED_FALLBACK: Record<string, string> = {
+  'hair.ondulado': 'hair.cachos',
+  'bottom.cargo': 'bottom.shorts',
+  'shoes.retro': 'shoes.chunky',
+};
+
 export class CharacterPartLibrary {
+  /** Pieces modeled in Blender; when one exists for (body, piece) it replaces the code-built version. */
+  private authored: AuthoredParts | null = null;
   private readonly rigs = new Map<string, GRARig>();
   private readonly shapes = new Map<string, BodyShape>();
   private readonly parts = new Map<string, THREE.BufferGeometry>();
@@ -71,14 +83,28 @@ export class CharacterPartLibrary {
     return s;
   }
 
-  private part(a: CharacterAppearance, kind: PartKind, id: string): { g: THREE.BufferGeometry; hit: boolean } {
+  /** Switches to Blender-authored pieces where available (drops cached geometry so they take effect). */
+  useAuthored(parts: AuthoredParts): void {
+    this.authored = parts;
+    this.parts.clear();
+  }
+
+  private part(a: CharacterAppearance, kind: PartKind, pieceId: string): { g: THREE.BufferGeometry; hit: boolean } {
     const bodyId = a.bodyId;
     const deps = partDeps(kind, a);
-    const key = `${bodyId}|${kind}|${id}|${deps}`;
+    const key = `${bodyId}|${kind}|${pieceId}|${deps}`;
     const cached = this.parts.get(key);
     if (cached) return { g: cached, hit: true };
     const b = new PartBuilder();
     const s = this.shape(bodyId);
+    const authored = this.authored?.get(bodyId, kind === 'hair' && deps === 'covered' ? `${pieceId}#covered` : pieceId);
+    if (authored) {
+      for (const m of authored) b.mesh(m.positions, m.normals, m.index, { slot: m.slot, bones: m.bones, region: 'none' });
+      const g = b.toGeometry(this.rig(bodyId));
+      this.parts.set(key, g);
+      return { g, hit: false };
+    }
+    const id = AUTHORED_FALLBACK[pieceId] ?? pieceId;
     switch (kind) {
       case 'face':
         buildFace(b, s.head, id);
@@ -230,7 +256,7 @@ export function buildPalette(a: CharacterAppearance): THREE.Color[] {
   pal[Slot.TOP_DETAIL] = c(PAPER);
   switch (a.topId) {
     case 'top.hoodie':
-      pal[Slot.TOP_ACCENT] = darker(top, 0.78);
+      pal[Slot.TOP_ACCENT] = darker(top, 0.88);
       break;
     case 'top.longsleeve':
       pal[Slot.TOP_ACCENT] = light ? c('#2f3f6e') : c('#f1e8d6');
@@ -266,9 +292,10 @@ export function buildPalette(a: CharacterAppearance): THREE.Color[] {
   }
 
   pal[Slot.SHOES] = shoes;
-  const SOLES: Record<string, string> = { 'shoes.boots': '#5a4334', 'shoes.chuteira': '#34343b', 'shoes.sandalia': '#5a3b24' };
+  const SOLES: Record<string, string> = { 'shoes.boots': '#5a4334', 'shoes.chuteira': '#34343b', 'shoes.sandalia': '#5a3b24', 'shoes.retro': '#f7f4ee' };
   pal[Slot.SOLE] = c(SOLES[a.shoesId] ?? '#f4efe6');
   pal[Slot.SHOES_DETAIL] = a.shoesId === 'shoes.chuteira' ? (luminance(shoes) > 0.45 ? c(INK) : c(PAPER)) : c('#c9ced6');
+  if (a.shoesId === 'shoes.retro') pal[Slot.SHOES_DETAIL] = darker(shoes, 0.5);
 
   pal[Slot.HAT] = hat;
   const lightHat = luminance(hat) > 0.45;

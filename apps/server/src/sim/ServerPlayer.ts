@@ -12,6 +12,9 @@ export interface PendingDash {
   duration: number;
 }
 
+/** Server-controlled players only need an identity and a sink for private messages. */
+export type PlayerConnection = Pick<Client, 'sessionId' | 'send'>;
+
 export class ServerPlayer implements AbilityActor {
   readonly queue: InputCmd[] = [];
   lastSeq = -1;
@@ -21,6 +24,8 @@ export class ServerPlayer implements AbilityActor {
   simTime = 0;
   ready = false;
   connected = true;
+  /** Connection lost, seat kept while the client reconnects (still counts as present for the match rules). */
+  dropped = false;
   /** Takes part in the running match (set at match start; late joiners watch). */
   inMatch = false;
   vitals: Vitals = newVitals();
@@ -41,6 +46,8 @@ export class ServerPlayer implements AbilityActor {
   respawnAt = 0;
   kills = 0;
   deaths = 0;
+  /** Shield + Health removed from opponents in the current round. */
+  damageDealt = 0;
   /** Matches won in this room (the room's running score). */
   wins = 0;
   /** RESULTS: asked to go back to the lobby. */
@@ -65,13 +72,14 @@ export class ServerPlayer implements AbilityActor {
   private lastStatusKey = '';
 
   constructor(
-    readonly client: Client,
+    public client: PlayerConnection,
     readonly index: number,
     public name: string,
     public appearance: CharacterAppearance,
     public state: CharacterState,
     public body: CharacterBody,
     public loadout: Loadout,
+    readonly bot = false,
   ) {}
 
   status(): SelfStatusMsg {

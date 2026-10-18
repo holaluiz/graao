@@ -14,6 +14,7 @@ import { END_BONES, type BoneName, type GRARig } from '../rig/GRARig';
 export const REGION_IDS: Record<BodyRegion | 'none', number> = {
   none: 0,
   head: 1,
+  ears: 11,
   neck: 2,
   torso: 3,
   hips: 4,
@@ -97,6 +98,33 @@ export interface TubeOpts extends PrimitiveOpts {
   phase?: number;
   /** Radial modulation (pleats, ribs): r *= 1 + amp * cos(freq * θ). */
   ripple?: { amp: number; freq: number };
+}
+
+/** Extra cross-section segments of every tube (see `tube`). */
+const TUBE_SEGMENTS = 4 / 3;
+
+/** Inserts a Catmull-Rom midpoint between consecutive rings (centers, radii, exponent); slots/regions stay per span. */
+export function smoothRings(rings: RingSpec[]): RingSpec[] {
+  if (rings.length < 3) return rings;
+  const out: RingSpec[] = [];
+  const at = (i: number) => rings[Math.max(0, Math.min(rings.length - 1, i))]!;
+  const cr = (a: number, b: number, c: number, d: number) => (-a + 9 * b + 9 * c - d) / 16;
+  for (let i = 0; i < rings.length - 1; i++) {
+    const r0 = at(i - 1);
+    const r1 = at(i);
+    const r2 = at(i + 1);
+    const r3 = at(i + 2);
+    out.push(r1);
+    out.push({
+      ...r1,
+      p: [cr(r0.p[0], r1.p[0], r2.p[0], r3.p[0]), cr(r0.p[1], r1.p[1], r2.p[1], r3.p[1]), cr(r0.p[2], r1.p[2], r2.p[2], r3.p[2])],
+      ra: Math.max(1e-4, cr(r0.ra, r1.ra, r2.ra, r3.ra)),
+      rb: Math.max(1e-4, cr(r0.rb, r1.rb, r2.rb, r3.rb)),
+      n: cr(r0.n ?? 2, r1.n ?? 2, r2.n ?? 2, r3.n ?? 2),
+    });
+  }
+  out.push(rings[rings.length - 1]!);
+  return out;
 }
 
 export class PartBuilder {
@@ -216,12 +244,40 @@ export class PartBuilder {
     this.pendingNormals.clear();
   }
 
+  /**
+   * Adds a ready-made triangle mesh (a Blender-authored piece, the sculpted head) with its own normals; weighted like
+   * everything else. `vertexOpts` picks per-vertex options (region, bones) by vertex number.
+   */
+  mesh(positions: ArrayLike<number>, normals: ArrayLike<number>, index: ArrayLike<number>, opts: PrimitiveOpts, vertexOpts?: (i: number) => PrimitiveOpts): this {
+    this.begin(opts);
+    let cur = opts;
+    const base = this.pos.length / 3;
+    for (let i = 0; i < positions.length; i += 3) {
+      const o = vertexOpts?.(i / 3) ?? opts;
+      if (o !== cur) this.begin((cur = o));
+      this.vertex(positions[i]!, positions[i + 1]!, positions[i + 2]!);
+      this.normals.push(normals[i]!, normals[i + 1]!, normals[i + 2]!);
+    }
+    for (let i = 0; i < index.length; i++) this.index.push(base + index[i]!);
+    this.current = null;
+    return this;
+  }
+
+  private readonly fixedWeights = new Map<number, [BoneName, number][]>();
+  /** Explicit skin weights for vertex `v` (instead of the distance-based ones). */
+  setWeights(v: number, w: [BoneName, number][]): void {
+    this.fixedWeights.set(v, w);
+  }
+
   // -------------------------------------------------------------------------------------------- primitives
 
   /** Swept tube through `rings` with superellipse cross-sections; optional round/flat/open caps. */
   tube(rings: RingSpec[], opts: TubeOpts): this {
     this.begin(opts);
-    const seg = opts.segments ?? 12;
+    // Soft, rounded silhouettes: twice the rings along the sweep (Catmull-Rom through the authored ones) and a third
+    // more segments around. Body and garments go through the same refinement, so shells keep their offsets.
+    rings = smoothRings(rings);
+    const seg = Math.round((opts.segments ?? 12) * TUBE_SEGMENTS);
     const ref = new THREE.Vector3(...opts.ref).normalize();
     const pts = rings.map((r) => new THREE.Vector3(...r.p));
     const frames: { t: THREE.Vector3; e1: THREE.Vector3; e2: THREE.Vector3 }[] = [];
@@ -570,7 +626,10 @@ export class PartBuilder {
     const tmp = new THREE.Vector3();
     for (let v = 0; v < n; v++) {
       tmp.set(this.pos[v * 3]!, this.pos[v * 3 + 1]!, this.pos[v * 3 + 2]!);
-      const w = skinWeightsAt(tmp, this.boneSets[this.boneSet[v]!]!, this.gate[v] === 1, segs, rig);
+      const fixed = this.fixedWeights.get(v);
+      const w = fixed
+        ? fixed.filter(([, x]) => x > 1e-4).map(([name, x]) => [rig.index.get(name)!, x] as [number, number])
+        : skinWeightsAt(tmp, this.boneSets[this.boneSet[v]!]!, this.gate[v] === 1, segs, rig);
       for (let k = 0; k < 4; k++) {
         skinIndex[v * 4 + k] = w[k]?.[0] ?? 0;
         skinWeight[v * 4 + k] = w[k]?.[1] ?? 0;

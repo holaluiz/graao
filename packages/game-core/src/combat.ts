@@ -64,6 +64,9 @@ export function applyDrowning(v: Vitals, amount: number): DamageResult {
   return { kinds, shieldDamage: 0, healthDamage, eliminated };
 }
 
+/** The Tormenta takes the pigment, not the shield: Health only, like drowning. */
+export const applyTormentaDamage = applyDrowning;
+
 /** Hitbox dimensions relative to the feet (m). The head is a separate sphere for CRITICAL hits. */
 export const HITBOX = {
   bodyBottom: 0.25,

@@ -38,23 +38,20 @@ import {
 } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import { RemotePlayer } from './RemotePlayer';
-
-function serverUrl(): string {
-  // Dev only: ?server=ws://host:port points this tab at another match server (parallel local setups).
-  const q = import.meta.env.DEV ? new URLSearchParams(location.search).get('server') : null;
-  if (q && /^wss?:\/\/[\w.-]+(:\d+)?$/.test(q)) return q;
-  const env = import.meta.env.VITE_SERVER_URL as string | undefined;
-  if (env) return env;
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.hostname}:2567`;
-}
+import { serverTarget } from './serverTarget';
 
 function friendlyError(e: unknown): Error {
   const msg = (e as Error)?.message ?? String(e);
   if (msg.includes(JoinError.VERSION_MISMATCH)) return new Error('Este servidor roda outra versão do graao. Recarregue a página.');
   if (/not found|invalid room|roomId/i.test(msg)) return new Error('Nenhuma sala com esse código.');
   if (/full|locked/i.test(msg)) return new Error('Essa sala está cheia.');
-  if (/ECONNREFUSED|Failed to fetch|NetworkError|offline|ERR_CONNECTION/i.test(msg)) return new Error('Não foi possível falar com o servidor do graao. Ele está rodando? (pnpm dev)');
+  if (/ECONNREFUSED|Failed to fetch|NetworkError|offline|ERR_CONNECTION|ECONNRESET|timeout/i.test(msg)) {
+    return new Error(
+      import.meta.env.DEV
+        ? 'Não foi possível falar com o servidor do graao. Ele está rodando? (pnpm dev)'
+        : 'O servidor de partidas não respondeu. Tente de novo em instantes; Explorar sozinho funciona sem ele.',
+    );
+  }
   return new Error(msg);
 }
 
@@ -78,8 +75,12 @@ export class NetSession {
   private serverTick = 0;
   private lastServerTickMs = 0;
   private left = false;
+  private active = false;
+  private latestRoom: RoomStateMsg | null = null;
+  private latestSelf: SelfStatusMsg | null = null;
+  private latestDraft: DraftStateMsg | null = null;
 
-  private constructor(private readonly app: GraaoApp, private readonly room: Room) {
+  private constructor(private readonly app: GraaoApp, private readonly room: Room, readonly solo = false) {
     this.labels.className = 'nameplates';
     document.getElementById('ui')!.appendChild(this.labels);
   }
@@ -107,19 +108,26 @@ export class NetSession {
     return [...this.remotes.values()].map((r) => ({ index: r.index, feet: { x: r.pos.x, y: r.pos.y, z: r.pos.z }, alive: r.alive }));
   }
 
-  static async connect(app: GraaoApp, kind: 'create' | 'join', code: string, name: string): Promise<NetSession> {
-    const client = new Client(serverUrl());
+  static async connect(app: GraaoApp, kind: 'create' | 'join' | 'solo', code: string, name: string, bots = 0): Promise<NetSession> {
+    const target = serverTarget();
+    const client = new Client(target.url);
     // A signed-in player proves who they are with the Supabase access token (the server verifies it); else a guest.
-    const token = await app.profile.accessToken();
-    const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(token ? { token } : {}) };
+    // Only the build's own server ever receives it (a ?server= link plays as a guest).
+    const token = target.official ? await app.profile.accessToken() : null;
+    const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(token ? { token } : {}), ...(kind === 'solo' ? { soloBots: bots } : {}) };
     let room: Room;
     try {
-      room = kind === 'create' ? await client.create(ROOM_NAME, options) : await client.joinById(code.toUpperCase(), options);
+      room = kind === 'join' ? await client.joinById(code.toUpperCase(), options) : await client.create(ROOM_NAME, options);
     } catch (e) {
       throw friendlyError(e);
     }
-    const s = new NetSession(app, room);
-    await s.init();
+    const s = new NetSession(app, room, kind === 'solo');
+    try {
+      await s.init();
+    } catch (e) {
+      s.leave();
+      throw e;
+    }
     return s;
   }
 
@@ -143,12 +151,27 @@ export class NetSession {
       room.onMessage(S2C.ROOM_STATE, (m: RoomStateMsg) => this.onRoomState(m));
       room.onMessage(S2C.SNAPSHOT, (m: SnapshotMsg) => this.onSnapshot(m));
       room.onMessage(S2C.PONG, (m: PongMsg) => this.onPong(m));
-      room.onMessage(S2C.EVENTS, (m: EventsMsg) => this.app.combat.onEvents(m.ev));
-      room.onMessage(S2C.SELF, (m: SelfStatusMsg) => this.app.combat.onSelf(m));
+      room.onMessage(S2C.EVENTS, (m: EventsMsg) => {
+        if (this.active) this.app.combat.onEvents(m.ev);
+      });
+      room.onMessage(S2C.SELF, (m: SelfStatusMsg) => {
+        this.latestSelf = m;
+        if (this.active) this.app.combat.onSelf(m);
+      });
       room.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => this.app.combat.abilities.onResult(m));
-      room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => this.app.onDraftState(m));
+      room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => {
+        this.latestDraft = m;
+        if (this.active) this.app.onDraftState(m);
+      });
       room.onMessage(S2C.MATCH_SUMMARY, (m: MatchSummaryMsg) => this.app.combat.onSummary(m));
       room.onMessage(S2C.NOTICE, (m: NoticeMsg) => this.app.combat.onNotice(m));
+      // A dropped socket is not the end: the SDK reconnects on its own and the server keeps the seat for a while.
+      room.onDrop(() => {
+        if (!this.left) this.app.onConnectionDrop(true);
+      });
+      room.onReconnect(() => {
+        if (!this.left) this.app.onConnectionDrop(false);
+      });
       room.onLeave((codeNum: number) => {
         if (!this.left) {
           console.warn('[graao] disconnected', codeNum);
@@ -194,6 +217,8 @@ export class NetSession {
   }
 
   private onRoomState(m: RoomStateMsg): void {
+    this.latestRoom = m;
+    if (!this.active) return;
     const seen = new Set<number>();
     for (const p of m.players) {
       seen.add(p.index);
@@ -205,7 +230,7 @@ export class NetSession {
         this.remotes.set(p.index, r);
       } else {
         r.character.setAppearance(p.appearance);
-        r.setName(p.name);
+        r.setName(p.dropped ? `${p.name} · reconectando…` : p.name);
       }
     }
     for (const [i, r] of this.remotes) {
@@ -217,7 +242,16 @@ export class NetSession {
     this.app.combat.onRoomState(m);
   }
 
+  /** Initial messages can arrive before the app has entered the session's world. */
+  syncState(): void {
+    this.active = true;
+    if (this.latestRoom) this.onRoomState(this.latestRoom);
+    if (this.latestSelf) this.app.combat.onSelf(this.latestSelf);
+    if (this.latestDraft) this.app.onDraftState(this.latestDraft);
+  }
+
   private onSnapshot(m: SnapshotMsg): void {
+    if (!this.active) return;
     this.snapshots++;
     this.serverTick = m.k;
     for (const s of m.p) {

@@ -10,6 +10,7 @@
 import { ABILITIES, isAbilityId } from '@graao/game-data';
 import type { MatchSummaryMsg, PlayerPublic } from '@graao/shared';
 import { ABILITY_ICONS } from './abilityIcons';
+import '../styles/results-responsive.css';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -34,7 +35,7 @@ export interface ResultsActions {
 }
 
 /** What the screen says about persistence: saved to the cloud history, a guest (nothing kept), or still unknown. */
-export type SaveState = 'saved' | 'guest' | 'pending';
+export type SaveState = 'saved' | 'guest' | 'pending' | 'solo';
 
 export class ResultsScreen {
   readonly el = el('div', 'results-screen');
@@ -109,8 +110,10 @@ export class ResultsScreen {
       const row = el('div', `rt-row${p.index === me ? ' me' : ''}${p.won ? ' won' : ''}`, table);
       el('div', 'rt-cell rt-place', row, p.won ? '♛' : `${p.placement}º`);
       const who = el('div', 'rt-cell rt-name', row);
+      who.title = `${p.name} · ${p.loadout.filter(isAbilityId).map((id) => ABILITIES[id].name).join(', ')}`;
       el('span', '', who, p.name);
       if (p.index === me) el('span', 'rt-tag', who, 'você');
+      if (room.find((player) => player.index === p.index)?.bot) el('span', 'rt-tag', who, 'bot');
       if (p.left) el('span', 'rt-tag', who, 'saiu');
       const icons = el('span', 'rt-loadout', who);
       for (const id of p.loadout) {
@@ -132,7 +135,13 @@ export class ResultsScreen {
     if (here.length >= 2) {
       const score = el('div', 'results-score', c);
       el('span', 'results-score-k', score, 'Placar da sala');
-      el('span', '', score, here.map((p) => `${p.name} ${p.wins}`).join(' × '));
+      const scores = el('div', 'results-scores', score);
+      for (const player of here) {
+        const entry = el('span', 'results-score-player', scores);
+        entry.title = `${player.name}: ${player.wins} vitórias`;
+        el('span', '', entry, player.name);
+        el('b', '', entry, String(player.wins));
+      }
     }
     c.append(this.saveEl);
     const row = el('div', 'row results-actions', c);
@@ -143,7 +152,7 @@ export class ResultsScreen {
   }
 
   private setSave(save: SaveState): void {
-    const text = save === 'saved' ? '☁ Partida salva no seu histórico' : save === 'guest' ? 'Jogando como convidado: esta partida não vai para um histórico' : '';
+    const text = save === 'solo' ? 'Partida com bots · não conta para o histórico' : save === 'saved' ? '☁ Partida salva no seu histórico' : save === 'guest' ? 'Jogando como convidado: esta partida não vai para um histórico' : '';
     if (this.saveEl.textContent !== text) this.saveEl.textContent = text;
     this.saveEl.dataset.state = save;
   }
@@ -155,7 +164,9 @@ export class ResultsScreen {
     const back = here.filter((p) => p.back).length;
     const foot = `De volta ao lobby em ${Math.max(0, secondsLeft)} s · ENTER volta agora`;
     if (this.foot.textContent !== foot) this.foot.textContent = foot;
-    const wait = this.asked && back < here.length ? `Esperando ${here.filter((p) => !p.back).map((p) => p.name).join(', ')} (${back}/${here.length})` : '';
+    const pending = here.filter((p) => !p.back);
+    const waitingFor = pending.length > 2 ? `${pending.length} jogadores` : pending.map((p) => p.name).join(', ');
+    const wait = this.asked && back < here.length ? `Esperando ${waitingFor} (${back}/${here.length})` : '';
     if (this.waiting.textContent !== wait) this.waiting.textContent = wait;
   }
 }

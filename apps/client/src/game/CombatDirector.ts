@@ -32,6 +32,7 @@ import type { GraaoApp } from '../app/GraaoApp';
 import type { Cue } from '../audio/GRAAudioManager';
 import { WeaponHolder } from '../character/WeaponModels';
 import { Shape } from '../render/vfx/GRAVFXSystem';
+import type { ScoreboardState } from '../ui/Scoreboard';
 import { AbilityDirector } from './AbilityDirector';
 import { WeaponController } from './WeaponController';
 
@@ -154,6 +155,11 @@ export class CombatDirector {
   /** Everyone in the room as of the last ROOM_STATE (lobby panel, results). */
   get roomPlayers(): readonly PlayerPublic[] {
     return this.players;
+  }
+
+  /** Live authoritative room statistics, with elimination events as a fallback until ROOM_STATE arrives. */
+  get scoreboardState(): ScoreboardState {
+    return { players: this.players, phase: this.phase, me: this.myIndex, eliminated: this.eliminatedInMatch, summary: this.summary };
   }
 
   /** Upper body holds the aim pose while aiming and shortly after any shot. */
@@ -323,19 +329,29 @@ export class CombatDirector {
     hud.setReticle(w.reticleProfile, px + this.weapon.bloom * 7, this.blocked, this.alive && app.input.locked);
     this.updatePhaseUi();
     hud.update(dt);
-    // Audio state follows attention: CRITICAL low health muffles the world, results calm it down.
+    // Audio state follows attention: CRITICAL low health muffles the world, the Tormenta takes the ambience away (the
+    // fight stays clear), results calm it down.
     if (this.phase === MatchPhase.RESULTS) app.audio.setState('POST_MATCH');
-    else app.audio.setState(this.alive && this.health <= ATTRIBUTES.maxHealth * 0.3 ? 'LOW_HEALTH' : 'NORMAL');
+    else if (this.alive && this.health <= ATTRIBUTES.maxHealth * 0.3) app.audio.setState('LOW_HEALTH');
+    else app.audio.setState(app.tormenta.outside ? 'INSIDE_TORMENTA' : 'NORMAL');
   }
+
+  /** Our socket dropped and the SDK is reconnecting (the server keeps the seat meanwhile). */
+  connectionLost = false;
 
   private updatePhaseUi(): void {
     const hud = this.app.hud;
     if (!this.online) return;
+    if (this.connectionLost) {
+      hud.setStatus('CONEXÃO INSTÁVEL · reconectando…', 'urgent');
+      return;
+    }
     const now = this.serverNow();
     const connected = this.players.filter((p) => p.connected);
     if (this.phase === MatchPhase.FREE_ROAM) {
       const ready = connected.filter((p) => p.ready).length;
-      if (connected.length < 2) hud.setStatus(`AQUECIMENTO · aguardando oponente · código ${this.app.net?.code ?? ''}`);
+      if (this.app.net?.solo) hud.setStatus('SOLO COM BOTS · ENTER para começar', 'relevant');
+      else if (connected.length < 2) hud.setStatus(`AQUECIMENTO · aguardando oponente · código ${this.app.net?.code ?? ''}`);
       else if (this.me()?.ready) hud.setStatus(`PRONTO ✓ · aguardando os outros (${ready}/${connected.length}) · ENTER cancela`, 'relevant');
       else hud.setStatus(`AQUECIMENTO · ENTER quando estiver pronto (${ready}/${connected.length})`, 'relevant');
     } else if (this.phase === MatchPhase.MATCH) {
@@ -350,7 +366,7 @@ export class CombatDirector {
       } else {
         if (this.countdownShown > 0) {
           this.countdownShown = 0;
-          hud.banner('LUTEM!', 'O último de pé vence', 1.2, 'good');
+          hud.banner('LUTEM!', 'O último de pé vence · TAB: placar', 1.2, 'good');
           this.app.audio.play('go');
         }
         const standing = this.players.filter((p) => p.inMatch && p.connected).length - this.eliminatedInMatch.size;
@@ -362,15 +378,16 @@ export class CombatDirector {
       const app = this.app;
       if (this.summary && performance.now() - this.resultsAt >= RESULTS_DELAY_MS) {
         if (!app.results.visible) app.input.exitLock();
-        app.results.show(this.summary, this.myIndex, this.players, this.saved ? 'saved' : app.profile.status === 'cloud' ? 'pending' : 'guest');
+        app.results.show(this.summary, this.myIndex, this.players, app.net?.solo ? 'solo' : this.saved ? 'saved' : app.profile.status === 'cloud' ? 'pending' : 'guest');
         app.results.update(Math.ceil((this.phaseEndsAt - now) / 1000), this.players);
       }
     }
     if (!this.alive) {
+      const by = this.killerName === 'Tormenta' ? 'pela Tormenta' : `por ${this.killerName}`;
       const sub =
         this.phase === MatchPhase.MATCH || this.phase === MatchPhase.RESULTS
-          ? `por ${this.killerName} · aguarde o fim da partida`
-          : `por ${this.killerName} · voltando em ${Math.max(0, Math.ceil((this.respawnAt - now) / 1000))} s`;
+          ? `${by} · aguarde o fim da partida`
+          : `${by} · voltando em ${Math.max(0, Math.ceil((this.respawnAt - now) / 1000))} s`;
       this.app.hud.setDeath(this.phase !== MatchPhase.RESULTS, sub);
     }
   }
@@ -431,6 +448,7 @@ export class CombatDirector {
     }
     this.abilities.onRoomState(m);
     this.app.deploy.onRoomState(m);
+    this.app.tormenta.onRoomState(m);
   }
 
   onSelf(s: SelfStatusMsg): void {
@@ -474,10 +492,11 @@ export class CombatDirector {
           if (e.by !== me) this.remoteShot(e.by, e.w, e.to, e.t);
           break;
         case 'dmg':
-          this.onDamage(e.by, e.target, e.amount, e.kinds, e.health, e.shield);
+          if (e.c === 'tormenta') this.onTormentaDamage(e.target, e.amount, e.health, e.shield);
+          else this.onDamage(e.by, e.target, e.amount, e.kinds, e.health, e.shield);
           break;
         case 'elim':
-          this.onElimination(e.by, e.target);
+          this.onElimination(e.by, e.target, e.c === 'tormenta');
           break;
         case 'respawn':
           if (e.target === me) {
@@ -574,6 +593,17 @@ export class CombatDirector {
     }
   }
 
+  /**
+   * The Tormenta took Health (a pulse every second or so): lighter than a hit (no hit reaction, no direction arc),
+   * presented by the TormentaDirector for the local player; remotes only peel (TormentaDirector, from the snapshot flag).
+   */
+  private onTormentaDamage(target: number, amount: number, health: number, shield: number): void {
+    if (target !== this.myIndex) return;
+    this.health = health;
+    this.shield = shield;
+    this.app.tormenta.onHurt(amount);
+  }
+
   /** World/FX layer of a hit at a character standing at `feet`. Shape tells the kind, not only color. */
   private hitFx(feet: Vec3, kinds: HitKind[]): void {
     const vfx = this.app.vfx;
@@ -595,12 +625,12 @@ export class CombatDirector {
     }
   }
 
-  private onElimination(by: number, target: number): void {
+  private onElimination(by: number, target: number, tormenta = false): void {
     const app = this.app;
     const me = this.myIndex;
     this.eliminatedInMatch.add(target);
-    // Eliminated by yourself = drowned: the water takes the credit in the feed.
-    const killer = by === target ? 'Água' : this.nameOf(by);
+    // Eliminated by yourself = drowned or taken by the Tormenta: the hazard takes the credit in the feed.
+    const killer = tormenta ? 'Tormenta' : by === target ? 'Água' : this.nameOf(by);
     const victim = this.nameOf(target);
     app.hud.feed(killer, victim, by === me && target !== me ? 'killer' : target === me ? 'victim' : null);
     const pos = target === me ? app.local.state.pos : app.net?.remote(target)?.pos;

@@ -132,6 +132,10 @@ export const SPAWNS: { lat: number; lon: number }[] = [
   { lat: -10, lon: 95 },
   { lat: 30, lon: -60 },
   { lat: -15, lon: -150 },
+  { lat: 4, lon: -2 },
+  { lat: 11, lon: -2 },
+  { lat: 7, lon: 6 },
+  { lat: 11, lon: -6 },
 ];
 
 /** Centre of the MVP arena (Lantern Village plaza). Match spawns face it. */
@@ -148,6 +152,10 @@ export const MATCH_SPAWNS: { lat: number; lon: number }[] = [
   { lat: 23, lon: -7 },
   { lat: 18, lon: 19 },
   { lat: -3, lon: -12 },
+  { lat: 18, lon: -15 },
+  { lat: -3, lon: 18 },
+  { lat: 24, lon: 10 },
+  { lat: 5, lon: -24 },
 ];
 
 /** Scattered props keep this far from every spawn point (degrees of arc). */

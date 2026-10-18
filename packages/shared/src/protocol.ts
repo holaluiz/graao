@@ -119,6 +119,8 @@ export interface JoinOptions {
   appearance: CharacterAppearance;
   /** Supabase access token in production; absent for DEV GUEST. */
   token?: string;
+  /** Create only: computer opponents in a private solo room (0 keeps a regular room). */
+  soloBots?: number;
   /** Dev/tests only (ignored in production): ability ids for slots 1–4 instead of the default loadout. */
   loadout?: string[];
 }
@@ -180,6 +182,8 @@ export const SnapFlag = {
   DIVING: 1 << 4,
   /** The double jump of this flight is spent: the owner's prediction must not grant it again, others flip once. */
   AIR_JUMPED: 1 << 5,
+  /** Outside the Tormenta's safe region, by the server's own test (the one that decides the damage). */
+  IN_TORMENTA: 1 << 6,
 } as const;
 
 export const POS_SCALE = 1000;
@@ -201,9 +205,16 @@ export interface PlayerPublic {
   index: number;
   sessionId: string;
   name: string;
+  /** Computer-controlled opponent in a solo room. */
+  bot?: boolean;
+  /** Live scoreboard state, owned by the match server. */
+  alive?: boolean;
+  damageDealt?: number;
   appearance: CharacterAppearance;
   ready: boolean;
   connected: boolean;
+  /** Connection lost: the seat is kept for RECONNECT_SECONDS while the client tries to come back. */
+  dropped?: boolean;
   /** Takes part in the current match (false for late joiners and in warmup). */
   inMatch: boolean;
   /** Eliminations in the current match (warmup: since joining). */
@@ -239,6 +250,31 @@ export interface UfoRouteMsg {
   w: number;
 }
 
+/**
+ * One Tormenta phase, chosen by the server (MATCH only). The safe region is a spherical cap: a centre direction from
+ * the planet centre and an angular radius; inside = geodesic angle to the centre < radius. Integers only (unit
+ * vectors × 1e6, radii in microradians, server ms), so the server's test and every client's boundary are the same
+ * numbers. Clients derive the boundary at any server time from this; nothing streams per tick.
+ *
+ * Phase k of n holds the circle (c, r) from t0 to `a` (the next region (tc, tr) is announced), then closes onto it
+ * between `a` and `b` (centre along the great circle, radius linearly). Phase n + 1 is the final region: c = tc,
+ * a = b = 0, held until the match ends. Outside the region every pulse (`every` ms, aligned to the Tormenta's start)
+ * takes `dmg` Health.
+ */
+export interface TormentaMsg {
+  k: number;
+  n: number;
+  c: [number, number, number];
+  r: number;
+  tc: [number, number, number];
+  tr: number;
+  t0: number;
+  a: number;
+  b: number;
+  dmg: number;
+  every: number;
+}
+
 /** Reliable, sent when something non-positional changes. */
 export interface RoomStateMsg {
   code: string;
@@ -252,6 +288,8 @@ export interface RoomStateMsg {
   players: PlayerPublic[];
   /** UFO phase only: the ship's route (null otherwise). */
   ufo: UfoRouteMsg | null;
+  /** MATCH only: the Tormenta's current phase (null otherwise). */
+  tormenta: TormentaMsg | null;
 }
 
 /** READY toggle (warmup): `{ r: 1 }` ready, `{ r: 0 }` not ready. */
@@ -500,11 +538,17 @@ export interface DraftStateMsg {
 
 export type StatusFx = 'shield' | 'heal' | 'slow' | 'knock' | 'dash';
 
+/**
+ * What hurt a player when nobody did (`by` = the target itself): the Tormenta. Self damage without a cause is
+ * drowning.
+ */
+export type DamageCause = 'tormenta';
+
 export type GameEvent =
   /** A shot happened. `to` are impact points (mm); `t` is the target index or -1 for world. */
   | { e: 'shot'; by: number; w: number; s: number; from: [number, number, number]; to: [number, number, number][]; t: number[] }
   /** Damage dealt by `by` to `target`; kinds is the hit taxonomy. */
-  | { e: 'dmg'; by: number; target: number; amount: number; kinds: HitKind[]; health: number; shield: number; a?: string }
+  | { e: 'dmg'; by: number; target: number; amount: number; kinds: HitKind[]; health: number; shield: number; a?: string; c?: DamageCause }
   /** An ability was accepted: everyone plays the cast; `until` is when the wind-up ends (server time). */
   | { e: 'cast'; by: number; a: string; k: number; s: number; until: number; d?: [number, number, number]; p?: [number, number, number] }
   /** A server projectile was launched (`v` in cm/s; gravity and radius come from the ability definition). */
@@ -515,7 +559,7 @@ export type GameEvent =
   | { e: 'area'; by: number; a: string; at: [number, number, number]; r: number; n: number }
   /** A status effect landed on `target` (shield/heal amount, slow/dash duration ms, knock speed). */
   | { e: 'fx'; by: number; target: number; k: StatusFx; v: number }
-  | { e: 'elim'; by: number; target: number }
+  | { e: 'elim'; by: number; target: number; c?: DamageCause }
   | { e: 'respawn'; target: number }
   | { e: 'reload'; by: number; w: number }
   /**

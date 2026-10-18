@@ -94,9 +94,9 @@ export function rigDefinition(p: RigProportions = SLIM): RigBoneDef[] {
     const sx = s === 'Left' ? 1 : -1;
     const side = s === 'Left' ? 'L' : 'R';
     const y = p.shoulderY;
-    const z = -0.015;
+    const z = 0.004; // = ARM_Z (anatomy): arms on the side line of the chest
     defs.push(
-      { name: `${s}Shoulder`, parent: 'Spine2', pos: [sx * p.clavicleX, y + 0.005, -0.01], side },
+      { name: `${s}Shoulder`, parent: 'Spine2', pos: [sx * p.clavicleX, y + 0.005, -0.004], side },
       { name: `${s}Arm`, parent: `${s}Shoulder`, pos: [sx * p.shoulderX, y, z], side },
       { name: `${s}ForeArm`, parent: `${s}Arm`, pos: [sx * p.elbowX, y, z], side },
       { name: `${s}Hand`, parent: `${s}ForeArm`, pos: [sx * p.wristX, y, z], side },

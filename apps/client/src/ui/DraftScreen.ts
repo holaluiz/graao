@@ -174,6 +174,7 @@ export class DraftScreen {
   private renderStatus(s: DraftStateMsg, spectator: boolean): void {
     const mySeat = s.seats.find((x) => x.index === this.me);
     const waitingFor = s.seats.filter((x) => x.picking && !x.locked && x.index !== this.me).map((x) => this.names(x.index));
+    const waitingLabel = waitingFor.length > 2 ? `${waitingFor.length} jogadores` : waitingFor.join(', ');
     let text: string;
     let tone = 'quiet';
     if (spectator) text = 'Você entrou durante o draft: joga a próxima partida.';
@@ -186,8 +187,8 @@ export class DraftScreen {
       const what = isAbilityId(s.lostTo.a) ? ABILITIES[s.lostTo.a].name : s.lostTo.a;
       text = s.mine ? `Nova escolha travada · aguardando…` : `${this.names(s.lostTo.index)} ficou com ${what} (tinha prioridade). Escolha outra!`;
       tone = s.mine ? 'quiet' : 'urgent';
-    } else if (!mySeat?.picking) text = waitingFor.length ? `Aguardando ${waitingFor.join(', ')}…` : 'Resolvendo a rodada…';
-    else if (s.mine || this.sending) text = waitingFor.length ? `Escolha travada · aguardando ${waitingFor.join(', ')}…` : 'Escolha travada';
+    } else if (!mySeat?.picking) text = waitingFor.length ? `Aguardando ${waitingLabel}…` : 'Resolvendo a rodada…';
+    else if (s.mine || this.sending) text = waitingFor.length ? `Escolha travada · aguardando ${waitingLabel}…` : 'Escolha travada';
     else text = s.kind === 'ultimate' ? 'Escolha sua Suprema (tecla 4 na partida)' : `Escolha uma magia básica (tecla ${s.round + 1} na partida) · clique ou teclas 1–${s.pool.length}`;
     if (this.statusEl.textContent !== text) {
       this.statusEl.textContent = text;
@@ -211,6 +212,8 @@ export class DraftScreen {
         const def = ABILITIES[id];
         const b = el('button', 'draft-card', this.cardsEl);
         b.type = 'button';
+        b.title = `${def.name}: ${def.blurb} · Mana ${def.manaCost} · Recarga ${seconds(def.cooldown)}`;
+        b.setAttribute('aria-description', def.blurb);
         b.style.setProperty('--ab-color', def.presentation.color);
         b.style.setProperty('--ab-color2', def.presentation.color2);
         el('span', 'dc-key', b, String(i + 1));

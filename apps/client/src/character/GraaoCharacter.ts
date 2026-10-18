@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { MOVEMENT } from '@graao/game-data';
 import { MovementState, type CharacterAppearance } from '@graao/shared';
 import { createOutlineMaterial, createStylizedMaterial, setPalette, setWetness } from '../render/materials/GRAStylizedMaterial';
+import { INK_STATE } from '../render/InkPass';
 import { buildSkeleton, type BoneName, type GRARig } from './rig/GRARig';
 import { buildPalette, geometryKey, type CharacterPartLibrary } from './CharacterAppearanceController';
 import { CharacterAnimationController, type AnimInput } from './CharacterAnimationController';
@@ -56,6 +57,17 @@ export class GraaoCharacter {
   private swimLift = 0;
   private readonly feet = new THREE.Vector3();
   private readonly up = new THREE.Vector3(0, 1, 0);
+  /** Fist on the weapon hand (0 open … 1 closed), set while something is mounted on the right hand. */
+  private rightGrip = 0;
+  private gripAmount = 0;
+  /** Arms brought forward onto the side line of the body (off while aiming: the aim clips own the arms). */
+  private armForward = 1;
+  /** Vertical correction (m) that plants the lowest sole on the ground plane after the clip is applied. */
+  private footOffset = 0;
+  private readonly tmpV = new THREE.Vector3();
+  private readonly tmpQ = new THREE.Quaternion();
+  private static readonly X_AXIS = new THREE.Vector3(1, 0, 0);
+  private static readonly Z_AXIS = new THREE.Vector3(0, 0, 1);
 
   constructor(
     private readonly parts: CharacterPartLibrary,
@@ -68,7 +80,7 @@ export class GraaoCharacter {
     this.root.add(this.visualRoot);
     this.appearance = { ...appearance };
     this.rebuild(appearance, true);
-    this.outline.visible = opts.outline ?? true;
+    this.outline.visible = (opts.outline ?? true) && !INK_STATE.post;
     this.mesh.castShadow = opts.castShadow ?? true;
   }
 
@@ -126,11 +138,13 @@ export class GraaoCharacter {
   attach(obj: THREE.Object3D, bone: BoneName): void {
     this.bones.get(bone)?.add(obj);
     this.attachments.set(obj, bone);
+    if (bone === 'RightHand') this.rightGrip = 1;
   }
 
   detach(obj: THREE.Object3D): void {
     obj.removeFromParent();
     this.attachments.delete(obj);
+    this.rightGrip = [...this.attachments.values()].includes('RightHand') ? 1 : 0;
   }
 
   /** Places the character: feet position, local up and facing tangent (world space). */
@@ -172,7 +186,68 @@ export class GraaoCharacter {
     this.visualRoot.rotation.set(pitch, 0, 0);
     this.visualRoot.position.set(0, h * (1 - Math.cos(pitch)) + this.swimLift, -h * Math.sin(pitch));
     this.updateWetness(dt, s.waterDepth, swimming);
+    this.resetProcedural();
     this.anim.update(dt, s);
+    this.applyProcedural(dt, s, swimming);
+  }
+
+  private static readonly FINGERS = ['Index', 'Middle', 'Ring', 'Pinky'] as const;
+  /** Curl per phalanx (rad) of a fist around a grip, and of a relaxed open hand. */
+  private static readonly FIST = [1.3, 1.25, 0.7];
+  private static readonly RELAXED = [0.28, 0.32, 0.22];
+
+  /** Bones the procedural layer writes go back to bind before the mixer, so nothing accumulates across frames. */
+  private resetProcedural(): void {
+    for (const side of ['Left', 'Right'] as const) {
+      for (const f of GraaoCharacter.FINGERS) for (let k = 1; k <= 3; k++) this.bones.get(`${side}Hand${f}${k}` as BoneName)?.quaternion.identity();
+    }
+  }
+
+  /**
+   * After the clips: fingers (a fist on the weapon hand, relaxed on the other), arms forward onto the body's side line,
+   * and the feet planted on the ground plane (a clip or a slope never sinks the soles into the floor).
+   */
+  private applyProcedural(dt: number, s: AnimInput, swimming: boolean): void {
+    this.gripAmount = THREE.MathUtils.damp(this.gripAmount, this.rightGrip, 12, dt);
+    for (const side of ['Left', 'Right'] as const) {
+      const sign = side === 'Right' ? 1 : -1;
+      const grip = side === 'Right' ? this.gripAmount : 0;
+      for (const f of GraaoCharacter.FINGERS) {
+        for (let k = 1; k <= 3; k++) {
+          const b = this.bones.get(`${side}Hand${f}${k}` as BoneName);
+          if (!b) continue;
+          const a = THREE.MathUtils.lerp(GraaoCharacter.RELAXED[k - 1]!, GraaoCharacter.FIST[k - 1]!, grip);
+          b.quaternion.multiply(this.tmpQ.setFromAxisAngle(GraaoCharacter.Z_AXIS, sign * a));
+        }
+      }
+    }
+    this.armForward = THREE.MathUtils.damp(this.armForward, s.aiming || s.diving ? 0 : 1, 10, dt);
+    if (this.armForward > 0.01) {
+      const q = this.tmpQ.setFromAxisAngle(GraaoCharacter.X_AXIS, -0.13 * this.armForward);
+      for (const name of ['LeftArm', 'RightArm'] as BoneName[]) this.bones.get(name)?.quaternion.premultiply(q);
+    }
+    // Feet: lowest sole point (heel, ball, toe of both feet) in the character frame → lift or lower the body onto it.
+    const planted = s.grounded && !swimming && !s.diving && this.flip >= 1 && Math.abs(this.tilt) < 0.02;
+    let target = 0;
+    if (planted && this.rig) {
+      this.root.updateMatrixWorld(true);
+      let minY = Infinity;
+      for (const side of ['Left', 'Right'] as const) {
+        const sx = side === 'Left' ? 1 : -1;
+        const x = sx * this.rig.proportions.legSocketX;
+        for (const [bone, pz] of [[`${side}Foot`, -0.065], [`${side}Foot`, 0.09], [`${side}ToeBase`, 0.165]] as [BoneName, number][]) {
+          const b = this.bones.get(bone);
+          const def = this.rig.byName.get(bone);
+          if (!b || !def) continue;
+          this.tmpV.set(x - def.pos[0], -def.pos[1], pz - def.pos[2]).applyMatrix4(b.matrixWorld);
+          this.root.worldToLocal(this.tmpV);
+          minY = Math.min(minY, this.tmpV.y);
+        }
+      }
+      if (Number.isFinite(minY)) target = THREE.MathUtils.clamp(-minY, -0.04, 0.14);
+    }
+    this.footOffset = THREE.MathUtils.damp(this.footOffset, target, planted ? 16 : 6, dt);
+    this.visualRoot.position.y += this.footOffset;
   }
 
   /** True once per double jump (the frame its flip starts): the caller puffs air under the feet. */

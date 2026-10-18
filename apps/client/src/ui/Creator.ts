@@ -46,16 +46,26 @@ const CATEGORIES: Category[] = [
   { id: 'acc', label: 'Acessórios', sections: [{ key: 'accessoryId', label: 'Rosto e cabeça' }, { key: 'extraId', label: 'Corpo' }] },
 ];
 
+const ICON = {
+  close: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="10" y="1.5" width="4.2" height="21" rx="2" transform="rotate(45 12 12)"/><rect x="10" y="1.5" width="4.2" height="21" rx="2" transform="rotate(-45 12 12)"/></svg>',
+  dice: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M5 2.5h14a2.5 2.5 0 0 1 2.5 2.5v14a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 19V5A2.5 2.5 0 0 1 5 2.5Zm2.6 3.4a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4Zm8.8 0a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4ZM12 10.3a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4Zm-4.4 4.4a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4Zm8.8 0a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4Z"/></svg>',
+};
+
 export class Creator {
   readonly el = document.createElement('div');
+  /** Full-screen layer with the close (X) and "surprise me" buttons over the character's head. */
+  readonly stage = document.createElement('div');
   private cat = CATEGORIES[0]!;
   private readonly tabs = document.createElement('div');
   private readonly opts = document.createElement('div');
+  private readonly closeBtn: HTMLButtonElement;
+  private readonly diceBtn: HTMLButtonElement;
 
   constructor(
     private appearance: CharacterAppearance,
     private readonly onChange: (a: CharacterAppearance) => void,
     private readonly onDone: () => void,
+    private readonly sound: (cue: 'ui.click' | 'ui.swap') => void = () => {},
   ) {
     this.el.className = 'creator';
     this.el.hidden = true;
@@ -66,16 +76,21 @@ export class Creator {
     this.opts.className = 'options';
     const foot = document.createElement('div');
     foot.className = 'row';
-    const rnd = this.button('Surpreenda-me', () => {
-      this.set(randomAppearance());
-    });
     const done = this.button('Pronto', () => this.onDone(), true);
-    foot.append(rnd, done);
+    foot.append(done);
     const hint = document.createElement('div');
     hint.className = 'hint';
-    hint.textContent = 'Arraste o personagem para girar · role para aproximar';
+    hint.textContent = 'Arraste para girar · role para aproximar';
     this.el.append(h, this.tabs, this.opts, foot);
     this.opts.after(hint);
+
+    this.stage.className = 'creator-stage';
+    this.stage.hidden = true;
+    this.closeBtn = this.iconButton(ICON.close, 'Pronto', () => this.onDone());
+    this.closeBtn.classList.add('close');
+    this.diceBtn = this.iconButton(ICON.dice, 'Surpreenda-me', () => this.surprise());
+    this.diceBtn.classList.add('dice');
+    this.stage.append(this.closeBtn, this.diceBtn);
     this.renderTabs();
     this.renderOptions();
   }
@@ -86,6 +101,21 @@ export class Creator {
     b.textContent = label;
     b.addEventListener('click', fn);
     return b;
+  }
+
+  private iconButton(svg: string, label: string, fn: () => void): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.className = 'ink-btn';
+    b.innerHTML = svg;
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  private surprise(): void {
+    this.sound('ui.swap');
+    this.set(randomAppearance());
   }
 
   private set(a: CharacterAppearance): void {
@@ -108,6 +138,7 @@ export class Creator {
         t.setAttribute('aria-selected', String(c === this.cat));
         t.textContent = c.label;
         t.addEventListener('click', () => {
+          this.sound('ui.click');
           this.cat = c;
           this.renderTabs();
           this.renderOptions();
@@ -137,9 +168,14 @@ export class Creator {
           s.className = 'swatch';
           s.title = col.name;
           s.setAttribute('aria-label', col.name);
-          s.style.background = col.hex;
-          s.setAttribute('aria-pressed', String(this.appearance[sec.key] === col.id));
-          s.addEventListener('click', () => this.set({ ...this.appearance, [sec.key]: col.id }));
+          s.style.setProperty('--fill', col.hex);
+          const selected = this.appearance[sec.key] === col.id;
+          s.setAttribute('aria-pressed', String(selected));
+          if (selected) s.append(document.createElement('i'));
+          s.addEventListener('click', () => {
+            this.sound('ui.swap');
+            this.set({ ...this.appearance, [sec.key]: col.id });
+          });
           grid.append(s);
         }
       } else {
@@ -148,7 +184,10 @@ export class Creator {
           b.className = 'opt';
           b.textContent = o.name;
           b.setAttribute('aria-pressed', String(this.appearance[sec.key] === o.id));
-          b.addEventListener('click', () => this.set({ ...this.appearance, [sec.key]: o.id }));
+          b.addEventListener('click', () => {
+            this.sound('ui.swap');
+            this.set({ ...this.appearance, [sec.key]: o.id });
+          });
           grid.append(b);
         }
       }
@@ -166,6 +205,24 @@ export class Creator {
 
   show(v: boolean): void {
     this.el.hidden = !v;
+    this.stage.hidden = !v;
+  }
+
+  /**
+   * Places the close and dice buttons over the character every frame: `headTop` is the top of the head on screen
+   * (CSS px), `centerX` the body's screen x and `spread` the distance (px) from it to each button.
+   */
+  layout(headTop: number, centerX: number, spread: number): void {
+    if (this.stage.hidden) return;
+    const size = Math.round(Math.max(40, Math.min(58, spread * 0.4)));
+    this.stage.style.setProperty('--ink-btn', `${size}px`);
+    // Keep both buttons inside the free area (left of the panel when the panel leaves room).
+    const panel = this.el.getBoundingClientRect();
+    const maxX = panel.left > window.innerWidth * 0.35 ? panel.left - 14 : window.innerWidth - 14;
+    spread = Math.max(size * 0.95, Math.min(spread, centerX - 14 - size / 2, maxX - centerX - size / 2));
+    const top = Math.max(size * 0.6 + 10, headTop);
+    this.closeBtn.style.translate = `${Math.round(centerX + spread - size / 2)}px ${Math.round(top - size / 2)}px`;
+    this.diceBtn.style.translate = `${Math.round(centerX - spread - size / 2)}px ${Math.round(top - size / 2)}px`;
   }
 
   /** Horizontal center (NDC, −1…1) of the part of `view` left of the panel; 0 when the panel covers most of it. */

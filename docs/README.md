@@ -6,7 +6,8 @@
   [character system](architecture/CHARACTER_SYSTEM.md) · [Mixamo pipeline](architecture/MIXAMO_PIPELINE.md) ·
   [ability system](architecture/ABILITY_SYSTEM.md) · [asset manager](architecture/ASSET_MANAGER.md)
 - Gameplay: [match flow](gameplay/MATCH_FLOW.md) · [character creator](gameplay/CHARACTER_CREATOR.md) ·
-  [ability draft](gameplay/ABILITY_DRAFT.md) · [combat](gameplay/COMBAT.md) · [UFO deployment](gameplay/UFO_DEPLOYMENT.md)
+  [ability draft](gameplay/ABILITY_DRAFT.md) · [combat](gameplay/COMBAT.md) · [UFO deployment](gameplay/UFO_DEPLOYMENT.md) ·
+  [Tormenta](gameplay/TORMENTA.md)
 - Rendering: [art direction](rendering/ART_DIRECTION.md) · [materials](rendering/MATERIALS.md) · [VFX](rendering/VFX.md)
 - [Performance budgets and measurements](performance/BUDGETS.md)
 - Infrastructure: [Supabase](infrastructure/SUPABASE.md) · [R2](infrastructure/R2.md) · [deployment](infrastructure/DEPLOYMENT.md)

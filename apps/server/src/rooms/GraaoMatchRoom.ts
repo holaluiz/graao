@@ -33,6 +33,8 @@ import {
   AbilityDraft,
   CharacterMotor,
   GRAAbilitySystem,
+  GRATormentaSystem,
+  applyTormentaDamage,
   MATCH_RULES,
   MatchLedger,
   applyAbilityDamage,
@@ -67,14 +69,17 @@ import {
   resolvePellet,
   shotSeed,
   spreadDirections,
+  tormentaEdgeMeters,
   type AbilityActor,
   type AbilityHost,
   type GameWorld,
   type PlayerHitTarget,
+  type TormentaConfig,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, MOVEMENT, PLANET, SPAWNS, UFO, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, validateAppearance, type AbilityId } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, MOVEMENT, SPAWNS, TORMENTA, UFO, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, randomAppearance, validateAppearance, type AbilityId, type TormentaPhaseDef } from '@graao/game-data';
 import {
   AbilityReject,
+  AIM_SCALE,
   ActionState,
   C2S,
   CLIENT_VERSION,
@@ -87,12 +92,13 @@ import {
   MAX_INPUT_BACKLOG,
   MAX_MESSAGES_PER_SECOND,
   MAX_PLAYERS,
-  MVP_PLAYERS,
+  MAX_SOLO_BOTS,
   MatchPhase,
   NoticeCode,
   PITCH_SCALE,
   POS_SCALE,
   PROTOCOL_VERSION,
+  RECONNECT_SECONDS,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
   ROOM_CODE_PREFIX,
@@ -104,6 +110,7 @@ import {
   SNAPSHOT_HZ,
   SnapFlag,
   VEL_SCALE,
+  WISH_SCALE,
   sanitizeName,
   v3normalize,
   v3projectOnPlane,
@@ -118,6 +125,7 @@ import {
   validateSwitch,
   validateUfoJump,
   type AbilityResultMsg,
+  type DamageCause,
   type EventsMsg,
   type GameEvent,
   type JoinOptions,
@@ -134,7 +142,8 @@ import {
 import { authVerifier } from '../auth/SupabaseAuth';
 import { serverConfig } from '../config';
 import { matchStore } from '../persistence/MatchStore';
-import { ServerPlayer } from '../sim/ServerPlayer';
+import { ServerPlayer, type PlayerConnection } from '../sim/ServerPlayer';
+import { botIntent } from '../sim/BotBrain';
 import { getWorld } from '../world';
 import { log } from '../log';
 
@@ -157,6 +166,8 @@ function newCode(): string {
 
 export interface RoomCreateOptions {
   maxPlayers?: number;
+  /** Private practice room: one human and this many server-controlled opponents. Zero keeps ordinary multiplayer. */
+  soloBots?: number;
   /** Overrides for tests and dev (clamped to sane ranges). */
   countdownMs?: number;
   resultsMs?: number;
@@ -176,6 +187,18 @@ export interface RoomCreateOptions {
   ufoRevealMs?: number;
   ufoWindowMs?: number;
   ufoLandTimeoutMs?: number;
+  /** Tests: how long a dropped connection keeps its seat (s). */
+  reconnectSeconds?: number;
+  /**
+   * Dev/tests only (ignored in production): the Tormenta's phases, pulse and final damage, a fixed final centre, or
+   * no Tormenta at all; and fixed fight spawns (lat/lon per seat) for matches that skip the UFO.
+   */
+  tormentaPhases?: TormentaPhaseDef[];
+  tormentaPulseMs?: number;
+  tormentaFinalDamage?: number;
+  tormentaFinal?: { lat: number; lon: number };
+  tormentaOff?: boolean;
+  matchSpawns?: { lat: number; lon: number }[];
 }
 
 /** Dev/tests may pick a loadout on join (JoinOptions.loadout); production always uses the server's (draft) loadout. */
@@ -193,14 +216,25 @@ const FIRE_RATE_TOLERANCE = 0.85;
 const SWITCH_DELAY_MS = 220;
 const mm = (v: Vec3): [number, number, number] => [Math.round(v.x * POS_SCALE), Math.round(v.y * POS_SCALE), Math.round(v.z * POS_SCALE)];
 
+interface BotRuntime {
+  seq: number;
+  fireSeq: number;
+  acc: number;
+  target: number;
+  acquiredAt: number;
+  nextShotAt: number;
+}
+
 export class GraaoMatchRoom extends Room {
-  override maxClients = MVP_PLAYERS;
+  override maxClients = MAX_PLAYERS;
   override maxMessagesPerSecond = MAX_MESSAGES_PER_SECOND;
   override patchRate = null;
 
   private world!: GameWorld;
   private motor!: CharacterMotor;
   private readonly players = new Map<string, ServerPlayer>();
+  private soloBotCount = 0;
+  private readonly bots = new Map<number, BotRuntime>();
   private phase: MatchPhase = MatchPhase.FREE_ROAM;
   private phaseEndsAt = 0;
   private startsAt = 0;
@@ -216,8 +250,14 @@ export class GraaoMatchRoom extends Room {
   private skipUfo = false;
   private ufoTimings: Partial<{ revealMs: number; windowMs: number }> = {};
   private landTimeoutMs: number = UFO.landTimeoutMs;
+  private reconnectSeconds: number = RECONNECT_SECONDS;
   /** The ship's route while the UFO phase runs. */
   private ufo: UfoRouteMsg | null = null;
+  /** The match's shrinking safe region (active from the fight start until the results). */
+  private readonly tormenta = new GRATormentaSystem();
+  private tormentaOff = false;
+  private tormentaFinal: Vec3 | undefined;
+  private matchSpawns: { lat: number; lon: number }[] | null = null;
   /** The running match's own record (boarding → end); null outside a match. */
   private ledger: MatchLedger | null = null;
   /** Who each participant of the running match is (identity and look at the start), for persistence. */
@@ -228,11 +268,19 @@ export class GraaoMatchRoom extends Room {
   /** Moving average of tick CPU cost (ms). */
   private tickCost = 0;
   private events: GameEvent[] = [];
+  /** Damage updates share one public-state broadcast per simulation tick. */
+  private roomStateDirty = false;
 
   override async onCreate(options: RoomCreateOptions = {}): Promise<void> {
+    if (options.soloBots !== undefined && (typeof options.soloBots !== 'number' || !Number.isFinite(options.soloBots) || options.soloBots < 0)) {
+      throw new ServerError(4004, 'invalid solo bot count');
+    }
+    this.soloBotCount = options.soloBots ? Math.max(1, Math.min(MAX_SOLO_BOTS, Math.floor(options.soloBots))) : 0;
     this.roomId = newCode();
     activeCodes.add(this.roomId);
-    this.maxClients = Math.max(1, Math.min(MAX_PLAYERS, Math.floor(options.maxPlayers ?? MVP_PLAYERS)));
+    const requestedPlayers = typeof options.maxPlayers === 'number' && Number.isFinite(options.maxPlayers) ? options.maxPlayers : MAX_PLAYERS;
+    this.maxClients = this.soloBotCount ? 1 : Math.max(1, Math.min(MAX_PLAYERS, Math.floor(requestedPlayers)));
+    if (this.soloBotCount) await this.setPrivate(true);
     this.countdownMs = clampMs(options.countdownMs, MATCH_RULES.countdownMs);
     this.resultsMs = clampMs(options.resultsMs, MATCH_RULES.resultsMs);
     this.closeSpawns = options.closeSpawns === true;
@@ -245,6 +293,8 @@ export class GraaoMatchRoom extends Room {
     if (typeof options.ufoRevealMs === 'number') this.ufoTimings.revealMs = clampMs(options.ufoRevealMs, UFO.revealMs);
     if (typeof options.ufoWindowMs === 'number') this.ufoTimings.windowMs = Math.max(1, clampMs(options.ufoWindowMs, UFO.windowMs));
     this.landTimeoutMs = clampMs(options.ufoLandTimeoutMs, UFO.landTimeoutMs);
+    if (typeof options.reconnectSeconds === 'number' && Number.isFinite(options.reconnectSeconds)) this.reconnectSeconds = Math.max(0, Math.min(120, options.reconnectSeconds));
+    if (DEV) this.configureTormenta(options);
     this.world = await getWorld();
     this.motor = new CharacterMotor(this.world.physics);
     this.abilities = new GRAAbilitySystem(this.abilityHost());
@@ -285,6 +335,7 @@ export class GraaoMatchRoom extends Room {
   }
 
   override onJoin(client: Client, options?: JoinOptions): void {
+    if (this.soloBotCount && this.players.size) throw new ServerError(4004, 'solo practice is private');
     if (!options || options.protocol !== PROTOCOL_VERSION) {
       throw new ServerError(4001, `${JoinError.VERSION_MISMATCH}: server speaks protocol ${PROTOCOL_VERSION}`);
     }
@@ -300,6 +351,7 @@ export class GraaoMatchRoom extends Room {
     p.profileId = (client.auth as PlayerAuth | undefined)?.profileId ?? null;
     resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
     this.players.set(client.sessionId, p);
+    if (this.soloBotCount) this.createBots();
     const welcome: WelcomeMsg & { spawn: [number, number, number] } = {
       you: client.sessionId,
       index,
@@ -325,6 +377,16 @@ export class GraaoMatchRoom extends Room {
     p.body.dispose();
     this.players.delete(client.sessionId);
     this.abilities.cancelFor(p.index);
+    if (this.soloBotCount) {
+      // Bots are not Colyseus clients, so they must never keep an abandoned practice room alive.
+      for (const bot of this.players.values()) bot.body.dispose();
+      this.players.clear();
+      this.bots.clear();
+      this.abilities.clear();
+      this.ledger = null;
+      this.tormenta.stop();
+      return;
+    }
     this.broadcastRoomState();
     log('leave', { code: this.roomId, id: client.sessionId });
     // The opponent leaving can end a match (the one still standing wins); in warmup the rest may now all be ready;
@@ -339,20 +401,101 @@ export class GraaoMatchRoom extends Room {
     else this.maybeStartMatch();
   }
 
+  /**
+   * The connection dropped without a goodbye (network blip, sleeping laptop): the seat and the character stay for
+   * `reconnectSeconds` while the client's SDK reconnects. The player still counts as present (a 1v1 is not handed to
+   * the opponent over a hiccup); their character just stops (or keeps falling). Timeout → the ordinary `onLeave`.
+   */
+  override onDrop(client: Client): void {
+    const p = this.players.get(client.sessionId);
+    if (!p || this.reconnectSeconds <= 0) return;
+    p.dropped = true;
+    p.queue.length = 0;
+    p.ready = false;
+    this.broadcastRoomState();
+    log('drop', { code: this.roomId, id: client.sessionId, name: p.name, keepS: this.reconnectSeconds });
+    this.allowReconnection(client, this.reconnectSeconds).catch(() => {});
+  }
+
+  /** Back within the grace period: same seat, same session; everything the client may have missed is sent again. */
+  override onReconnect(client: Client): void {
+    const p = this.players.get(client.sessionId);
+    if (!p) return;
+    // Private messages go to the new connection from now on.
+    p.client = client;
+    p.dropped = false;
+    p.queue.length = 0;
+    p.starvedFor = 0;
+    p.simTime = Date.now() - 60;
+    log('reconnect', { code: this.roomId, id: client.sessionId, name: p.name });
+    this.broadcastRoomState();
+    client.send(S2C.SELF, p.statusIfChanged(true));
+    if (this.draft) client.send(S2C.DRAFT_STATE, this.draft.view(p.index));
+  }
+
   override onDispose(): void {
     for (const p of this.players.values()) p.body.dispose();
+    this.bots.clear();
     activeCodes.delete(this.roomId);
     log('room disposed', { code: this.roomId });
+  }
+
+  private createBots(): void {
+    for (let index = 1; index <= this.soloBotCount; index++) {
+      const connection: PlayerConnection = { sessionId: `bot-${index}`, send: () => {} };
+      const state = this.spawnState(index);
+      const p = new ServerPlayer(connection, index, `Bot ${index}`, randomAppearance(), state, this.motor.createBody(state), defaultLoadout(index), true);
+      p.ready = true;
+      p.simTime = Date.now() - 60;
+      resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
+      this.players.set(connection.sessionId, p);
+      this.bots.set(index, { seq: 0, fireSeq: 0, acc: 0, target: -1, acquiredAt: 0, nextShotAt: 0 });
+    }
+  }
+
+  /** Dev/tests: Tormenta overrides (validated and clamped; a bad value keeps the default). */
+  private configureTormenta(o: RoomCreateOptions): void {
+    const num = (v: unknown, lo: number, hi: number): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : undefined);
+    const latLon = (v: unknown): { lat: number; lon: number } | null => {
+      const p = v as { lat?: unknown; lon?: unknown } | null;
+      const lat = num(p?.lat, -90, 90);
+      const lon = num(p?.lon, -180, 180);
+      return lat === undefined || lon === undefined ? null : { lat, lon };
+    };
+    this.tormentaOff = o.tormentaOff === true;
+    const config: TormentaConfig = { ...TORMENTA };
+    if (Array.isArray(o.tormentaPhases) && o.tormentaPhases.length >= 1 && o.tormentaPhases.length <= 6) {
+      const phases = o.tormentaPhases.map((p) => ({
+        waitMs: num(p?.waitMs, 0, 600000) ?? 0,
+        shrinkMs: num(p?.shrinkMs, 1, 600000) ?? 1,
+        radiusDeg: num(p?.radiusDeg, 0.5, 180) ?? 10,
+        damage: num(p?.damage, 0, 100) ?? 0,
+      }));
+      config.phases = phases;
+    }
+    const pulse = num(o.tormentaPulseMs, 50, 10000);
+    if (pulse !== undefined) config.pulseMs = pulse;
+    const fin = num(o.tormentaFinalDamage, 0, 100);
+    if (fin !== undefined) config.finalDamage = fin;
+    this.tormenta.config = config;
+    const f = latLon(o.tormentaFinal);
+    if (f) this.tormentaFinal = latLonToDir(f.lat, f.lon);
+    if (Array.isArray(o.matchSpawns) && o.matchSpawns.length <= MAX_PLAYERS) {
+      const spawns = o.matchSpawns.map(latLon);
+      if (spawns.length && spawns.every((s) => s)) this.matchSpawns = spawns as { lat: number; lon: number }[];
+    }
   }
 
   private spawnState(index: number, avoid?: Vec3, match = false) {
     if (match) {
       // Match start: spread around the arena, facing its centre.
-      const sp = MATCH_SPAWNS[index % MATCH_SPAWNS.length]!;
+      const sp = (this.matchSpawns ?? MATCH_SPAWNS)[index % (this.matchSpawns ?? MATCH_SPAWNS).length]!;
       const dir = latLonToDir(sp.lat, sp.lon);
       const ground = this.world.terrain.surfaceAt(dir);
       const c = latLonToDir(ARENA_CENTER.lat, ARENA_CENTER.lon);
-      const toC = v3normalize(v3projectOnPlane({ x: c.x - dir.x, y: c.y - dir.y, z: c.z - dir.z }, dir));
+      const flat = v3projectOnPlane({ x: c.x - dir.x, y: c.y - dir.y, z: c.z - dir.z }, dir);
+      // On the arena centre itself (or its antipode) there is no direction toward it: face north.
+      const toC = Math.hypot(flat.x, flat.y, flat.z) > 1e-4 ? v3normalize(flat) : northTangent(dir);
       return createCharacterState({ x: ground.x + dir.x * 0.1, y: ground.y + dir.y * 0.1, z: ground.z + dir.z * 0.1 }, toC);
     }
     let spawn = SPAWNS[index % SPAWNS.length]!;
@@ -513,6 +656,7 @@ export class GraaoMatchRoom extends Room {
       p.inMatch = p.connected && (!afterDraft || p.inMatch);
       p.kills = 0;
       p.deaths = 0;
+      p.damageDealt = 0;
       p.deploy = p.inMatch ? DeployState.SHIP : DeployState.NONE;
       if (!p.inMatch) continue;
       p.state = createCharacterState(ufoPosition(route, now), ufoHeading(route, now));
@@ -592,8 +736,32 @@ export class GraaoMatchRoom extends Room {
       p.deploy = DeployState.NONE;
       if (p.inMatch && p.connected) this.refresh(p, now);
     }
+    this.startTormenta();
     this.broadcastRoomState();
     log('match start', { code: this.roomId, players: this.players.size, after: 'ufo' });
+  }
+
+  /** The fight starts: the Tormenta's clock starts with it (the first region is announced during the countdown). */
+  private startTormenta(): void {
+    if (this.tormentaOff) return;
+    const m = this.tormenta.start(this.startsAt, Math.random, this.world.terrain, this.tormentaFinal);
+    log('tormenta start', { code: this.roomId, phases: m.n, firstShrinkInS: Math.round((m.a - Date.now()) / 1000) });
+  }
+
+  /**
+   * A damage pulse of the Tormenta: Health off everyone in the match who is outside the safe region now, all in the
+   * same pulse (two falling together is a draw), then the usual elimination path decides the match.
+   */
+  private tormentaPulse(amount: number, now: number): void {
+    let eliminated = false;
+    for (const p of this.players.values()) {
+      if (!p.inMatch || !p.vitals.alive || !this.tormenta.outside(p.state.pos)) continue;
+      if (this.dealDamage(p, p, amount, false, now, undefined, 'tormenta')) eliminated = true;
+    }
+    if (eliminated) {
+      this.broadcastRoomState();
+      this.checkMatchEnd();
+    }
   }
 
   /**
@@ -613,9 +781,11 @@ export class GraaoMatchRoom extends Room {
       p.inMatch = p.connected && (!afterDraft || p.inMatch);
       p.kills = 0;
       p.deaths = 0;
+      p.damageDealt = 0;
       if (p.inMatch) this.resetForSpawn(p, this.spawnState(slot++, undefined, !this.closeSpawns));
     }
     this.beginLedger(now);
+    this.startTormenta();
     this.broadcastRoomState();
     log('match start', { code: this.roomId, players: this.players.size });
   }
@@ -639,17 +809,18 @@ export class GraaoMatchRoom extends Room {
     this.winner = r.winner;
     this.startsAt = 0;
     this.ufo = null;
+    this.tormenta.stop();
     this.phaseEndsAt = now + this.resultsMs;
     const w = this.byIndex(r.winner);
     if (w) w.wins++;
-    for (const p of this.players.values()) p.back = false;
+    for (const p of this.players.values()) p.back = p.bot;
     // The summary first, so every client has it when the phase turns to RESULTS.
     const summary = this.ledger?.finish(this.roomId, r.winner, now) ?? null;
     this.ledger = null;
     if (summary) this.broadcast(S2C.MATCH_SUMMARY, summary);
     this.broadcastRoomState();
     log('match end', { code: this.roomId, winner: w?.name ?? '-', durationS: summary ? Math.round(summary.durationMs / 1000) : 0 });
-    if (summary) void this.persist(summary, this.roster);
+    if (summary && !this.soloBotCount) void this.persist(summary, this.roster);
   }
 
   /**
@@ -694,10 +865,14 @@ export class GraaoMatchRoom extends Room {
     this.winner = -1;
     this.ufo = null;
     this.ledger = null;
+    this.tormenta.stop();
     for (const p of this.players.values()) {
-      p.ready = false;
+      p.ready = p.bot;
       p.back = false;
       p.inMatch = false;
+      p.kills = 0;
+      p.deaths = 0;
+      p.damageDealt = 0;
       // Still aboard or in the air (the match ended during the deployment): back on a spawn.
       const airborne = p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING;
       p.deploy = DeployState.NONE;
@@ -743,7 +918,7 @@ export class GraaoMatchRoom extends Room {
     this.events.push({ e: 'reload', by: p.index, w: p.weapon });
   }
 
-  private onFire(c: Client, m: unknown): void {
+  private onFire(c: PlayerConnection, m: unknown): void {
     const p = this.players.get(c.sessionId);
     const f = validateFire(m);
     if (!p || !f) return;
@@ -810,14 +985,22 @@ export class GraaoMatchRoom extends Room {
   }
 
   /**
-   * Shield-then-Health damage from a weapon or an ability (tagged ABILITY), or Health-only drowning (by = the
-   * drowning player), with the dmg event and, on elimination, kill/death bookkeeping. Returns true when the target was eliminated (the caller then checks the match end).
+   * Shield-then-Health damage from a weapon or an ability (tagged ABILITY), or a Health-only hazard (by = the hurt
+   * player): drowning ('water') or the Tormenta (the dmg and elim events carry `c: 'tormenta'`). Emits the dmg event
+   * and, on elimination, does the kill/death bookkeeping. Returns true when the target was eliminated (the caller
+   * then checks the match end).
    */
-  private dealDamage(by: ServerPlayer, q: ServerPlayer, amount: number, crit: boolean, now: number, ability?: AbilityId, drowning = false): boolean {
+  private dealDamage(by: ServerPlayer, q: ServerPlayer, amount: number, crit: boolean, now: number, ability?: AbilityId, hazard?: 'water' | DamageCause): boolean {
     if (!q.vitals.alive || !this.canFight(q, now)) return false;
-    const res = drowning ? applyDrowning(q.vitals, amount) : ability ? applyAbilityDamage(q.vitals, amount) : applyDamage(q.vitals, amount, crit);
+    const res = hazard === 'tormenta' ? applyTormentaDamage(q.vitals, amount) : hazard ? applyDrowning(q.vitals, amount) : ability ? applyAbilityDamage(q.vitals, amount) : applyDamage(q.vitals, amount, crit);
     if (!res.kinds.length) return false;
-    this.events.push({ e: 'dmg', by: by.index, target: q.index, amount: res.shieldDamage + res.healthDamage, kinds: res.kinds, health: q.vitals.health, shield: q.vitals.shield, ...(ability ? { a: ability } : {}) });
+    const cause = hazard === 'tormenta' ? { c: hazard } : {};
+    // Self harm changes nothing public (damage dealt, kills): no room-state broadcast for every hazard pulse.
+    if (by !== q) {
+      by.damageDealt += res.shieldDamage + res.healthDamage;
+      this.roomStateDirty = true;
+    }
+    this.events.push({ e: 'dmg', by: by.index, target: q.index, amount: res.shieldDamage + res.healthDamage, kinds: res.kinds, health: q.vitals.health, shield: q.vitals.shield, ...(ability ? { a: ability } : {}), ...cause });
     this.ledger?.damage(by.index, q.index, res.shieldDamage + res.healthDamage);
     if (!res.eliminated) return false;
     q.deaths++;
@@ -831,8 +1014,8 @@ export class GraaoMatchRoom extends Room {
     q.pendingDash = null;
     q.state.dashSteps = 0;
     this.abilities.cancelFor(q.index);
-    this.events.push({ e: 'elim', by: by.index, target: q.index });
-    log('elimination', { code: this.roomId, by: by.name, target: q.name, ability: ability ?? '-' });
+    this.events.push({ e: 'elim', by: by.index, target: q.index, ...cause });
+    log('elimination', { code: this.roomId, by: by.name, target: q.name, ability: ability ?? hazard ?? '-' });
     return true;
   }
 
@@ -903,6 +1086,77 @@ export class GraaoMatchRoom extends Room {
 
   // ------------------------------------------------------------------------------------------------ simulation
 
+  /** Generate normal player intents; all gameplay consequences still run through the usual room paths. */
+  private updateBots(now: number, dt: number): void {
+    if (!this.bots.size) return;
+    if (this.phase === MatchPhase.ABILITY_DRAFT && this.draft) {
+      let picked = false;
+      for (const [index] of this.bots) {
+        const seat = this.draft.seat(index);
+        if (!seat || seat.pending) continue;
+        const free = this.draft.available(index);
+        const id = free[(index + this.draft.round) % free.length];
+        if (id) picked = this.draft.pick(index, this.draft.round, id, now) === DraftReject.OK || picked;
+      }
+      if (picked) this.sendDraftStates();
+      return;
+    }
+    if (this.phase === MatchPhase.RESULTS) return;
+    const human = [...this.players.values()].find((p) => !p.bot);
+    for (const [index, brain] of this.bots) {
+      const p = this.byIndex(index);
+      if (!p?.vitals.alive) {
+        brain.acc = 0;
+        continue;
+      }
+      if (p.deploy === DeployState.SHIP) {
+        brain.acc = 0;
+        // Follow the human out of the hatch, with a short stagger, and steer toward their landing.
+        if (this.ufo && human && human.deploy !== DeployState.SHIP && jumpOpen(this.ufo, now) && now >= this.ufo.open + index * 160) this.jump(p, now, false);
+        continue;
+      }
+      let target: ServerPlayer | undefined;
+      if (this.phase === MatchPhase.UFO) target = human;
+      else {
+        let nearest = Infinity;
+        for (const q of this.players.values()) {
+          if (q === p || !q.connected || !q.vitals.alive || (this.phase === MatchPhase.MATCH && !q.inMatch)) continue;
+          const distance = Math.hypot(q.state.pos.x - p.state.pos.x, q.state.pos.y - p.state.pos.y, q.state.pos.z - p.state.pos.z);
+          if (distance < nearest) {
+            nearest = distance;
+            target = q;
+          }
+        }
+      }
+      if ((target?.index ?? -1) !== brain.target) {
+        brain.target = target?.index ?? -1;
+        brain.acquiredAt = now;
+      }
+      // The Tormenta closes in: outside (or at the edge of) the region it closes onto, a bot heads for its centre
+      // unless its opponent is close; it does not shoot while it runs for it.
+      const goal = this.phase === MatchPhase.MATCH ? this.tormenta.target : null;
+      const near = target && Math.hypot(target.state.pos.x - p.state.pos.x, target.state.pos.y - p.state.pos.y, target.state.pos.z - p.state.pos.z) < 20;
+      const seekZone = !!goal && !near && tormentaEdgeMeters(goal, p.state.pos) > -4;
+      const seek = seekZone && goal ? this.world.terrain.surfaceAt(goal.center) : target?.state.pos;
+      let intent = botIntent(p.state, seek, index, now);
+      if (p.state.grounded && seek) {
+        const up = v3normalize(p.state.pos);
+        const probe = { x: p.state.pos.x + up.x * 0.7, y: p.state.pos.y + up.y * 0.7, z: p.state.pos.z + up.z * 0.7 };
+        if (this.world.physics.castRay(probe, intent.wish, 2)) intent = botIntent(p.state, seek, index, now, true);
+      }
+      brain.acc = Math.min(brain.acc + dt * SIM_HZ, MAX_INPUT_BACKLOG);
+      while (brain.acc >= 1 && p.queue.length < MAX_INPUT_BACKLOG) {
+        brain.seq = (brain.seq + 1) & 0x7fffffff;
+        p.queue.push([brain.seq, Math.round(intent.wish.x * WISH_SCALE), Math.round(intent.wish.y * WISH_SCALE), Math.round(intent.wish.z * WISH_SCALE), Math.round(intent.aim.x * AIM_SCALE), Math.round(intent.aim.y * AIM_SCALE), Math.round(intent.aim.z * AIM_SCALE), intent.buttons]);
+        brain.acc -= 1;
+      }
+      if (seekZone || this.phase !== MatchPhase.MATCH || !this.canFight(p, now) || !target || intent.distance > 55 || now - brain.acquiredAt < 650 || now < brain.nextShotAt) continue;
+      brain.nextShotAt = now + 340 + index * 20;
+      brain.fireSeq = (brain.fireSeq + 1) & 0x7fffffff;
+      this.onFire(p.client, { s: brain.fireSeq, w: p.weapon, o: mm(intent.origin), d: [Math.round(intent.aim.x * DIR_SCALE), Math.round(intent.aim.y * DIR_SCALE), Math.round(intent.aim.z * DIR_SCALE)], a: 1 });
+    }
+  }
+
   private update(): void {
     const t0 = performance.now();
     const dt = Math.min(0.25, (t0 - this.lastTickAt) / 1000);
@@ -910,6 +1164,7 @@ export class GraaoMatchRoom extends Room {
     this.tick++;
     const wall = Date.now();
     if (this.phase === MatchPhase.RESULTS && wall >= this.phaseEndsAt) this.returnToWarmup();
+    this.updateBots(wall, dt);
     if (this.phase === MatchPhase.ABILITY_DRAFT && this.draft?.update(wall)) {
       this.sendDraftStates();
       this.checkDraftDone();
@@ -980,8 +1235,15 @@ export class GraaoMatchRoom extends Room {
       if (p.deploy === DeployState.DIVING && !p.state.diving) this.land(p);
     }
     this.maybeBeginFight();
+    if (this.phase === MatchPhase.MATCH && this.tormenta.active) {
+      // The phase clock (a new phase is published at once), then this tick's damage pulse, if one fell.
+      const t = this.tormenta.update(wall);
+      if (t.changed) this.roomStateDirty = true;
+      if (t.damage > 0) this.tormentaPulse(t.damage, wall);
+    }
 
     this.abilities.update(wall, dt);
+    if (this.roomStateDirty) this.broadcastRoomState();
 
     for (const p of this.players.values()) {
       const st = p.statusIfChanged();
@@ -1010,7 +1272,7 @@ export class GraaoMatchRoom extends Room {
     p.drownT += dt;
     while (p.drownT >= MOVEMENT.drownInterval && p.vitals.alive) {
       p.drownT -= MOVEMENT.drownInterval;
-      if (this.canFight(p, now) && this.dealDamage(p, p, MOVEMENT.drownDamage, false, now, undefined, true)) {
+      if (this.canFight(p, now) && this.dealDamage(p, p, MOVEMENT.drownDamage, false, now, undefined, 'water')) {
         this.broadcastRoomState();
         this.checkMatchEnd();
       }
@@ -1037,6 +1299,7 @@ export class GraaoMatchRoom extends Room {
     p.simTime = Date.now() - 60;
     this.resetAbilities(p, Date.now());
     this.events.push({ e: 'respawn', target: p.index });
+    this.roomStateDirty = true;
   }
 
   private broadcastSnapshot(): void {
@@ -1076,7 +1339,8 @@ export class GraaoMatchRoom extends Room {
           (s.aiming ? SnapFlag.AIMING : 0) |
           (p.deploy === DeployState.SHIP ? SnapFlag.ON_SHIP : 0) |
           (s.diving ? SnapFlag.DIVING : 0) |
-          (s.airJumped ? SnapFlag.AIR_JUMPED : 0),
+          (s.airJumped ? SnapFlag.AIR_JUMPED : 0) |
+          (p.inMatch && p.vitals.alive && this.tormenta.outside(s.pos) ? SnapFlag.IN_TORMENTA : 0),
         p.lastSeq < 0 ? 0 : p.lastSeq,
         p.vitals.health,
         p.vitals.shield,
@@ -1090,6 +1354,7 @@ export class GraaoMatchRoom extends Room {
   }
 
   private broadcastRoomState(): void {
+    this.roomStateDirty = false;
     const players: PlayerPublic[] = [...this.players.values()].map((p) => ({
       index: p.index,
       sessionId: p.client.sessionId,
@@ -1097,15 +1362,19 @@ export class GraaoMatchRoom extends Room {
       appearance: p.appearance,
       ready: p.ready,
       connected: p.connected,
+      ...(p.dropped ? { dropped: true } : {}),
       inMatch: p.inMatch,
       kills: p.kills,
       deaths: p.deaths,
+      alive: p.vitals.alive,
+      damageDealt: Math.round(p.damageDealt),
       loadout: [...p.loadout],
       deploy: p.deploy,
       wins: p.wins,
       back: p.back,
+      ...(p.bot ? { bot: true } : {}),
     }));
-    const msg: RoomStateMsg = { code: this.roomId, phase: this.phase, phaseEndsAt: this.phaseEndsAt, startsAt: this.startsAt, winner: this.winner, players, ufo: this.ufo };
+    const msg: RoomStateMsg = { code: this.roomId, phase: this.phase, phaseEndsAt: this.phaseEndsAt, startsAt: this.startsAt, winner: this.winner, players, ufo: this.ufo, tormenta: this.tormenta.view };
     this.broadcast(S2C.ROOM_STATE, msg);
   }
 }

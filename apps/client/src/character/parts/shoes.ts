@@ -3,7 +3,7 @@
  * and leather sandals leave the bare foot visible and arch their straps over it.
  */
 import type { BoneName } from '../rig/GRARig';
-import type { BodyShape } from '../build/anatomy';
+import { footAt, type BodyShape } from '../build/anatomy';
 import { PartBuilder, Slot, type RingSpec, type SlotId, type V3 } from '../build/PartBuilder';
 
 interface ShoeStyle {
@@ -58,14 +58,13 @@ function profile(v: [number, number, number, number], t: number): number {
   return v[i]! + (v[i + 1]! - v[i]!) * s;
 }
 
-/** The bare foot (body.ts): ellipsoid centered (x, 0.04, 0.045) with radii (0.04, 0.038, 0.1). */
+/** The bare foot (body.ts, `FOOT_STATIONS`): top height and half width at `z`. */
 function footTop(z: number): number {
-  const t = (z - 0.045) / 0.1;
-  return 0.04 + 0.038 * Math.sqrt(Math.max(0, 1 - t * t));
+  const f = footAt(z);
+  return f.y + f.h;
 }
 function footHalfW(z: number): number {
-  const t = (z - 0.045) / 0.1;
-  return 0.04 * Math.sqrt(Math.max(0, 1 - t * t));
+  return footAt(z).w;
 }
 
 /** Strap over the foot from side `from` (1 = +x) to side `-from`, while z goes z0 -> z1. */
@@ -86,7 +85,7 @@ function flatSole(b: PartBuilder, x: number, y: number, hh: number, slot: SlotId
   const rings: RingSpec[] = [];
   for (let i = 0; i < 9; i++) {
     const t = i / 8;
-    rings.push({ p: [x, y, -0.085 + 0.29 * t], ra: profile(widths, t), rb: hh, n: 3.4 });
+    rings.push({ p: [x, y, -0.074 + 0.25 * t], ra: profile(widths, t), rb: hh, n: 3.4 });
   }
   b.tube(rings, { slot, bones, ref: [1, 0, 0], segments: 14, capStart: 'round', capEnd: 'round', capScale: 0.5 });
 }

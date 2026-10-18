@@ -23,27 +23,47 @@ function faceTube(b: PartBuilder, h: HeadShape, pts: [number, number, number][],
 }
 
 function mustache(b: PartBuilder, h: HeadShape): void {
+  // Over the upper lip, between the nose and the mouth line, drooping past the mouth corners.
+  const [, mv] = h.lm.mouth;
+  const w = h.lm.mouthHalf + 0.011;
   faceTube(
     b,
     h,
     [
-      [-0.038, -0.064, 0.0045],
-      [-0.024, -0.055, 0.0075],
-      [-0.008, -0.051, 0.0085],
-      [0.008, -0.051, 0.0085],
-      [0.024, -0.055, 0.0075],
-      [0.038, -0.064, 0.0045],
+      [-w, mv + 0.001, 0.0045],
+      [-w * 0.63, mv + 0.0095, 0.0075],
+      [-w * 0.21, mv + 0.0135, 0.0085],
+      [w * 0.21, mv + 0.0135, 0.0085],
+      [w * 0.63, mv + 0.0095, 0.0075],
+      [w, mv + 0.001, 0.0045],
     ],
     0.004,
     0.0055,
   );
 }
 
+/** Polar angle (from the crown) at which the skull surface in azimuth `theta` sits at height `v` (head-local). */
+function phiAtHeight(h: HeadShape, theta: number, v: number): number {
+  let lo = 0;
+  let hi = Math.PI;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (h.surface(dirOf(theta, mid))[1] - h.center[1] > v) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
 /** Slab over the lower face: from `top(θ)` (just under the mouth in front, ear level at the sides) to under the jaw. */
 function jaw(b: PartBuilder, h: HeadShape, slot: SlotId, scale: (edge: number) => number, t: number, outline: number): void {
+  // In front the patch starts just under the lower lip, runs along the cheek well under the eyes and rises to the
+  // sideburns only in front of the ears.
+  const front = phiAtHeight(h, 0, h.lm.mouth[1] - 0.013);
+  const cheek = phiAtHeight(h, 60 * DEG, h.lm.eye[1] - 0.024);
   const top = (th: number) => {
     const a = Math.abs(th);
-    return 121 * DEG + (93 - 121) * DEG * smooth(22 * DEG, 62 * DEG, a);
+    if (a < 70 * DEG) return front + (cheek - front) * smooth(22 * DEG, 52 * DEG, a);
+    return cheek + (95 * DEG - cheek) * smooth(70 * DEG, 96 * DEG, a);
   };
   const bottom = (th: number) => 158 * DEG + (128 - 158) * DEG * smooth(20 * DEG, 90 * DEG, Math.abs(th));
   const cols = 26;
@@ -73,21 +93,23 @@ export function buildBeard(b: PartBuilder, h: HeadShape, beardId: string): void 
     case 'beard.cavanhaque': {
       mustache(b, h);
       // Lines from the mustache tips down to a goatee on the chin.
+      const [, mv] = h.lm.mouth;
+      const w = h.lm.mouthHalf + 0.01;
       for (const s of [1, -1]) {
         faceTube(
           b,
           h,
           [
-            [s * 0.037, -0.064, 0.004],
-            [s * 0.033, -0.082, 0.0042],
-            [s * 0.022, -0.1, 0.0045],
+            [s * w, mv + 0.001, 0.004],
+            [s * (w - 0.004), mv - 0.011, 0.0042],
+            [s * (w - 0.015), mv - 0.021, 0.0045],
           ],
           0.004,
           0.004,
         );
       }
-      const chin = h.frontPoint(0, -0.103, 0.006);
-      if (chin) b.ellipsoid(chin.p, [0.022, 0.02, 0.011], { slot: Slot.HAIR, bones: ['Head'], outline: 0.6 }, 10, 6);
+      const chin = h.frontPoint(0, mv - 0.024, 0.006);
+      if (chin) b.ellipsoid(chin.p, [0.018, 0.016, 0.009], { slot: Slot.HAIR, bones: ['Head'], outline: 0.6 }, 10, 6);
       break;
     }
     case 'beard.cheia':
@@ -95,7 +117,7 @@ export function buildBeard(b: PartBuilder, h: HeadShape, beardId: string): void 
       jaw(b, h, Slot.HAIR, (e) => 1.012 + 0.028 * e, 0.024, 0.8);
       break;
     case 'beard.porfazer':
-      jaw(b, h, Slot.STUBBLE, () => 1.004, 0.004, 0);
+      jaw(b, h, Slot.STUBBLE, () => 1.008, 0.004, 0);
       break;
     default:
       break;
