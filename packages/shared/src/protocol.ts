@@ -145,6 +145,8 @@ export interface JoinOptions {
   visibility?: 'public' | 'private';
   /** Dev/tests only (ignored in production): ability ids for slots 1–4 instead of the default loadout. */
   loadout?: string[];
+  /** Graao Host rooms: the session's owner key (proves the room's host; never a Supabase token). */
+  hostKey?: string;
 }
 
 /** First message after joining. Carries the server clock and rates so the client can sync. */
@@ -338,6 +340,8 @@ export interface RoomListing extends RoomMetadata {
   code: string;
   phase: MatchPhase;
   region?: string;
+  /** Who runs the room: a dedicated server, a player's browser, or a player's Graao Host app. */
+  via?: 'server' | 'browser' | 'graao-host';
 }
 
 export interface PreparationState {

@@ -1,12 +1,13 @@
 /**
  * Desktop input: WASD move, mouse camera (pointer lock), Space jump, Shift sprint, LMB fire, RMB aim, E/Q weapon
  * slots, R reload, Enter ready (warmup), 1–4 abilities, F interact (open a chest, pick up), Z/X/C consumables (Vida,
- * Escudo, Mana), Tab scoreboard, Esc menu. On focus loss every held input is released so nothing stays stuck.
+ * Escudo, Mana), Tab scoreboard, Esc menu, Left/Right change spectator target. On focus loss every held input is
+ * released so nothing stays stuck.
  */
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'fire' | 'aim'
   | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard'
-  | 'interact' | 'item1' | 'item2' | 'item3';
+  | 'interact' | 'item1' | 'item2' | 'item3' | 'spectatePrevious' | 'spectateNext';
 
 const KEYS: Record<string, Action> = {
   KeyW: 'forward',
@@ -45,8 +46,9 @@ export class Input {
   mouseDY = 0;
   sensitivity = 0.0022;
   invertY = false;
-  enabled = true;
+  private inputEnabled = true;
   private allowScoreboard = false;
+  private allowSpectator = false;
   private readonly unsub: (() => void)[] = [];
 
   constructor(private readonly target: HTMLElement) {
@@ -56,10 +58,19 @@ export class Input {
       this.unsub.push(() => t.removeEventListener(type, fn as EventListener, opts));
     };
     on(window, 'keydown', (e: KeyboardEvent) => {
-      const a = KEYS[e.code];
+      let a = KEYS[e.code];
       if (!a) return;
       // Typing a name or a room code is not gameplay (Enter would mark "ready", E/Q would switch weapons...).
       if (e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.closest('input, textarea, select, [role="textbox"]'))) return;
+      if (this.allowSpectator && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
+        // Arrow keys keep their native navigation on focused controls and while a menu has disabled gameplay.
+        if (!this.enabled || (e.target instanceof HTMLElement && e.target.closest('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="combobox"], [role="option"]'))) return;
+        e.preventDefault();
+        a = e.code === 'ArrowLeft' ? 'spectatePrevious' : 'spectateNext';
+        if (!e.repeat && !this.held.has(a)) this.pressed.add(a);
+        this.held.add(a);
+        return;
+      }
       // Tab keeps its normal focus-navigation behavior in menus. In the match it only reveals a held overlay;
       // pointer lock stays with the game and keyup / blur / visibility loss all close it through the held set.
       if (a === 'scoreboard') {
@@ -74,6 +85,8 @@ export class Input {
     on(window, 'keyup', (e: KeyboardEvent) => {
       const a = KEYS[e.code];
       if (a) this.held.delete(a);
+      const spectatorAction = e.code === 'ArrowLeft' ? 'spectatePrevious' : e.code === 'ArrowRight' ? 'spectateNext' : null;
+      if (spectatorAction) this.held.delete(spectatorAction);
     });
     on(target, 'mousedown', (e: MouseEvent) => {
       if (!this.enabled) return;
@@ -104,6 +117,30 @@ export class Input {
 
   get locked(): boolean {
     return document.pointerLockElement === this.target;
+  }
+
+  get enabled(): boolean {
+    return this.inputEnabled;
+  }
+
+  set enabled(enabled: boolean) {
+    this.inputEnabled = enabled;
+    if (!enabled) this.releaseAll();
+  }
+
+  /** Left/Right change the followed player only while the spectator HUD is active. */
+  set spectatorEnabled(enabled: boolean) {
+    if (enabled !== this.allowSpectator) {
+      for (const action of ['spectatePrevious', 'spectateNext'] as const) {
+        this.held.delete(action);
+        this.pressed.delete(action);
+      }
+    }
+    this.allowSpectator = enabled;
+  }
+
+  get spectatorEnabled(): boolean {
+    return this.allowSpectator;
   }
 
   /** The UI controller enables Tab only while the live match is on screen. */

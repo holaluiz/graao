@@ -60,6 +60,9 @@ export interface RoomConnectOptions {
   forceDedicated?: boolean;
   hosted?: boolean;
   fallbackHosted?: boolean;
+  /** A room on a player's Graao Host app: its public endpoint (wss://…) and, for its owner, the owner key. */
+  endpoint?: string;
+  hostKey?: string;
 }
 
 function friendlyError(e: unknown, hosted = false): Error {
@@ -85,6 +88,8 @@ function friendlyError(e: unknown, hosted = false): Error {
 export class NetSession {
   code = '';
   myIndex = -1;
+  /** Set for Graao Host rooms: the host's public endpoint. */
+  graaoHostEndpoint = '';
   private readonly remotes = new Map<number, RemotePlayer>();
   private readonly labels = document.createElement('div');
   private clockOffset = 0;
@@ -156,7 +161,19 @@ export class NetSession {
     const roomOptions = kind === 'solo' ? { soloBots: bots, roomName: `Treino de ${name}`, visibility: 'private' as const } : kind === 'create' ? { bots, roomName: settings.roomName, visibility: settings.visibility ?? 'public' as const } : {};
     let room: RoomLink | undefined;
     let host: RoomHost | null = null;
-    let useDedicated = !settings.hosted && (settings.forceDedicated || dedicatedServer());
+    let useDedicated = !settings.endpoint && !settings.hosted && (settings.forceDedicated || dedicatedServer());
+    if (settings.endpoint) {
+      // A Graao Host room runs on another player's PC: no identity token goes there, only a name (and the owner key).
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(settings.hostKey ? { hostKey: settings.hostKey } : {}) };
+      try {
+        room = await new Client(settings.endpoint).joinById(code.toUpperCase(), options);
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        throw /fetch|network|ECONN|timeout|failed/i.test(msg) && !/full|locked|VERSION|IN_PROGRESS/i.test(msg)
+          ? new Error('Não foi possível conectar ao PC que hospeda essa sala. A hospedagem pode ter sido encerrada.')
+          : friendlyError(e, true);
+      }
+    }
     if (useDedicated) {
       const target = serverTarget();
       const client = new Client(target.url);
@@ -172,7 +189,7 @@ export class NetSession {
         else throw friendlyError(e);
       }
     }
-    if (!useDedicated) {
+    if (!useDedicated && !settings.endpoint) {
       // Hosted by a player: no identity token leaves this browser (the host is just another player).
       const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...roomOptions };
       try {
@@ -189,6 +206,7 @@ export class NetSession {
     }
     if (!room) throw new Error('Não foi possível abrir a conexão com a sala.');
     const s = new NetSession(app, room, kind === 'solo', host);
+    s.graaoHostEndpoint = settings.endpoint ?? '';
     try {
       await s.init();
     } catch (e) {
@@ -421,6 +439,8 @@ export class NetSession {
         moveState: move as MovementState,
         action: action as ActionState,
         flags,
+        health,
+        shield,
       }, this.serverNow());
     }
   }

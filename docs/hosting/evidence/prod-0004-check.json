@@ -1,0 +1,23 @@
+{
+  "migration": "0004_host_ticket_expired",
+  "project": "roxnhqzeznsdnsqjcmmn",
+  "appliedAt": "2026-10-18T21:40:59Z",
+  "historyVersion": "20261018214059",
+  "how": "supabase db query --linked --project-ref roxnhqzeznsdnsqjcmmn -f <migration + insert em supabase_migrations.schema_migrations, numa transação>",
+  "before": {
+    "host_ticket_peek(ticket expirado da rodada de 2026-10-18 15:4x)": "graao_host:ticket_used"
+  },
+  "after": {
+    "host_ticket_peek(mesmo ticket expirado)": "graao_host:ticket_expired",
+    "host_ticket_claim(mesmo ticket expirado)": "graao_host:ticket_expired (nenhuma instalação criada)",
+    "host_ticket_peek(ticket já usado)": "graao_host:ticket_used",
+    "host_ticket_peek(ticket inexistente)": "graao_host:ticket_not_found",
+    "host_ticket_status(ticket expirado)": "EXPIRED",
+    "host_public_rooms": "[]"
+  },
+  "functions": {
+    "host_ticket_peek": { "owner": "postgres", "securityDefiner": true, "searchPath": "\"\"", "anon": true, "authenticated": true, "public": false, "newCheck": true },
+    "host_ticket_claim": { "owner": "postgres", "securityDefiner": true, "searchPath": "\"\"", "anon": true, "authenticated": true, "public": false, "newCheck": true }
+  },
+  "securityAdvisor": "32 WARN, mesmas categorias e funções de prod-security-advisor.json (anon/authenticated_security_definer_function_executable, auth_allow_anonymous_sign_ins, auth_leaked_password_protection); nenhum achado novo"
+}

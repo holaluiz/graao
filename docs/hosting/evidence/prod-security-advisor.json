@@ -1,0 +1,201 @@
+{
+  "project": "roxnhqzeznsdnsqjcmmn",
+  "ranAt": "2026-10-18T17:57:58.917Z",
+  "command": "supabase db advisors --linked --project-ref roxnhqzeznsdnsqjcmmn --type security --level info",
+  "counts": {
+    "INFO": 6,
+    "WARN": 32
+  },
+  "findings": [
+    {
+      "level": "INFO",
+      "lint": "rls_enabled_no_policy",
+      "object": "private.host_config"
+    },
+    {
+      "level": "INFO",
+      "lint": "rls_enabled_no_policy",
+      "object": "private.host_sessions"
+    },
+    {
+      "level": "INFO",
+      "lint": "rls_enabled_no_policy",
+      "object": "private.host_tunnels"
+    },
+    {
+      "level": "INFO",
+      "lint": "rls_enabled_no_policy",
+      "object": "public.host_installations"
+    },
+    {
+      "level": "INFO",
+      "lint": "rls_enabled_no_policy",
+      "object": "public.host_rooms"
+    },
+    {
+      "level": "INFO",
+      "lint": "rls_enabled_no_policy",
+      "object": "public.host_tickets"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_config"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_heartbeat"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_public_rooms"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_room_close"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_room_endpoint"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_room_publish"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_session_end"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_ticket_cancel"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_ticket_claim"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_ticket_fail"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_ticket_peek"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.host_ticket_status"
+    },
+    {
+      "level": "WARN",
+      "lint": "anon_security_definer_function_executable",
+      "object": "public.record_match"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_config"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_heartbeat"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_my_installations"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_public_rooms"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_revoke"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_room_close"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_room_endpoint"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_room_publish"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_session_end"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_ticket_cancel"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_ticket_claim"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_ticket_create"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_ticket_fail"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_ticket_peek"
+    },
+    {
+      "level": "WARN",
+      "lint": "authenticated_security_definer_function_executable",
+      "object": "public.host_ticket_status"
+    },
+    {
+      "level": "WARN",
+      "lint": "auth_allow_anonymous_sign_ins",
+      "object": "public.match_players"
+    },
+    {
+      "level": "WARN",
+      "lint": "auth_allow_anonymous_sign_ins",
+      "object": "public.matches"
+    },
+    {
+      "level": "WARN",
+      "lint": "auth_allow_anonymous_sign_ins",
+      "object": "public.profiles"
+    },
+    {
+      "level": "WARN",
+      "lint": "auth_leaked_password_protection",
+      "object": "Auth"
+    }
+  ]
+}

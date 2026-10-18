@@ -11,3 +11,8 @@ playwright-report/
 # Raw Mixamo downloads stay local: Adobe's terms allow use inside the game, not redistribution as loose files.
 assets/animations/mixamo/raw/
 tools/profiling/out/
+# Graao Host: installer output and the downloaded cloudflared connector (fetched by tools/hosting/fetch-cloudflared.mjs).
+apps/host/release/
+apps/host/resources/bin/
+# Supabase CLI cache.
+supabase/.temp/

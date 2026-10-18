@@ -1,0 +1,115 @@
+{
+  "when": "2026-10-18T17:32:19.320Z",
+  "tunnel": "quick-test",
+  "machine": "one Windows PC, one network (not separate computers)",
+  "durationS": 37,
+  "rooms": [
+    {
+      "owner": "Luiz",
+      "code": "GR-3BBT",
+      "endpoint": "wss://liabilities-procurement-ensuring-moms.trycloudflare.com",
+      "readyMs": 8736,
+      "pingMs": [
+        29,
+        24,
+        24,
+        23,
+        25,
+        25,
+        24,
+        24,
+        24,
+        23
+      ],
+      "gameplay": {
+        "ok": true,
+        "phases": [
+          "LOBBY",
+          "ABILITY_DRAFT",
+          "PREPARATION",
+          "UFO",
+          "MATCH"
+        ],
+        "draftRounds": 4,
+        "loadout": [
+          "sun_orb",
+          "pollen_burst",
+          "thorn_seed",
+          "sun_meteor"
+        ],
+        "chests": 14,
+        "shots": 56,
+        "damage": 53,
+        "eliminations": 1,
+        "tormenta": true,
+        "participants": 10,
+        "bots": 9,
+        "matchMs": 7161,
+        "totalMs": 24900
+      },
+      "peak": {
+        "cpuPercent": 74,
+        "rssMB": 153,
+        "tickMs": 3,
+        "loopLagMs": 42.7,
+        "bytesOut": 445520
+      }
+    },
+    {
+      "owner": "Pedro",
+      "code": "GR-WHXE",
+      "endpoint": "wss://private-antenna-softball-gardens.trycloudflare.com",
+      "readyMs": 8829,
+      "pingMs": [
+        29,
+        24,
+        24,
+        24,
+        25,
+        29,
+        25,
+        25,
+        26,
+        25
+      ],
+      "gameplay": {
+        "ok": true,
+        "phases": [
+          "LOBBY",
+          "ABILITY_DRAFT",
+          "PREPARATION",
+          "UFO",
+          "MATCH"
+        ],
+        "draftRounds": 4,
+        "loadout": [
+          "sun_orb",
+          "pollen_burst",
+          "thorn_seed",
+          "sun_meteor"
+        ],
+        "chests": 14,
+        "shots": 42,
+        "damage": 42,
+        "eliminations": 1,
+        "tormenta": true,
+        "participants": 10,
+        "bots": 8,
+        "matchMs": 7005,
+        "totalMs": 25007
+      },
+      "peak": {
+        "cpuPercent": 83.9,
+        "rssMB": 272,
+        "tickMs": 3.16,
+        "loopLagMs": 42.4,
+        "bytesOut": 851399
+      }
+    }
+  ],
+  "listedBefore": 2,
+  "listedAfterStop": [
+    "Sala de Luiz"
+  ],
+  "ok": true
+}

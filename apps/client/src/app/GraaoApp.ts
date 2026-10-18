@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { createGameWorld, latLonToDir, mulberry32, waterDepth, type GameWorld } from '@graao/game-core';
 import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance, validateAppearance } from '@graao/game-data';
-import { ActionState, MatchPhase, MovementState, v3angle, type CharacterAppearance, type DraftStateMsg, type NoticeMsg, type RoomStateMsg, type Vec3 } from '@graao/shared';
+import { ActionState, MatchPhase, MovementState, isRoomCode, sanitizeHostSettings, v3angle, type CharacterAppearance, type DraftStateMsg, type NoticeMsg, type RoomListing, type RoomStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
 import { GRAAnimationLibrary } from '../character/animation/GRAAnimationLibrary';
@@ -25,6 +25,7 @@ import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
 import { LocalPlayer } from '../game/LocalPlayer';
 import { Obstruction } from '../game/Obstruction';
+import { SpectatorDirector } from '../game/SpectatorDirector';
 import { TormentaDirector } from '../game/TormentaDirector';
 import { WaterDirector } from '../game/WaterDirector';
 import { GRARenderer, type Quality } from '../render/GRARenderer';
@@ -39,7 +40,7 @@ import { Menu } from '../ui/Menu';
 import { DraftScreen } from '../ui/DraftScreen';
 import { ResultsScreen } from '../ui/ResultsScreen';
 import { Scoreboard } from '../ui/Scoreboard';
-import { RoomBrowser, type CreateRoomSettings } from '../ui/RoomBrowser';
+import { RoomBrowser, type CreateRoomSettings, type RoomSource } from '../ui/RoomBrowser';
 import { SettingsPanel, type GameSettings } from '../ui/SettingsPanel';
 import { PreparationScreen } from '../ui/PreparationScreen';
 import { Modal, Toast, button, field, node } from '../ui/components';
@@ -48,8 +49,11 @@ import { AmbientLife } from '../world/AmbientLife';
 import { autoInk } from '../ui/ink';
 import { AuthoredParts } from '../character/build/AuthoredParts';
 import { NetSession, type RoomConnectOptions } from '../net/NetSession';
+import { HostLaunch, hostApiConfigured, hostDownloadUrl, resolveHostRoom } from '../net/graaoHost/hostSite';
+import { HostSetupDialog } from '../ui/HostSetupDialog';
 import { ProfileService, type CloudProfile } from '../net/ProfileService';
 import { signalingConfigured } from '../net/host/signaling';
+import { dedicatedServer } from '../net/serverTarget';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
 
 export type HudPhase = 'BOOT' | 'MENU' | 'ROOM_BROWSER' | 'ROOM_LOBBY' | 'LOADING' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
@@ -84,6 +88,7 @@ export class GraaoApp {
   readonly audio = new GRAAudioManager();
   readonly hud = new Hud();
   readonly scoreboard = new Scoreboard();
+  private spectator!: SpectatorDirector;
   /** Cloud profile (Supabase): identity for the match server, name/look/settings, match history. */
   readonly profile = new ProfileService();
   /** After a match: the server's summary and the way back to the lobby. */
@@ -114,7 +119,14 @@ export class GraaoApp {
   private browser!: RoomBrowser;
   private settings!: SettingsPanel;
   private pause!: Modal;
+  private readonly pauseNote = node('p', 'gra-fine pause-note');
+  private readonly pauseLeave = button('Sair da sala', () => { this.pause.hide(); this.leaveRoom(); });
   private training: Modal | null = null;
+  private roomSource: RoomSource = 'none';
+  /** The current "Criar e hospedar" request (kept for the dev console and to cancel it). */
+  hostLaunch: HostLaunch | null = null;
+  /** Graao Host: while the connection to a host's PC is down, ask the central service whether the room still exists. */
+  private hostGoneCheck: ReturnType<typeof setInterval> | undefined;
   private readonly preparation = new PreparationScreen();
   private readonly toast = new Toast();
   private roomState: RoomStateMsg | null = null;
@@ -140,6 +152,14 @@ export class GraaoApp {
   private frameMs = 0;
   /** Optional frame-rate cap ("Limite de FPS"); "Máximo" follows the monitor's refresh rate. */
   readonly limiter = new FrameLimiter();
+  /** Redraw the world less often behind screens that cover it (measurement switch; see docs/UX/PERFORMANCE.md). */
+  coverThrottle = true;
+  private lastWorldRender = 0;
+  /** World frames actually drawn (the F3 overlay shows the rate). */
+  worldFrames = 0;
+  private worldFramesAt = 0;
+  private worldFramesSeen = 0;
+  private worldFps = 0;
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: HTMLElement) {
     // Presentation settings live in their own screen; the development quality override remains available.
@@ -156,7 +176,11 @@ export class GraaoApp {
     this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (_v): _v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
     this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, 0, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
-    window.addEventListener('resize', () => this.r.resize());
+    window.addEventListener('resize', () => {
+      this.r.resize();
+      // Resizing clears the canvas: redraw on the next frame even behind a screen that throttles the world.
+      this.lastWorldRender = 0;
+    });
     for (const id of ['underwater', 'paper', 'vignette']) {
       const d = document.createElement('div');
       d.id = id;
@@ -231,6 +255,7 @@ export class GraaoApp {
     this.deploy = new DeployDirector(this);
     this.water = new WaterDirector(this);
     this.tormenta = new TormentaDirector(this);
+    this.spectator = new SpectatorDirector(this);
     this.camera.waterRadius = this.world.terrain.seaRadius;
     if (new URLSearchParams(location.search).has('lineup')) this.spawnLineup(dir);
     this.buildUi();
@@ -271,6 +296,7 @@ export class GraaoApp {
 
   start(): void {
     this.setPhase('MENU');
+    void this.openSharedRoom();
     // The cloud profile loads behind the menu; it never delays the first frame.
     this.profile.onStatus = () => this.showProfileStatus();
     void this.profile.start().then((row) => this.applyCloudProfile(row));
@@ -291,12 +317,16 @@ export class GraaoApp {
       name: (name) => this.rememberName(name),
       click: () => this.audio.play('ui.click'),
     }, this.name);
+    // A dedicated server lists and runs the rooms when the build (or ?server=) names one; otherwise whoever creates a
+    // room hosts it in their browser and public rooms are announced in the live list.
+    const source: RoomSource = dedicatedServer() ? 'server' : signalingConfigured() ? 'hosted' : 'none';
+    this.roomSource = source;
     this.browser = new RoomBrowser({
       back: () => this.setPhase('MENU'),
       create: (settings) => void this.createRoom(settings),
-      join: (code, fallbackHosted) => void this.online('join', code, this.name, 0, { forceDedicated: true, fallbackHosted }),
+      join: (code, typed, via) => void this.joinRoom(code, typed, via),
       click: () => this.audio.play('ui.click'),
-    });
+    }, source);
     this.browser.playerName = this.name;
     this.browser.hostedAvailable = signalingConfigured();
     this.settings = new SettingsPanel({
@@ -331,18 +361,18 @@ export class GraaoApp {
       click: () => this.audio.play('ui.click'),
       notify: (text) => this.toast.show(text),
     });
-    this.pause = new Modal('Um respiro', () => { this.input.enabled = this.phase === 'MATCH'; });
+    this.pause = new Modal('Opções', () => { this.input.enabled = this.phase === 'MATCH'; });
     const pauseActions = node('div', 'pause-actions');
     pauseActions.append(
       button('Continuar', () => { this.pause.hide(); if (this.phase === 'MATCH') this.input.requestLock(); }, true),
       button('Configurações', () => { this.pause.hide(); this.settings.show(); }),
-      button('Sair da sala', () => { this.pause.hide(); this.leaveRoom(); }),
+      this.pauseLeave,
     );
-    this.pause.body.append(pauseActions);
+    this.pause.body.append(this.pauseNote, pauseActions);
     this.history = new HistoryPanel(() => this.history.show(false));
     this.hud.show(false);
     this.ui.append(this.menu.el, this.browser.el, this.history.el, this.creator.stage, this.creator.el, this.hud.el,
-      this.lobby.el, this.draftUi.el, this.preparation.el, this.results.el, this.scoreboard.el, this.pause.el, this.settings.el, this.toast.el);
+      this.lobby.el, this.draftUi.el, this.preparation.el, this.results.el, this.spectator.ui.el, this.scoreboard.el, this.pause.el, this.settings.el, this.toast.el);
     autoInk(this.ui);
     this.dev = new DevOverlay({ renderer: this.r.renderer, extra: () => this.devStats() });
     window.addEventListener('keydown', (e) => {
@@ -353,9 +383,7 @@ export class GraaoApp {
       if (this.training?.visible) { this.training.hide(); return; }
       if (this.phase === 'ROOM_BROWSER') { if (!this.browser.closeModal()) this.setPhase('MENU'); return; }
       if (this.phase === 'CHARACTER_CREATOR') { this.character.setAppearance(this.appearance); this.setPhase(this.creatorReturn); return; }
-      if (this.net || this.phase === 'MATCH') {
-        this.input.exitLock(); this.input.releaseAll(); this.input.enabled = false; this.pause.show();
-      }
+      if (this.net || this.phase === 'MATCH') this.openPause();
     });
     const canvas = this.r.canvas;
     canvas.addEventListener('click', () => {
@@ -379,10 +407,33 @@ export class GraaoApp {
     });
   }
 
+  /**
+   * ESC: a small options menu. It never hides the lobby's main action and never pauses a multiplayer room: the draft
+   * clock and the match keep running, and leaving is always an explicit button.
+   */
+  private openPause(): void {
+    const online = !!this.net;
+    const fighting = online && this.phase === 'MATCH';
+    this.pauseLeave.textContent = !online ? 'Voltar ao menu' : fighting ? 'Sair da partida' : 'Sair da sala';
+    this.pauseNote.textContent = !online
+      ? 'Treino sozinho: nada é salvo ao sair.'
+      : this.phase === 'ABILITY_DRAFT'
+        ? 'O Draft continua enquanto este menu está aberto: o tempo da rodada não para.'
+        : this.phase === 'LOADING'
+          ? 'A preparação da partida continua enquanto este menu está aberto.'
+          : fighting
+            ? 'A partida continua enquanto este menu está aberto. Ninguém pausa no multiplayer.'
+            : 'Sua vaga na sala continua guardada. Estou pronto fica no rodapé do lobby.';
+    this.input.exitLock();
+    this.input.releaseAll();
+    this.input.enabled = false;
+    this.pause.show();
+  }
+
   /** Only the "click to play" prompt while the pointer is free; nothing over the game while playing. */
   private updateHint(): void {
     if (this.phase !== 'MATCH') return;
-    const quiet = this.input.locked || this.results.visible;
+    const quiet = this.input.locked || this.results.visible || this.spectator.following;
     this.hud.setHint(quiet ? '' : this.net ? 'Clique no mundo para jogar · ESC abre opções' : 'Clique para jogar · ESC abre opções');
   }
 
@@ -475,7 +526,7 @@ export class GraaoApp {
 
   onDraftState(m: DraftStateMsg): void {
     if (!this.net || this.phase !== 'ABILITY_DRAFT') return;
-    this.draftUi.setState(m, this.net.myIndex, (i) => this.combat.nameOf(i));
+    this.draftUi.setState(m, this.net.myIndex, (i) => this.combat.nameOf(i), (i) => this.roomState?.players.find((p) => p.index === i)?.appearance);
   }
 
   onRoomNotice(m: NoticeMsg): void {
@@ -513,17 +564,17 @@ export class GraaoApp {
     const started = performance.now();
     try {
       this.preparation.step(0, 'Verificando o planeta e os recursos…');
-      await nextFrame();
+      await breathe();
       if (!current()) return;
       if (!this.world || !this.planet || !this.anims.clips.size) throw new Error('Os recursos do planeta não estão prontos.');
       this.preparation.step(1, 'Conferindo os participantes e suas habilidades…');
-      await nextFrame();
+      await breathe();
       if (!current()) return;
       if (!this.roomState?.players.length) throw new Error('A lista de participantes não chegou.');
       this.preparation.step(2, 'Preparando a imagem da partida…');
       net?.preparePresentation();
       this.compileShaders();
-      await nextFrame();
+      await breathe();
       if (!current()) return;
       this.loadMs.preparation = Math.round(performance.now() - started);
       this.preparation.step(3, 'Tudo pronto. Aguardando os outros jogadores…');
@@ -557,6 +608,7 @@ export class GraaoApp {
     this.history.show(false);
     this.input.enabled = p === 'MATCH';
     if (p !== 'MATCH') {
+      this.spectator.reset();
       this.scoreboard.hide();
       this.input.scoreboardEnabled = false;
       this.input.exitLock();
@@ -598,10 +650,91 @@ export class GraaoApp {
   }
 
   private async createRoom(settings: CreateRoomSettings): Promise<void> {
+    if (settings.via === 'graao-host') return this.hostWithApp(settings);
     await this.online('create', '', this.name, settings.bots, {
       roomName: settings.roomName, visibility: settings.visibility,
       forceDedicated: !settings.hosted, hosted: settings.hosted,
     });
+  }
+
+  /** A room from the list or a typed code: Graao Host rooms connect to their host's PC; the others as before. */
+  private async joinRoom(code: string, typed: boolean, via?: RoomListing['via']): Promise<void> {
+    if (via === 'graao-host' || (typed && hostApiConfigured())) {
+      const ep = await resolveHostRoom(code);
+      if (ep) return this.online('join', code, this.name, 0, { endpoint: ep.endpointUrl, hostKey: this.hostKey(code) });
+      if (via === 'graao-host') {
+        this.browser.message('Essa sala não está mais disponível: o host encerrou a hospedagem.', true);
+        return;
+      }
+    }
+    await this.online('join', code, this.name, 0, this.roomSource === 'server' ? { forceDedicated: true, fallbackHosted: typed } : { hosted: true });
+  }
+
+  /** "Criar e hospedar": the player's Graao Host app runs the room; they join it like everyone else, with the owner key. */
+  private hostWithApp(settings: CreateRoomSettings): void {
+    this.browser.closeModal();
+    const launch = new HostLaunch(
+      sanitizeHostSettings({ roomName: settings.roomName, visibility: settings.visibility === 'private' ? 'PRIVATE' : 'PUBLIC', bots: settings.bots, hostName: this.name || 'Jogador' }),
+      () => this.profile.accessToken(),
+    );
+    const dialog = new HostSetupDialog(launch, hostDownloadUrl, (r) => {
+      this.rememberHostKey(r.code, r.hostKey);
+      void this.online('join', r.code, this.name, 0, { endpoint: r.endpoint, hostKey: r.hostKey });
+    }, () => this.audio.play('ui.click'));
+    this.hostLaunch?.cancel();
+    this.hostLaunch = launch;
+    this.ui.append(dialog.modal.el);
+    dialog.modal.show();
+    void launch.start();
+  }
+
+  /** The owner key of a room this tab created (or received from the Graao Host app's "Abrir sala no navegador"). */
+  private hostKey(code: string): string | undefined {
+    try {
+      return sessionStorage.getItem(`graao.hostKey.${code}`) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private rememberHostKey(code: string, key: string): void {
+    try {
+      sessionStorage.setItem(`graao.hostKey.${code}`, key);
+    } catch {
+      /* private mode: the host joins as a guest after a reload */
+    }
+  }
+
+  /** `?sala=GR-XXXX` (the Graao Host app's "Abrir sala no navegador", or a shared link); `#host=` carries the owner key. */
+  private async openSharedRoom(): Promise<void> {
+    const code = new URLSearchParams(location.search).get('sala')?.toUpperCase() ?? '';
+    if (!isRoomCode(code) || !hostApiConfigured()) return;
+    const key = new URLSearchParams(location.hash.slice(1)).get('host');
+    if (key) this.rememberHostKey(code, key);
+    // The key never stays in the address bar (or in the history).
+    history.replaceState(null, '', location.pathname);
+    this.setPhase('ROOM_BROWSER');
+    await this.joinRoom(code, true, 'graao-host');
+  }
+
+  /** The host's PC ended the room (closed the app, stopped hosting, or vanished): say so and offer the way back. */
+  private showHostClosed(text: string): void {
+    const modal = new Modal('O HOST ENCERROU A PARTIDA', () => modal.el.remove());
+    modal.card.classList.add('host-closed');
+    const row = node('div', 'gra-toolbar');
+    row.append(
+      button('Voltar às salas', () => {
+        modal.hide();
+        this.setPhase('ROOM_BROWSER');
+      }, true),
+      button('Menu principal', () => {
+        modal.hide();
+        this.setPhase('MENU');
+      }),
+    );
+    modal.body.append(node('p', '', text && !/HOST ENCERROU/i.test(text) ? text : 'Quem hospedava a sala encerrou a hospedagem ou perdeu a conexão. A partida terminou.'), row);
+    this.ui.append(modal.el);
+    modal.show();
   }
 
   private playSolo(): void {
@@ -650,12 +783,26 @@ export class GraaoApp {
   }
 
   onConnectionDrop(dropped: boolean): void {
+    clearInterval(this.hostGoneCheck);
+    const net = this.net;
+    if (dropped && net?.graaoHostEndpoint) {
+      // A host's PC that went away for good leaves the list within 30 s: stop waiting for it then.
+      this.hostGoneCheck = setInterval(() => {
+        void resolveHostRoom(net.code).then((ep) => {
+          if (ep || this.net !== net) return;
+          clearInterval(this.hostGoneCheck);
+          this.onDisconnected('O HOST ENCERROU A PARTIDA');
+        });
+      }, 5000);
+    }
     this.combat.connectionLost = dropped;
     this.lobby.setConnection(dropped);
     this.toast.show(dropped ? 'Conexão interrompida. Tentando reconectar…' : 'Conexão restabelecida.', dropped);
   }
 
   onDisconnected(msg: string): void {
+    clearInterval(this.hostGoneCheck);
+    const hostRoom = !!this.net?.graaoHostEndpoint;
     this.combat.connectionLost = false;
     this.net?.leave();
     this.net = null;
@@ -666,7 +813,8 @@ export class GraaoApp {
     this.hud.setRoom(null);
     this.setPhase('ROOM_BROWSER');
     this.browser.message(msg, true);
-    this.toast.show(msg, true);
+    if (hostRoom || /HOST ENCERROU/i.test(msg)) this.showHostClosed(msg);
+    else this.toast.show(msg, true);
   }
 
   // ------------------------------------------------------------------------------------------------ frame
@@ -681,6 +829,7 @@ export class GraaoApp {
 
 
     const feet = this.tmpPos;
+    let viewFocus = feet;
     let facing = this.tmpFacing;
     let anim: AnimInput = { moveState: MovementState.IDLE as MovementState, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE as ActionState };
 
@@ -693,19 +842,22 @@ export class GraaoApp {
         this.net?.update(dt);
         feet.copy(this.deploy.focus);
       } else {
-        this.camera.look(look.yaw, look.pitch);
+        if (!this.spectator.following) this.camera.look(look.yaw, look.pitch);
         this.camera.aim = this.input.isDown('aim') && this.combat.alive && !this.deploy.diving && !this.local.state.swimming;
         const frame = this.camera.frame;
         const alpha = this.local.update(dt, this.input, frame, !!this.net, this.combat.frozen);
         this.net?.update(dt);
         this.local.renderPosition(alpha, feet);
         facing = this.local.renderFacing(alpha, facing);
-        this.camera.update(dt, feet, this.world.physics);
+        if (!this.spectator.following) this.camera.update(dt, feet, this.world.physics);
       }
       // Loot first: its weapon replacement card may own E and Q this frame.
       this.loot.update(dt, this.time);
       this.combat.update(dt);
       this.deploy.update(dt);
+      this.spectator.update(dt, look);
+      this.hud.show(!this.spectator.following);
+      if (this.spectator.following) viewFocus = this.spectator.focus;
       const s = this.local.state;
       const up = this.tmpUp.copy(feet).normalize();
       anim = {
@@ -720,8 +872,8 @@ export class GraaoApp {
         groundDist: this.deploy.groundDist,
         waterDepth: waterDepth(feet),
       };
-      if (!riding) this.obstruction.update(dt, this.r.camera.position, feet, up);
-      this.updatePlace(feet);
+      if (!riding) this.obstruction.update(dt, this.r.camera.position, viewFocus, this.spectator.following ? viewFocus.clone().normalize() : up);
+      this.updatePlace(viewFocus);
       this.updateLobby();
     } else {
       feet.copy(this.spawn);
@@ -746,14 +898,21 @@ export class GraaoApp {
     this.vfx.update(dt);
     this.draftUi.update(this.net ? this.net.serverNow() : Date.now());
     this.updateScoreboard();
-    this.r.updateSun(this.phase === 'MATCH' ? feet : this.spawn, this.time);
-    this.planet.update(this.time, feet, this.r.sunDir);
+    this.r.updateSun(this.phase === 'MATCH' ? viewFocus : this.spawn, this.time);
+    this.planet.update(this.time, viewFocus, this.r.sunDir);
     const orbit = this.r.setAltitude(PLANET.radius);
     this.planet.setOrbit(orbit, this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
-    this.ambient.update(dt, this.time, this.phase === 'MATCH' ? feet : this.spawn);
+    this.ambient.update(dt, this.time, this.phase === 'MATCH' ? viewFocus : this.spawn);
     const envLevel = (1 - orbit) * this.tormenta.ambience;
     this.audio.setAmbience(envLevel, envLevel * this.water.beachProximity, this.time);
-    this.r.render();
+    // The draft and the loading card cover the world (opaque, blurred): it is redrawn a few times a second there.
+    // Behind the room list and the lobby panel the decorative world needs no more than 30 fps.
+    const gap = !this.coverThrottle ? 0 : this.phase === 'ABILITY_DRAFT' || this.phase === 'LOADING' ? 250 : this.phase === 'ROOM_BROWSER' || this.phase === 'ROOM_LOBBY' ? 1000 / 30 : 0;
+    if (t - this.lastWorldRender >= gap - 2) {
+      this.r.render();
+      this.lastWorldRender = t;
+      this.worldFrames++;
+    }
     this.frameMs = performance.now() - t0;
     this.dev.frame();
   }
@@ -893,8 +1052,15 @@ export class GraaoApp {
     const s = this.local?.state;
     const lat = s ? (Math.asin(THREE.MathUtils.clamp(s.pos.y / Math.hypot(s.pos.x, s.pos.y, s.pos.z), -1, 1)) * 180) / Math.PI : 0;
     const lon = s ? (Math.atan2(s.pos.x, s.pos.z) * 180) / Math.PI : 0;
+    const now = performance.now();
+    if (now - this.worldFramesAt >= 1000) {
+      this.worldFps = Math.round(((this.worldFrames - this.worldFramesSeen) * 1000) / Math.max(1, now - this.worldFramesAt));
+      this.worldFramesSeen = this.worldFrames;
+      this.worldFramesAt = now;
+    }
     const out: Record<string, string | number> = {
       'cpu quadro ms': this.frameMs.toFixed(2),
+      'mundo desenhado/s': this.worldFps,
       qualidade: this.r.quality,
       monitor: `${this.limiter.refreshHz.toFixed(0)} Hz · limite ${this.limiter.cap || 'máximo'}`,
       'malhas skinned': 2 + (this.net?.remoteCount ?? 0) * 2,
@@ -924,4 +1090,21 @@ export class GraaoApp {
 }
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+/**
+ * Lets the loading card paint between preparation steps without depending on animation frames: a tab in the
+ * background gets none, and one player switching windows during the draft must not hold everyone's match.
+ */
+const breathe = () =>
+  new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    requestAnimationFrame(finish);
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => (document.hidden ? finish() : setTimeout(finish, 100));
+    channel.port2.postMessage(0);
+  });
 const stateName = (v: number) => Object.keys(MovementState).find((k) => MovementState[k as keyof typeof MovementState] === v) ?? String(v);

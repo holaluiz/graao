@@ -28,4 +28,6 @@ export type FromRoom =
   | { t: 'send'; to: string[]; type: number; m: unknown }
   /** The room let this session go for good (its reconnection window ended). */
   | { t: 'released'; sid: string }
+  /** The room's own listing (name, seats, phase…), as a server room publishes it to the matchmaker. */
+  | { t: 'metadata'; metadata: Record<string, unknown> }
   | { t: 'disposed' };

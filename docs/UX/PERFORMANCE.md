@@ -52,6 +52,21 @@ Este script não abre navegador. As métricas de renderização abaixo foram cap
 
 Os testes `tests/prematch.multiplayer.test.ts` complementam a medição: tentativas de movimento e disparo no lobby não produzem snapshots nem eventos, os bots só viram participantes reais no Draft, e nenhum combate começa antes de preparação, OVNI e pouso.
 
+## Mundo atrás das telas de preparação
+
+Dados: [prematch-render-benchmark.json](prematch-render-benchmark.json). O mundo atrás dos menus já era só decorativo (nenhum bot, nenhuma IA, nenhum combate), mas era redesenhado a cada quadro, inclusive atrás do Draft, que cobre a tela com um fundo quase opaco e desfoque. Agora `GraaoApp` redesenha o mundo no máximo **4 vezes por segundo** atrás do Draft e da preparação, e **30 vezes por segundo** atrás da lista de salas e do lobby. Menu e personalização continuam no ritmo cheio, porque o personagem é o assunto dessas telas. Redimensionar a janela força um redesenho imediato.
+
+Medição em 18/10/2026: RX 570, canvas 1366 × 768, DPR 1, qualidade HIGH, build de desenvolvimento (cliente sem HMR). O painel do navegador sem foco entregava cerca de 1,5 `requestAnimationFrame` por segundo, então o laço foi pausado e cada tela recebeu 20 quadros de aquecimento e 120 quadros sintéticos a 60 Hz via `app.frame(t)`. O tempo de GPU de cada desenho do mundo veio de `EXT_disjoint_timer_query_webgl2`; `app.coverThrottle` liga e desliga a regra.
+
+| Tela | Mundo desenhado/s (antes → depois) | GPU ms por segundo | CPU ms por quadro |
+|---|---:|---:|---:|
+| Menu | 60 → 60 | 263 → 275 | 8,2 → 8,0 |
+| Salas disponíveis | 60 → 30 | 272 → 135 | 10,4 → 4,0 |
+| Lobby | 60 → 30 | 305 → 183 | 9,1 → 5,4 |
+| Draft | 60 → 4 | 259 → 25 | 6,8 → 0,8 |
+
+Cada desenho do mundo tem 134 draw calls nessas telas. Limites: uma execução numa máquina; o custo do compositor para o desfoque do Draft não está incluído; CPU é só JavaScript. O F3 mostra “mundo desenhado/s”.
+
 ## Renderizador no navegador
 
 Dados brutos: [renderer-benchmark.json](renderer-benchmark.json). Uma aba do navegador integrado, 1366 × 768, qualidade HIGH, 120 frames consecutivos por modo, no mesmo carregamento. Leitura de `GraaoApp.frameMs`, `renderer.info` e intervalos de `requestAnimationFrame` pelo DevTools. A aba adicional do teste multiplayer estava fechada.

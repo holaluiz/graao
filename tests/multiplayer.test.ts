@@ -30,8 +30,9 @@ afterAll(async () => {
   await server.gracefullyShutdown(false).catch(() => {});
 });
 
+/** These suites exercise the preserved development warmup (READY starts the match); the competitive lobby is in prematch.multiplayer.test.ts. */
 function opts(name: string, protocol = PROTOCOL_VERSION) {
-  return { protocol, client: CLIENT_VERSION, name, appearance: name === 'A' ? DEFAULT_APPEARANCE : randomAppearance(() => 0.42) };
+  return { legacyWarmup: true, protocol, client: CLIENT_VERSION, name, appearance: name === 'A' ? DEFAULT_APPEARANCE : randomAppearance(() => 0.42) };
 }
 
 function waitFor<T>(room: Room, type: number, pred: (m: T) => boolean = () => true, ms = 5000): Promise<T> {

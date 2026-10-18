@@ -1,8 +1,9 @@
 /** Server-authoritative ability draft: inspect, select locally, then confirm a secret choice. */
 import { ABILITIES, isAbilityId, type AbilityDefinition, type AbilityEffect } from '@graao/game-data';
-import type { DraftStateMsg } from '@graao/shared';
+import type { CharacterAppearance, DraftStateMsg } from '@graao/shared';
 import type { Cue } from '../audio/GRAAudioManager';
 import { ABILITY_ICONS } from './abilityIcons';
+import { avatarPortrait } from './creatorPreviews';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -73,9 +74,9 @@ export class DraftScreen {
   private readonly shell = el('div', 'draft-shell', this.el);
   private readonly head = el('header', 'draft-head', this.shell);
   private readonly heading = el('div', 'draft-heading', this.head);
-  private readonly kicker = el('div', 'draft-kicker', this.heading, 'PREPARE SEU ARSENAL');
-  private readonly title = el('h1', 'draft-title', this.heading, 'Ability Draft');
-  private readonly subtitle = el('p', 'draft-subtitle', this.heading, '3 habilidades básicas + 1 suprema. Sua combinação, seu jogo.');
+  private readonly kicker = el('div', 'draft-kicker', this.heading, 'ABILITY DRAFT');
+  private readonly title = el('h1', 'draft-title', this.heading, 'Escolha suas habilidades');
+  private readonly subtitle = el('p', 'draft-subtitle', this.heading, '3 básicas + 1 Supremo, uma por rodada. Clique numa carta, confira os detalhes e confirme.');
   private readonly clock = el('div', 'draft-clock', this.head);
   private readonly roundEl = el('div', 'draft-round', this.clock);
   private readonly timerText = el('strong', 'draft-timer-text', this.clock);
@@ -116,6 +117,7 @@ export class DraftScreen {
   private state: DraftStateMsg | null = null;
   private me = -1;
   private names: (index: number) => string = (i) => `Jogador ${i + 1}`;
+  private looks: (index: number) => CharacterAppearance | undefined = () => undefined;
   private selected: string | null = null;
   private inspected: string | null = null;
   private sending: string | null = null;
@@ -136,12 +138,7 @@ export class DraftScreen {
     this.statusEl.setAttribute('role', 'status');
     this.confirm.type = this.change.type = 'button';
     this.confirm.addEventListener('click', () => this.submitSelection());
-    this.change.addEventListener('click', () => {
-      if (!this.state || this.sending || !this.state.seats.find((x) => x.index === this.me)?.picking) return;
-      this.editing = true;
-      this.actions.sound('ui.click');
-      this.render();
-    });
+    this.change.addEventListener('click', () => this.startChange());
     window.addEventListener('keydown', (e) => {
       if (this.el.hidden || e.repeat || !this.state || e.altKey || e.ctrlKey || e.metaKey) return;
       // Enter is the explicit confirm step; digits only select a preview.
@@ -172,12 +169,13 @@ export class DraftScreen {
   get visible(): boolean { return !this.el.hidden; }
 
   /** Only the server commits choices and reveals opponents' abilities. */
-  setState(s: DraftStateMsg, me: number, names: (index: number) => string): void {
+  setState(s: DraftStateMsg, me: number, names: (index: number) => string, looks?: (index: number) => CharacterAppearance | undefined): void {
     const prev = this.state;
     const newWindow = !prev || prev.round !== s.round || prev.endsAt !== s.endsAt || prev.stage !== s.stage;
     this.state = s;
     this.me = me;
     this.names = names;
+    if (looks) this.looks = looks;
     if (newWindow) {
       this.selected = s.mine;
       this.sending = null;
@@ -225,6 +223,14 @@ export class DraftScreen {
     } else this.lastTick = -1;
   }
 
+  /** Reopens the current round's choice (the confirmed one stands until a new confirmation). */
+  private startChange(): void {
+    if (!this.state || this.sending || !this.state.seats.find((x) => x.index === this.me)?.picking) return;
+    this.editing = true;
+    this.actions.sound('ui.click');
+    this.render();
+  }
+
   private choose(id: string): void {
     const s = this.state;
     if (!s || this.sending || (s.mine && !this.editing) || !isDraftChoiceAvailable(s, this.me, id)) return;
@@ -256,8 +262,8 @@ export class DraftScreen {
     const round = Math.min(s.round, s.rounds - 1);
     this.el.dataset.kind = s.kind;
     this.el.dataset.stage = s.stage;
-    this.roundEl.textContent = s.stage === 'done' ? 'COMBINAÇÃO COMPLETA' : `RODADA ${round + 1} / ${s.rounds} · ${s.kind === 'ultimate' ? 'SUPREMA' : 'BÁSICA'}`;
-    this.catalogueTitle.textContent = s.stage === 'done' ? 'Tudo pronto para a partida' : s.kind === 'ultimate' ? 'Escolha sua suprema' : `Escolha sua ${round + 1}ª habilidade básica`;
+    this.roundEl.textContent = s.stage === 'done' ? 'COMBINAÇÃO COMPLETA' : `RODADA ${round + 1} DE ${s.rounds} · ${s.kind === 'ultimate' ? 'SUPREMO' : 'BÁSICA'}`;
+    this.catalogueTitle.textContent = s.stage === 'done' ? 'Tudo pronto para a partida' : s.kind === 'ultimate' ? 'Agora: escolha seu Supremo' : `Agora: escolha sua ${round + 1}ª habilidade básica`;
     const top = s.priority[0];
     this.priorityEl.hidden = !s.unique || s.stage === 'done' || top === undefined || s.seats.length < 2;
     this.priorityEl.classList.toggle('mine', top === this.me);
@@ -274,7 +280,7 @@ export class DraftScreen {
     const pending = this.selected ?? s.mine;
     const complete = seat?.picks.length ?? 0;
     const selectedCount = complete + (s.stage === 'pick' && seat?.picking && pending ? 1 : 0);
-    this.buildProgress.textContent = `${selectedCount} / ${s.rounds} escolhidas`;
+    this.buildProgress.textContent = `Progresso: ${selectedCount} de ${s.rounds} selecionadas`;
     this.buildSlots.replaceChildren();
     for (let k = 0; k < s.rounds; k++) {
       const current = s.stage === 'pick' && k === s.round && !!seat?.picking;
@@ -286,9 +292,15 @@ export class DraftScreen {
       if (id && isAbilityId(id)) art.appendChild(icon(ABILITIES[id], 'db-icon'));
       else art.textContent = k === s.rounds - 1 ? '✦' : '+';
       const identity = el('div', 'db-identity', slot);
-      el('span', 'db-kind', identity, k === s.rounds - 1 ? 'SUPREMA' : `BÁSICA ${k + 1}`);
+      el('span', 'db-kind', identity, k === s.rounds - 1 ? 'SUPREMO · TECLA 4' : `BÁSICA ${k + 1} · TECLA ${k + 1}`);
       el('strong', 'db-name', identity, id && isAbilityId(id) ? ABILITIES[id].name : current ? 'Escolha agora' : 'A escolher');
       el('span', 'db-state', identity, committed ? '✓ Confirmada' : current && id ? s.mine && !this.editing ? '✓ Confirmada · aguardando' : 'Prévia · falta confirmar' : current ? 'Sua vez de escolher' : `Rodada ${k + 1}`);
+      // A confirmed choice can still be swapped while its round is open.
+      if (current && s.mine && !this.editing && !this.sending) {
+        const swap = el('button', 'db-swap', slot, 'Trocar');
+        swap.type = 'button';
+        swap.addEventListener('click', () => this.startChange());
+      }
     }
   }
 
@@ -308,7 +320,7 @@ export class DraftScreen {
         el('span', 'dc-key', b, String(i + 1));
         const art = el('span', 'dc-art', b);
         art.appendChild(icon(def, 'dc-icon'));
-        el('span', 'dc-category', b, def.slotType === 'ultimate' ? 'SUPREMA' : 'BÁSICA');
+        el('span', 'dc-category', b, def.slotType === 'ultimate' ? 'SUPREMO' : 'BÁSICA');
         el('span', 'dc-name', b, def.name);
         el('span', 'dc-blurb', b, def.blurb);
         const stats = el('span', 'dc-stats', b);
@@ -422,6 +434,9 @@ export class DraftScreen {
       const confirmed = seat.locked || !seat.picking;
       const row = el('div', `draft-seat${seat.index === this.me ? ' me' : ''}${confirmed ? ' ready' : ''}`, this.seatsEl);
       row.title = this.names(seat.index);
+      const look = this.looks(seat.index);
+      const avatar = el('div', 'ds-avatar', row);
+      if (look) avatar.innerHTML = avatarPortrait(look);
       el('div', 'ds-name', row, seat.index === this.me ? `${this.names(seat.index)} · você` : this.names(seat.index));
       el('div', 'ds-status', row, s.stage === 'pick' ? confirmed ? '✓ Confirmou' : '◌ Escolhendo' : s.stage === 'done' ? '✓ Pronto' : '✓ Revelado');
       const slots = el('div', 'ds-slots', row);

@@ -1,0 +1,58 @@
+.spectator {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: max(22px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(480px, calc(100% - 24px));
+  padding: 10px 12px 9px;
+  border: 2px solid var(--ink);
+  border-radius: 16px;
+  background: var(--paper);
+  box-shadow: 0 4px 0 var(--ink);
+  pointer-events: none !important;
+}
+.spectator-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.spectator-label { font-size: 11px; font-weight: 900; letter-spacing: .12em; }
+.spectator-count { font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.spectator-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; align-items: center; gap: 10px; }
+.spectator-player { min-width: 0; text-align: center; }
+.spectator-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 900; line-height: 1.25; }
+.spectator-stats { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px 10px; margin-top: 4px; font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.spectator-stats > span { white-space: nowrap; }
+.spectator-health { color: #386b2c; }
+.spectator-shield { color: #285c8c; }
+.spectator-switch {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 44px;
+  padding: 0;
+  border: 2px solid var(--ink);
+  border-radius: 11px;
+  background: #fffaf0;
+  color: var(--ink);
+  box-shadow: 0 2px 0 var(--ink);
+  font: 900 25px/1 var(--font);
+  pointer-events: auto;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.spectator-switch:hover:not(:disabled) { background: var(--sun); }
+.spectator-switch:active:not(:disabled) { transform: translateY(2px); box-shadow: none; }
+.spectator-switch:focus-visible { outline: 3px solid var(--sky); outline-offset: 3px; }
+.spectator-switch:disabled { opacity: .35; cursor: default; box-shadow: none; }
+.spectator-hint { margin-top: 7px; text-align: center; font-size: 10px; font-weight: 700; opacity: .72; }
+@media (max-width: 480px) {
+  .spectator { padding: 9px 10px 8px; bottom: max(14px, env(safe-area-inset-bottom)); }
+  .spectator-row { gap: 6px; }
+  .spectator-name { font-size: 17px; }
+  .spectator-stats { font-size: 10px; gap: 3px 7px; }
+}
+@media (max-height: 480px) {
+  .spectator { bottom: max(10px, env(safe-area-inset-bottom)); padding-block: 6px; }
+  .spectator-heading { margin-bottom: 3px; }
+  .spectator-name { font-size: 17px; }
+  .spectator-hint { margin-top: 4px; }
+}

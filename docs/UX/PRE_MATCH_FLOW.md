@@ -22,6 +22,8 @@ Treinar sozinho continua separado do fluxo competitivo. A exploração local pre
 | `RESULTS` (4) | Servidor calcula o resultado e envia `MATCH_SUMMARY`. | Sem dano. Todos pedem retorno ou termina o prazo; volta ao lobby com Pronto desmarcado. |
 | `CLOSED` (6) | Host sai definitivamente. | Aviso aos clientes, encerramento da sala e retorno à navegação. |
 
+Salas hospedadas no navegador usam a mesma classe e os mesmos estados. Quando são públicas, o host anuncia a linha da própria sala na lista ao vivo ([ROOM_BROWSER.md](ROOM_BROWSER.md)); a sala continua sendo a autoridade sobre quem entra.
+
 `FREE_ROAM` (9) permanece apenas para a exploração local e para o opt-in de desenvolvimento/testes `legacyWarmup: true`. Salas competitivas novas iniciam em `LOBBY`. O opt-in é ignorado no servidor de produção.
 
 ## Participantes e início
@@ -72,7 +74,11 @@ O lobby mostra participantes humanos reais mais vagas de bots planejados. Os bot
 
 A preparação não usa uma porcentagem inventada nem um atraso para simular carregamento. O cliente confirma o identificador atual somente depois de os recursos necessários estarem disponíveis. Não deve aguardar o primeiro snapshot: snapshots começam no OVNI.
 
+As etapas da preparação cedem a vez ao navegador com `requestAnimationFrame` **ou** uma mensagem de `MessageChannel`, o que vier primeiro. Antes, uma aba em segundo plano (alguém que trocou de janela durante o Draft) não recebia quadros, não confirmava e prendia a sala até o prazo; isso foi reproduzido no navegador e corrigido: com a aba da convidada escondida, o ACK chegou em cerca de 1 s.
+
 O servidor espera **45 segundos**, por padrão. Um ACK de falha emite `LOAD_FAILED`; o prazo esgotado emite `LOAD_TIMEOUT`. Em ambos os casos, todos retornam ao lobby, os bots instanciados são removidos, as vagas planejadas são restauradas e Pronto é desmarcado. Um ACK antigo ou recebido na fase errada é ignorado.
+
+Avisos da sala (`NOTICE`) aparecem como toast em qualquer tela; o HUD de combate só os mostra durante a partida. Antes, um aviso recebido no lobby ficava guardado no HUD escondido e reaparecia sobre o OVNI da partida seguinte.
 
 ## Saída do host e reconexão
 

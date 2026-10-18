@@ -1,5 +1,76 @@
 # graao MVP status
 
+## 2026-10-18 (noite) — Graao Host: hospedagem comunitária no PC do jogador
+
+Quem hospeda instala o **Graao Host** uma vez; o PC dessa pessoa roda o **mesmo** servidor Colyseus/`GraaoMatchRoom`
+(bots, armas, magias, baús, OVNI, Tormenta) e os amigos entram pelo navegador por HTTPS/WSS (Cloudflare Tunnel). O
+Supabase só autoriza, lista e resolve salas.
+
+**Funciona e foi testado (um PC, uma rede):**
+
+- Servidor em `HOST_MODE=DESKTOP` (política única em `apps/server/src/hostPolicy.ts`; o modo dedicado e as salas no
+  navegador continuam iguais), empacotado num `.mjs` autocontido que roda sem `node_modules`.
+- App Electron 43 (`apps/host`): janela com a identidade do graao, bandeja, protocolo `graao-host://`, vínculo com
+  confirmação, ciclo de vida com erros explicados, métricas (CPU, memória, tick, bytes), painel técnico opcional.
+- Instalador NSIS por usuário (`GraaoHost-Setup-0.1.0.exe`, ≈ 122 MB): instalar, protocolo, reinstalar, atualizar,
+  desinstalar limpo.
+- Central: migration `0003_graao_host.sql` (tickets de uso único, instalações, sessões, salas, grants/RLS) validada
+  num Postgres embutido e **aplicada na Supabase de produção** (2026-10-18; um host headless publicou e removeu uma
+  sala real — `docs/hosting/GRAAO_HOST_TEST_REPORT.md`); Edge Function de túneis gerenciados escrita.
+- Site: **Criar e hospedar**, painel "instale o Graao Host", lista com selo GRAAO HOST, entrar pelo endpoint sem
+  token Supabase, `?sala=` do app, aviso **O HOST ENCERROU A PARTIDA**.
+- Três hosts simultâneos por túneis reais da Cloudflare (Quick Tunnel), partidas completas 1+9, 2+8, 3+7, 5+5, 10+0,
+  ping 23–31 ms; queda do host detectada e sala removida da lista em 30 s.
+- **App empacotado + central de produção + site** (cliente local apontando para a Supabase real): vincular com clique
+  real, sala na lista pública, convidada entrando pelo `wss://`, segunda sala sem novo vínculo, Draft → OVNI → partida
+  com as fases vindas do PC do host, e encerrar no meio da partida com aviso e lista limpa. Achados e corrigidos nessa
+  rodada: sala fechada que ficava na lista até Atualizar, "Pedido já usado" no lugar de "Pedido expirado" (migration
+  `0004`, aplicada e conferida em produção) e encerrar a partida de todos sem confirmação.
+
+**Falta:** deploy do site (graao.vercel.app ainda é um build sem Supabase nem
+hospedagem); e os bloqueios do dono do projeto — conta/zona Cloudflare para túneis gerenciados (hoje só túnel de
+teste), local para publicar o instalador, assinatura de código, e o teste com **outro computador em outra rede** e
+três PCs reais.
+
+Detalhes: [arquitetura](hosting/GRAAO_HOST_ARCHITECTURE.md), [instalador](hosting/GRAAO_HOST_INSTALLER.md),
+[vínculo](hosting/GRAAO_HOST_PAIRING.md), [ciclo de vida](hosting/GRAAO_HOST_LIFECYCLE.md),
+[segurança](hosting/GRAAO_HOST_SECURITY.md), [túneis](hosting/GRAAO_HOST_TUNNELS.md),
+[release](hosting/GRAAO_HOST_RELEASE.md), [relatório de testes](hosting/GRAAO_HOST_TEST_REPORT.md),
+[descoberta de salas](networking/ROOM_DISCOVERY.md), [auditoria](networking/GRAAO_HOST_AUDIT.md).
+
+## 2026-10-18 (afternoon) — Public rooms in the published build, and a background-tab fix
+
+The published build has no dedicated server: whoever creates a room hosts it in their browser. Until now its room
+browser could only say "Servidor indisponível", and creating a room needed a fallback button hidden in the form. Now:
+
+- **Live room list for browser-hosted rooms.** Each public room's host announces the listing that its own
+  authoritative `GraaoMatchRoom` publishes (Supabase Realtime Presence, channel `graao-rooms`); every viewer sees it
+  update by itself. Supabase only relays the host's announcement. Seats, phase and admission stay with the host's room,
+  which refuses full or started rooms. With `VITE_SERVER_URL` or `?server=`, the dedicated `/rooms` registry is used as
+  before. Both sources go through the same `parseRoomListing` validator (humans + planned bots ≤ capacity ≤ 10).
+  See [room browser](UX/ROOM_BROWSER.md).
+- **Room browser:** columns (Sala · Participantes · Status · Ping), ten seat pips per row, ping shown as "—" (never
+  estimated), unavailable rows that say why, empty state with "Criar a primeira sala", retry on failure.
+- **Lobby:** each human slot draws a small bust from that player's real appearance, so a look saved in the lobby is
+  visible to everyone. The sidebar lists Mapa, Modo, Capacidade, Bots desejados (host only) and Visibilidade.
+- **Draft:** Portuguese title "Escolha suas habilidades", "Progresso: n de 4 selecionadas", "Supremo" wording, a
+  "Trocar" button on the confirmed slot, avatars in the participant strip.
+- **ESC:** "Opções" names what keeps running; in a match the exit reads "Sair da partida".
+- **Fixed:** a player whose tab was in the background during the draft never acknowledged the match preparation
+  (it waited for animation frames), holding everyone until the 45 s timeout. Also fixed: a lobby notice reappearing on
+  the HUD over the next UFO ride.
+- **Performance:** the decorative world is redrawn at most 4×/s behind the draft and loading card (GPU 259 → 25 ms
+  per second measured on an RX 570) and 30×/s behind the room list and lobby. See [performance](UX/PERFORMANCE.md).
+
+**Validation:** three browser tabs on the no-HMR client without a dedicated server covered create → list → join →
+live row update → Ready → appearance change from the lobby → draft → preparation (with the guest in the background) →
+UFO → landing → match → results → lobby → host leaves → row removed. Details in [verification](UX/VERIFICATION.md).
+Customization was being changed by parallel work at the same time and was only exercised, not re-reviewed, here.
+Automated: `tests/multiplayer.test.ts` had 36 failures at `916a753` (the warmup suites lacked `legacyWarmup: true`);
+fixed, 49/49 alone. Full suite 264/277: the 13 failures are the in-progress spectator tests of parallel work (12) and
+the real-time 60 Hz interpolation test under full-suite load (passes with its file alone). Typecheck, ESLint of the
+changed files and build passed.
+
 ## 2026-10-18 — Pre-match redesign verified locally
 
 The current competitive journey is **Menu → Rooms → Lobby → Ability Draft → Preparation → UFO → Drop → Combat →
@@ -84,7 +155,7 @@ technical docs are English, while the redesign specifications in `docs/UX` are P
 | Colyseus room, codes, prediction, reconciliation, interpolation | DONE | Tested (integration) |
 | Weapons (Raio de Sol, Rajada de Pétalas), server hitscan, ammo, reload, switch | TESTING | Server rules tested; client prediction reconciles ammo by FIRE sequence (`shotSeq`); code-authored models on the hand bone |
 | Match flow (lobby → host start → draft → preparation → UFO → drop → combat → results → lobby) | TESTING | New competitive flow and legacy development path are integration-tested. Current flow waits for all human loading ACKs, freezes the roster on host start and closes on host departure. Two browser clients completed the local flow. See [pre-match flow](UX/PRE_MATCH_FLOW.md). |
-| Public room browser and private browser-host fallback | DONE | Real Colyseus `/rooms` registry, authoritative occupancy, 10 total seats, public/private visibility, create/join errors and explicit private fallback when signaling is available. See [room browser](UX/ROOM_BROWSER.md). |
+| Public room browser (dedicated `/rooms` and live list of browser-hosted rooms) | TESTING | Dedicated: real Colyseus `/rooms` registry. Published build: each public hosted room announces its own room's listing (Presence); the host's room still admits or refuses. One validator for both (10 total seats). Three browser tabs verified create/see/join/update/remove locally; two real machines and networks not yet. See [room browser](UX/ROOM_BROWSER.md). |
 | Lobby, planned bots and loading preparation | DONE | Host controls 0–9 bots and explicit start; all humans Ready; no combat bots or periodic snapshots in the lobby. Two-client browser validation plus occupancy, concurrent joins, preparation ACK/failure/timeout and host-exit integration tests. |
 | Combat HUD (vitals, weapons, reticles, hitmarkers by kind, damage numbers and direction, kill feed, banners, death, results) | TESTING | DOM/CSS/SVG; seen in the browser |
 | GRAVFXSystem (beams + particles, 2 draw calls) | TESTING | Tracers, flashes, impacts, shield shards/ring, elimination burst |

@@ -24,7 +24,7 @@ O navegador desenha `.room-row`; o lobby desenha `.player-slot`. A personalizaç
 
 Fonte: `apps/client/src/ui/Menu.ts`.
 
-O menu alinha o logo, o subtítulo e as ações à esquerda. O personagem personalizado e o mundo existente ocupam a área de apresentação ao lado. Esta cena é uma apresentação: o jogador não controla o personagem nem participa de combate.
+O menu alinha o logo **graao**, o subtítulo “um planetinha · armas, magia e roupas boas” e as ações à esquerda, sem rótulo extra acima do logo. O personagem personalizado e o mundo existente ocupam a área de apresentação ao lado. Esta cena é uma apresentação: o jogador não controla o personagem nem participa de combate.
 
 Ordem das ações:
 
@@ -39,29 +39,33 @@ O componente de perfil mostra o nome atual. Clicar nele abre um formulário curt
 
 Fonte: `apps/client/src/ui/RoomBrowser.ts`.
 
-O painel contém cabeçalho, disponibilidade do servidor, uma descrição curta, barra de ações, listagem e rodapé. As ações **Atualizar**, **Criar sala**, **Entrar por código** e **Voltar** permanecem fora das linhas de sala.
+O painel contém cabeçalho, contagem de salas, estado da descoberta, uma descrição curta, barra de ações, cabeçalho de colunas, listagem e rodapé. As ações **Atualizar**, **Criar sala**, **Entrar por código** e **Voltar** permanecem fora das linhas de sala.
 
-Cada linha apresenta:
+A fonte da lista depende do build ([ROOM_BROWSER.md](ROOM_BROWSER.md)): servidor dedicado (`/rooms`, “● Servidor disponível”) ou lista ao vivo das salas hospedadas no navegador (“● Lista ao vivo”). O selo mostra apenas a descoberta; “Conectado à sala” só aparece no lobby, depois da entrada.
+
+Colunas: **Sala · Participantes · Status · Ping** (o cabeçalho some quando a lista está vazia). Cada linha apresenta:
 
 - Nome da sala, com reticências e texto completo no atributo `title` quando necessário.
 - Nome do host e região somente quando recebida do servidor.
-- Humanos, bots previstos e capacidade.
-- Estado da partida ou sala cheia.
-- **Entrar**, habilitado somente quando a sala anuncia disponibilidade.
+- Dez marcadores de vaga (humano amarelo, bot previsto azul tracejado, vaga livre vazia), o texto “N humanos + M bots previstos” e “T / 10 participantes”.
+- Estado: Aguardando, Sala cheia, Escolhendo habilidades, Preparando, Em partida, Resultados ou Outra versão.
+- Ping: “—”. Nenhuma latência foi medida antes de entrar, então nada é estimado.
+- **Entrar →** quando a sala aceita entrada; **Indisponível**, com o motivo no `title`, quando está cheia, em andamento ou em outra versão.
 
-A consulta usa `/rooms`, sem cache, ao abrir a tela e a cada cinco segundos enquanto ela permanece visível. Sair da tela cancela a consulta em andamento e o temporizador. A consulta manual usa o mesmo caminho real. Não há linha de demonstração ou ping estimado.
+No modo dedicado a consulta usa `/rooms`, sem cache, ao abrir a tela e a cada cinco segundos enquanto ela permanece visível; no modo hospedado a lista é ao vivo e se atualiza sozinha. Sair da tela cancela a consulta, o temporizador ou a assinatura. Não há linha de demonstração.
 
-A listagem pagina **três salas quando a altura da janela é menor que 900 px** e **cinco salas a partir de 900 px**. Redimensionar a janela recompõe a página e seus controles. A paginação preserva a lista real; não reduz dados por omissão silenciosa. A validação deve usar uma lista preenchida, porque o estado vazio ocupa muito menos espaço.
+A listagem pagina pela altura real da janela: `floor((altura − 450) / 72)` linhas, entre 3 e 6 (quatro em 768 px, seis a partir de 882 px). Redimensionar recompõe a página e seus controles. A paginação preserva a lista real; não reduz dados por omissão silenciosa. A validação deve usar uma lista preenchida, porque o estado vazio ocupa muito menos espaço.
 
 Estados desenhados:
 
 | Estado | Apresentação |
 | --- | --- |
-| Consulta inicial | Carregando salas; explicação de consulta ao servidor. |
-| Lista vazia | Convite para criar a primeira sala. |
-| Servidor indisponível | Mensagem de tentativa de atualização e disponibilidade do treino no menu. |
-| Protocolo incompatível | Solicitação de recarregar o jogo. |
-| Sala cheia ou em preparação | Linha visível, entrada desabilitada. |
+| Consulta inicial | Carregando salas, com ícone animado (parado para quem pede movimento reduzido). |
+| Lista vazia | “Nenhuma sala esperando jogadores” e o botão **Criar a primeira sala**. |
+| Servidor ou lista indisponível | Explicação, nova tentativa automática e botão **Tentar de novo**; entrar por código continua possível. |
+| Build sem online | “Jogar online não está disponível neste build”; Criar sala e Entrar por código ficam desabilitados. |
+| Protocolo incompatível | Solicitação de recarregar o jogo; linhas de outra versão aparecem como “Outra versão”, sem Entrar. |
+| Sala cheia ou em andamento | Linha visível, entrada desabilitada com o motivo. |
 | Falha de criação ou entrada | Mensagem no painel e, quando aberto, no formulário correspondente. |
 
 **ESC** fecha primeiro o formulário aberto; sem formulário, volta ao menu.
@@ -74,10 +78,10 @@ O formulário é um modal, não uma segunda coluna permanente do navegador.
 | --- | --- |
 | Nome da sala | Padrão `Sala de [jogador]`; campo obrigatório, até 40 caracteres na UI. |
 | Visibilidade | Pública, listada no navegador; privada, acessível por código. |
-| Bots desejados | Controle nativo de 0 a 9. |
-| Mapa | Planeta graao fixo, com explicação da capacidade total de 10. |
+| Bots desejados | Controle nativo de “Nenhum · só humanos” a 9 bots, com a conta ao vivo: “Você + N bots = N+1 de 10 participantes”. |
+| Mapa | Planeta graao fixo, com o modo “último de pé”. |
 
-**Criar sala** envia a intenção à camada de rede. Quando existe suporte de signaling e o servidor está indisponível, a alternativa explícita **Criar sala privada neste navegador** explica que o host deve permanecer na página e que a sala não aparece na lista pública.
+**Criar sala** envia a intenção à camada de rede. No modo hospedado o formulário avisa que o host mantém a sala na própria aba. No modo dedicado, quando o servidor não responde e há signaling, a alternativa explícita **Criar sala privada neste navegador** continua disponível.
 
 ### Entrar por código
 
@@ -89,13 +93,13 @@ Fonte: `apps/client/src/ui/LobbyPanel.ts`.
 
 O lobby é uma tela dedicada sobre a cena de apresentação. Não é uma janela escondida pelo menu de pausa. **Estou pronto** aparece permanentemente no rodapé.
 
-O cabeçalho mostra nome da sala, host, conexão/reconexão, visibilidade, código copiável e ocupação. A ocupação distingue humanos reais e bots previstos, somados à capacidade de 10.
+O cabeçalho mostra “LOBBY DA SALA”, o nome da sala, “Host: … · status” (Aguardando jogadores, Aguardando participantes ou Pronta para começar), conexão/reconexão, ocupação (“2 humanos + 8 bots · 10 / 10”) e o código copiável.
 
-O corpo desenha exatamente **dez slots** em duas colunas no desktop. Cada slot mostra índice, ícone, identidade, tipo e preparação. O jogador local recebe um destaque; bots previstos usam contorno tracejado e o texto **BOT PREVISTO**; vagas restantes mostram **Vaga aberta**.
+O corpo desenha exatamente **dez slots** em duas colunas no desktop. Cada slot mostra índice, avatar, identidade, tipo e preparação. O avatar dos humanos é um busto SVG desenhado com a aparência recebida do servidor (pele, rosto, cabelo, barba, chapéu, óculos e cor da roupa), então uma mudança salva no lobby aparece para todos. O jogador local recebe “(você)” e destaque; slots prontos ganham fundo verde; bots previstos usam contorno tracejado, ícone de robô e o texto **BOT PREVISTO · ENTRA NO DRAFT**; vagas restantes mostram **Vaga aberta**.
 
 Os bots previstos são apenas reserva visual de composição. Eles não são personagens combatendo no cenário. Humanos podem substituir suas vagas antes do Draft, conforme os dados recebidos do servidor.
 
-A lateral apresenta o mapa atual e o seletor de bots desejados. Esse seletor permanece visível, mas só o host pode alterá-lo. O host recebe também **Iniciar Draft**; outros participantes não recebem esse controle.
+A lateral apresenta o cartão do mapa e os dados da sala: Mapa, Modo, Capacidade, Bots desejados e Visibilidade. O seletor de bots permanece visível, mas só o host pode alterá-lo; os outros veem “Definido pelo host”. Quando o host pede mais bots do que cabem, a nota explica que humanos têm prioridade. O host recebe também **Iniciar Draft**; outros participantes não recebem esse controle.
 
 O rodapé reúne:
 
@@ -107,6 +111,20 @@ O rodapé reúne:
 A mensagem ao lado dos controles explica o impedimento atual ou confirma que todos estão prontos. O clique em Pronto não inicia a partida. O mínimo para iniciar são dois participantes totais; todos os humanos precisam confirmar preparação. A UI usa `canStart` e `startReason` recebidos, sem recalcular uma autorização alternativa.
 
 Em larguras menores, a lateral do mapa se torna uma faixa compacta e os botões do rodapé podem ocupar duas linhas. Os dez slots continuam acessíveis na mesma tela.
+
+## ESC
+
+| Tela | ESC |
+| --- | --- |
+| Menu | Fecha o diálogo aberto (nome, configurações). |
+| Salas | Fecha o formulário aberto; sem formulário, volta ao menu. |
+| Personalização | Descarta o rascunho e volta à origem. |
+| Lobby | Abre **Opções**: Continuar, Configurações, Sair da sala. A nota lembra que a vaga continua guardada e que Estou pronto fica no rodapé. |
+| Draft e preparação | Abre **Opções** com a nota de que o tempo não para. Sair é sempre um botão explícito. |
+| Partida | Abre **Opções** com **Sair da partida** e a nota “A partida continua enquanto este menu está aberto. Ninguém pausa no multiplayer.” |
+| Treino sozinho | **Voltar ao menu**. |
+
+ESC nunca é o caminho para a ação principal de uma tela.
 
 ## Configurações
 
@@ -165,7 +183,9 @@ Após o Draft, a tela apresenta **Preparando a partida**, a etapa atual, um indi
 
 O indicador tem três etapas, não uma porcentagem temporal inventada. O aplicativo atualiza o progresso somente ao completar o trabalho correspondente. A contagem de preparados vem do estado da sala. O cliente envia a confirmação do identificador atual; o servidor libera o OVNI quando todos os humanos terminarem.
 
-Timeout ou erro de carregamento segue a política de recuperação do servidor e retorna os participantes ao lobby. A tela não permite iniciar combate, saltar a preparação ou promover a fase por conta própria.
+Timeout ou erro de carregamento segue a política de recuperação do servidor e retorna os participantes ao lobby. A tela não permite iniciar combate, saltar a preparação ou promover a fase por conta própria. As etapas cedem a vez ao navegador sem depender de `requestAnimationFrame`: um jogador com a aba em segundo plano também confirma o carregamento e não segura a sala.
+
+Atrás do Draft e da preparação, que cobrem o mundo, a cena 3D é redesenhada no máximo quatro vezes por segundo; atrás da lista de salas e do lobby, no máximo 30 vezes. Ver [PERFORMANCE.md](PERFORMANCE.md).
 
 O Draft tem especificação em [../gameplay/ABILITY_DRAFT.md](../gameplay/ABILITY_DRAFT.md), e OVNI/queda em [../gameplay/UFO_DEPLOYMENT.md](../gameplay/UFO_DEPLOYMENT.md).
 

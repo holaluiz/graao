@@ -602,7 +602,7 @@ export class Hud {
   ultimateReady(name: string): void {
     const s = this.abSlots.find((x) => x.root.classList.contains('ult'));
     if (s) replay(s.root, 'ult-pop');
-    this.notice(`SUPREMA PRONTA · ${name.toUpperCase()}`, 1.6);
+    this.notice(`SUPREMO PRONTO · ${name.toUpperCase()}`, 1.6);
     this.noticeEl.dataset.tone = 'ult';
   }
 

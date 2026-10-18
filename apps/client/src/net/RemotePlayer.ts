@@ -22,6 +22,8 @@ export interface RemoteSample {
   moveState: MovementState;
   action: ActionState;
   flags: number;
+  health: number;
+  shield: number;
 }
 
 export class RemotePlayer {
@@ -36,6 +38,11 @@ export class RemotePlayer {
   /** performance.now() of this player's last shot (holds the aim pose). */
   firedAt = -1e9;
   alive = true;
+  /** Authoritative vitals from the same snapshot being presented. */
+  health = 0;
+  shield = 0;
+  /** False until a snapshot has actually placed this remote in the world. */
+  hasSnapshot = false;
   /** Riding the UFO (hidden inside the ship) / skydiving (from the latest snapshot). */
   onShip = false;
   diving = false;
@@ -64,6 +71,11 @@ export class RemotePlayer {
     return this.interp.lag;
   }
 
+  /** Interpolated tangent direction, for a camera following this player. Do not mutate. */
+  get renderFacing(): THREE.Vector3 {
+    return this.facing;
+  }
+
   setName(n: string): void {
     this.name = n;
     this.label.textContent = n;
@@ -85,12 +97,16 @@ export class RemotePlayer {
   /** The server moved this player to a spawn: drop old samples so it does not slide across the planet. */
   onRespawn(): void {
     this.interp.samples.length = 0;
+    this.hasSnapshot = false;
   }
 
   update(dt: number, serverNow: number, margin: number, camera: THREE.Camera, viewport: { w: number; h: number }, physics: GamePhysics): void {
     const r = this.interp.sample(serverNow, margin);
     if (!r) return;
     const { a, b, alpha, extrapolateMs } = r;
+    this.hasSnapshot = true;
+    this.health = b.health;
+    this.shield = b.shield;
     this.extrapolatedMs = extrapolateMs;
     this.onShip = (b.flags & SnapFlag.ON_SHIP) !== 0;
     this.diving = !this.onShip && (b.flags & SnapFlag.DIVING) !== 0;

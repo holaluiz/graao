@@ -49,11 +49,25 @@ export class GraaoThirdPersonCamera {
 
   constructor(readonly camera: THREE.PerspectiveCamera) {}
 
-  /** Initializes the heading behind a target facing `facing`. */
-  reset(feet: THREE.Vector3, facing: THREE.Vector3): void {
+  /** Initializes the heading behind a target; `snap` also clears the previous target's follow and view effects. */
+  reset(feet: THREE.Vector3, facing: THREE.Vector3, snap = false): void {
     this.up.copy(feet).normalize();
     this.heading.copy(facing).addScaledVector(this.up, -facing.dot(this.up)).normalize();
     this.hasTarget = true;
+    if (snap) {
+      this.followUp = feet.length();
+      this.distance = this.baseDistance;
+      this.aim = false;
+      this.aimBlend = 0;
+      this.pitch = -0.18;
+      this.fovBoost = 0;
+      this.recoilPitch = 0;
+      this.recoilYaw = 0;
+      this.shake = 0;
+      this.shakeT = 0;
+      this.camera.fov = 70;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   look(yaw: number, pitch: number): void {
