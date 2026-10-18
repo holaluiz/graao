@@ -142,6 +142,7 @@ function strand(b: PartBuilder, h: HeadShape, theta: number, phi: number, len: n
  * headphones, earrings) move out with it.
  */
 const HAIR_FIT: Record<string, number> = {
+  'hair.ondulado': 1.32,
   'hair.bob': 1.15,
   'hair.crop': 1.09,
   'hair.ponytail': 1.07,

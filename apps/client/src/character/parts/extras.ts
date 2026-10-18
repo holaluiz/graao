@@ -14,6 +14,7 @@ export const EXTRA_COLORS: Record<string, { main: string; accent: string; detail
   'extra.cordao': { main: '#e2b13c', accent: '#fff0a8', detail: '#e2b13c' },
   'extra.pochete': { main: '#34343b', accent: '#f6d22c', detail: '#c9ced6' },
   'extra.bag': { main: '#e6b83c', accent: '#6b4a2f', detail: '#6b4a2f' },
+  'extra.mochila': { main: '#2f3237', accent: '#3f444b', detail: '#c9ced6' },
   'extra.bandeira': { main: '#1f9a52', accent: '#f6d22c', detail: '#2c4fa3' },
   'extra.fitinhas': { main: '#d9493b', accent: '#f6d22c', detail: '#4fa3d6' },
 };
@@ -78,6 +79,41 @@ export function buildExtra(b: PartBuilder, s: BodyShape, extraId: string, topId:
       const z = r.p[2] + r.rb * 0.7 + off - 0.01;
       b.roundedBox([-0.135, 0.915, z + 0.03], [0.07, 0.052, 0.03], { slot: Slot.EXTRA, bones: ['Hips', 'Spine'] }, 4, 14, 10, rot);
       b.roundedBox([-0.135, 0.955, z + 0.052], [0.066, 0.016, 0.012], { slot: Slot.EXTRA_ACCENT, bones: ['Hips', 'Spine'], outline: 0.5 }, 4, 10, 6, rot);
+      break;
+    }
+    case 'extra.mochila': {
+      // School backpack: padded straps from the top of the bag over each shoulder, down the chest and around the
+      // ribs back to its bottom corners; the bag with a front pocket, a zip and a grab handle.
+      const strapBones: BoneName[] = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'LeftShoulder', 'RightShoulder'];
+      const lift = 0.012;
+      const backZ = out(1.06, Math.PI, 0).p[2];
+      for (const sx of [1, -1]) {
+        const top = out(1.27, sx * 0.42, lift).p;
+        const pts: V3[] = [
+          out(1.2, sx * 2.78, lift).p,
+          [sx * 0.088, 1.296, backZ * 0.35],
+          [sx * 0.088, 1.31, top[2] * 0.4],
+          top,
+          out(1.17, sx * 0.5, lift).p,
+          out(1.07, sx * 0.72, lift).p,
+          out(1.0, sx * 1.1, lift).p,
+          out(0.97, sx * 1.65, lift).p,
+          out(0.955, sx * 2.3, lift).p,
+        ];
+        b.tube(pts.map((p) => ({ p, ra: 0.02, rb: 0.006 })), { slot: Slot.EXTRA_ACCENT, bones: strapBones, ref: [1, 0, 0], segments: 8, capStart: 'flat', capEnd: 'flat' });
+        // Strap buckle on the chest.
+        const bk = out(1.12, sx * 0.6, lift + 0.006);
+        b.roundedBox(bk.p, [0.016, 0.01, 0.004], { slot: Slot.EXTRA_DETAIL, bones: strapBones, outline: 0.5 }, 4, 10, 6, facing(bk.n));
+      }
+      const bagBones: BoneName[] = ['Spine', 'Spine1', 'Spine2'];
+      const bz = backZ - 0.075;
+      b.roundedBox([0, 1.06, bz], [0.13, 0.165, 0.065], { slot: Slot.EXTRA, bones: bagBones }, 4, 18, 12);
+      b.roundedBox([0, 0.98, bz - 0.062], [0.1, 0.075, 0.026], { slot: Slot.EXTRA_ACCENT, bones: bagBones }, 4, 16, 10);
+      b.roundedBox([0, 1.17, bz - 0.04], [0.11, 0.006, 0.006], { slot: Slot.EXTRA_DETAIL, bones: bagBones, outline: 0.4 }, 4, 10, 6);
+      b.tube(
+        [0, 0.5, 1].map((t) => ({ p: [-0.035 + 0.07 * t, 1.225 + 0.022 * Math.sin(t * Math.PI), bz + 0.005] as V3, ra: 0.006, rb: 0.006 })),
+        { slot: Slot.EXTRA_ACCENT, bones: bagBones, ref: [0, 0, 1], segments: 6 },
+      );
       break;
     }
     case 'extra.bandeira': {

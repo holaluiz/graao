@@ -208,7 +208,7 @@ void main() {
     #ifdef USE_PALETTE
       // Characters are lit for the camera (a portrait key light): mostly the sun, raised, and pulled toward the view, so
       // faces read and the shade wraps the far side of the body instead of cutting across the face.
-      L = normalize(L * 0.55 + up * 0.3 + V * 0.5);
+      L = normalize(L * 0.4 + up * 0.3 + V * 0.75);
     #endif
     ndl = dot(N, L);
     #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
@@ -308,7 +308,7 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
       uSkyFill: { value: LOOK.skyFill.clone() },
       uGroundFill: { value: LOOK.groundFill.clone() },
       // Characters: a hard cut between light and shade (graphic); the world a little softer so moving shadows ease.
-      uRampCenter: { value: o.variant === 'character' ? 0.12 : 0.04 },
+      uRampCenter: { value: o.variant === 'character' ? -0.12 : 0.04 },
       uRampSoftness: { value: o.variant === 'character' ? 0.02 : o.variant === 'foliage' ? 0.14 : 0.06 },
       uPigment: { value: o.pigment ?? (o.variant === 'terrain' ? 0.12 : 0.06) },
       uPigmentScale: { value: o.variant === 'foliage' ? 0.35 : 0.22 },

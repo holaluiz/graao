@@ -243,6 +243,19 @@ export class PartBuilder {
     this.pendingNormals.clear();
   }
 
+  /** Adds a ready-made triangle mesh (a Blender-authored piece) with its own normals; weighted like everything else. */
+  mesh(positions: ArrayLike<number>, normals: ArrayLike<number>, index: ArrayLike<number>, opts: PrimitiveOpts): this {
+    this.begin(opts);
+    const base = this.pos.length / 3;
+    for (let i = 0; i < positions.length; i += 3) {
+      this.vertex(positions[i]!, positions[i + 1]!, positions[i + 2]!);
+      this.normals.push(normals[i]!, normals[i + 1]!, normals[i + 2]!);
+    }
+    for (let i = 0; i < index.length; i++) this.index.push(base + index[i]!);
+    this.current = null;
+    return this;
+  }
+
   // -------------------------------------------------------------------------------------------- primitives
 
   /** Swept tube through `rings` with superellipse cross-sections; optional round/flat/open caps. */

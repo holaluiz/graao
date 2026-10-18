@@ -104,6 +104,7 @@ export const FABRIC_COLORS: ColorEntry[] = [
 const hair = (id: string, name: string, defaultColorId: string): CharacterPartDefinition => ({ id, name, slot: 'hair', hideBodyRegions: [], palette: 'hair', defaultColorId });
 
 export const HAIRS: CharacterPartDefinition[] = [
+  hair('hair.ondulado', 'Ondulado', 'hair.ink'),
   hair('hair.bob', 'Chanel', 'hair.ink'),
   hair('hair.crop', 'Curtinho', 'hair.chestnut'),
   hair('hair.ponytail', 'Rabo de cavalo', 'hair.auburn'),
@@ -145,6 +146,7 @@ export const TOPS: CharacterPartDefinition[] = [
 
 export const BOTTOMS: CharacterPartDefinition[] = [
   { id: 'bottom.culottes', name: 'Pantacourt', slot: 'bottom', hideBodyRegions: ['hips', 'upper_legs'], palette: 'fabric', defaultColorId: 'fabric.charcoal' },
+  { id: 'bottom.cargo', name: 'Bermuda cargo', slot: 'bottom', hideBodyRegions: ['hips', 'upper_legs'], palette: 'fabric', defaultColorId: 'fabric.charcoal' },
   { id: 'bottom.shorts', name: 'Bermuda', slot: 'bottom', hideBodyRegions: ['hips'], palette: 'fabric', defaultColorId: 'fabric.denim' },
   { id: 'bottom.tactel', name: 'Bermuda tactel', slot: 'bottom', hideBodyRegions: ['hips', 'upper_legs'], palette: 'fabric', defaultColorId: 'fabric.navy' },
   { id: 'bottom.pants', name: 'Calça reta', slot: 'bottom', hideBodyRegions: ['hips', 'upper_legs', 'lower_legs'], palette: 'fabric', defaultColorId: 'fabric.navy' },
@@ -155,6 +157,7 @@ export const BOTTOMS: CharacterPartDefinition[] = [
 ];
 
 export const SHOES: CharacterPartDefinition[] = [
+  { id: 'shoes.retro', name: 'Tênis retrô com meia', slot: 'shoes', hideBodyRegions: ['feet'], palette: 'fabric', defaultColorId: 'fabric.tomato' },
   { id: 'shoes.chunky', name: 'Tênis robusto', slot: 'shoes', hideBodyRegions: ['feet'], palette: 'fabric', defaultColorId: 'fabric.tomato' },
   { id: 'shoes.mola', name: 'Tênis de mola', slot: 'shoes', hideBodyRegions: ['feet'], palette: 'fabric', defaultColorId: 'fabric.charcoal' },
   { id: 'shoes.chuteira', name: 'Chuteira', slot: 'shoes', hideBodyRegions: ['feet'], palette: 'fabric', defaultColorId: 'fabric.canary' },
@@ -196,6 +199,7 @@ export const EXTRAS: CharacterPartDefinition[] = [
   fixed('extra', 'extra.cordao', 'Cordão dourado'),
   fixed('extra', 'extra.pochete', 'Pochete'),
   fixed('extra', 'extra.bag', 'Bolsa transversal'),
+  fixed('extra', 'extra.mochila', 'Mochila'),
   fixed('extra', 'extra.bandeira', 'Bandeira nas costas'),
   fixed('extra', 'extra.fitinhas', 'Fitinhas no pulso'),
 ];
@@ -233,19 +237,19 @@ export const DEFAULT_APPEARANCE: CharacterAppearance = {
   bodyId: 'body.slim',
   faceId: 'face.calm',
   beardId: 'beard.none',
-  skinId: 'skin.peach',
-  hairId: 'hair.bob',
+  skinId: 'skin.caramel',
+  hairId: 'hair.ondulado',
   hairColorId: 'hair.ink',
-  topId: 'top.tee',
-  topColorId: 'fabric.sky',
-  bottomId: 'bottom.culottes',
+  topId: 'top.hoodie',
+  topColorId: 'fabric.cream',
+  bottomId: 'bottom.cargo',
   bottomColorId: 'fabric.charcoal',
-  shoesId: 'shoes.chunky',
+  shoesId: 'shoes.retro',
   shoesColorId: 'fabric.tomato',
   hatId: 'hat.none',
   hatColorId: 'fabric.tomato',
   accessoryId: 'acc.headphones',
-  extraId: 'extra.none',
+  extraId: 'extra.mochila',
 };
 
 /** Full validation: shape plus catalog membership. The server rejects anything else. */

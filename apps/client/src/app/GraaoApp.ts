@@ -42,6 +42,7 @@ import { PlanetView } from '../world/PlanetView';
 import { AmbientLife } from '../world/AmbientLife';
 import type { BoneName } from '../character/rig/GRARig';
 import { autoInk } from '../ui/ink';
+import { AuthoredParts } from '../character/build/AuthoredParts';
 import { NetSession } from '../net/NetSession';
 import { ProfileService, type CloudProfile } from '../net/ProfileService';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
@@ -166,6 +167,16 @@ export class GraaoApp {
     t = performance.now();
     await this.anims.load((f) => progress(0.55 + f * 0.3, 'Ensinando todo mundo a andar…'));
     mark('animations', t);
+    // Pieces modeled in Blender (hair, hoodie, cargo shorts, sneakers); the code-built stand-ins stay if this fails.
+    t = performance.now();
+    try {
+      const authored = new AuthoredParts();
+      await this.assets.track(authored.load(this.assets.url('characters/hero-parts.glb')), 'heroParts');
+      this.parts.useAuthored(authored);
+    } catch (e) {
+      console.warn('[graao] hero-parts.glb indisponível; usando as peças feitas em código', e);
+    }
+    mark('heroParts', t);
     progress(0.88, 'Escolhendo a roupa…');
     await nextFrame();
     const s = SPAWNS[0]!;

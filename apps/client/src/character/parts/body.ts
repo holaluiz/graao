@@ -28,7 +28,7 @@ export function buildBody(b: PartBuilder, s: BodyShape): void {
   for (const sx of [1, -1]) {
     b.ellipsoid([sx * (h.a * 0.93), h.center[1] - 0.012, h.center[2] - 0.008], [0.018, 0.03, 0.022], { slot: Slot.SKIN, region: 'head', bones: ['Head'] }, 8, 6);
   }
-  // Nose, sculpted: a narrow bridge rising from between the eyes to a rounded tip with two soft wings (a real bridge
+  // Nose, sculpted: a narrow bridge rising from between the eyes to a small rounded tip (a real bridge
   // keeps the face from reading flat; the ink pass draws its side and the shadow sits under it).
   const bridge: RingSpec[] = [];
   for (let i = 0; i <= 5; i++) {
@@ -41,10 +41,6 @@ export function buildBody(b: PartBuilder, s: BodyShape): void {
   if (bridge.length >= 3) b.tube(bridge, { slot: Slot.SKIN, region: 'head', bones: ['Head'], ref: [1, 0, 0], segments: 10, capStart: 'round', capEnd: 'flat' });
   const tip = h.frontPoint(0, -0.0345, 0.007);
   if (tip) b.ellipsoid(tip.p, [0.0082, 0.0074, 0.0068], { slot: Slot.SKIN, region: 'head', bones: ['Head'] }, 12, 8);
-  for (const sx of [1, -1]) {
-    const wing = h.frontPoint(sx * 0.009, -0.0368, 0.0018);
-    if (wing) b.ellipsoid(wing.p, [0.0052, 0.0046, 0.005], { slot: Slot.SKIN, region: 'head', bones: ['Head'] }, 10, 6);
-  }
 
   // Arms and hands.
   for (const side of ['Left', 'Right'] as const) {
