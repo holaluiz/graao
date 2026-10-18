@@ -1,7 +1,8 @@
 /**
  * PlanetView: renders the shared GameWorld — terrain chunks (one per icosahedron face, frustum-culled), a light
  * translucent water sphere, instanced props (one InstancedMesh per prop type/variant with a per-instance fade for the
- * obstruction dissolve) and grass tufts that bend around the local player (never networked).
+ * obstruction dissolve), the map's kit pieces baked into one static mesh per icosahedron face (kitGeometry.ts) and
+ * grass tufts that bend around the local player (never networked).
  */
 import * as THREE from 'three';
 import { PLANET } from '@graao/game-data';
@@ -9,10 +10,16 @@ import type { GameWorld, Placement, PlacementKind } from '@graao/game-core';
 import { createStylizedMaterial, GLSL_NOISE, GLSL_TORMENTA, useTormenta } from '../render/materials/GRAStylizedMaterial';
 import type { Quality } from '../render/GRARenderer';
 import * as G from './propGeometry';
+import { buildKitChunks } from './kitGeometry';
 
+/** A solid prop the camera may dissolve: an instance of an instanced mesh, or a kit piece's vertex range. */
 export interface PropInstanceRef {
-  mesh: THREE.InstancedMesh;
+  mesh: THREE.Mesh;
+  /** Instanced props: the instance (−1 for kit pieces). */
   index: number;
+  /** Kit pieces baked into a chunk: first vertex and vertex count. */
+  start?: number;
+  count?: number;
   placement: Placement;
 }
 
@@ -169,8 +176,10 @@ export class PlanetView {
   /** Placement id → instance (solid props only), for camera obstruction fades. */
   readonly instances = new Map<number, PropInstanceRef>();
   readonly instancedMeshes: THREE.InstancedMesh[] = [];
+  /** Static meshes of the baked kit pieces (one per icosahedron face that has any). */
+  readonly kitMeshes: THREE.Mesh[] = [];
   private readonly fades = new Map<THREE.InstancedMesh, Float32Array>();
-  stats = { terrainTris: 0, propInstances: 0, grassInstances: 0, drawGroups: 0 };
+  stats = { terrainTris: 0, propInstances: 0, grassInstances: 0, drawGroups: 0, kitPieces: 0, kitTris: 0, kitMeshes: 0 };
   /** Grass and flower chunks: skipped from high up (grass collapses beyond uFadeDist anyway; flowers go sub-pixel). */
   private readonly grassMeshes: THREE.InstancedMesh[] = [];
   private readonly flowerMeshes: THREE.InstancedMesh[] = [];
@@ -346,8 +355,13 @@ export class PlanetView {
       }
     };
     const grassFraction = quality === 'LOW' ? 0.35 : quality === 'MEDIUM' ? 0.7 : 1;
+    const kit: Placement[] = [];
     for (const p of this.world.layout.placements) {
       if (p.kind === 'grass' || p.kind === 'flower') continue;
+      if (p.kind === 'kit') {
+        kit.push(p);
+        continue;
+      }
       const k = keyOf(p);
       if (!byKey.has(k)) byKey.set(k, []);
       byKey.get(k)!.push(p);
@@ -419,6 +433,28 @@ export class PlanetView {
       this.stats.propInstances += list.length;
     }
 
+    // Kit pieces (buildings, street props, paving): baked per icosahedron face, faded by vertex range.
+    const centers = icosaFaceCenters();
+    const faceOf = (p: Placement) => {
+      let best = 0;
+      let bd = -2;
+      for (let i = 0; i < centers.length; i++) {
+        const d = centers[i]!.x * p.up.x + centers[i]!.y * p.up.y + centers[i]!.z * p.up.z;
+        if (d > bd) {
+          bd = d;
+          best = i;
+        }
+      }
+      return best;
+    };
+    const baked = buildKitChunks(kit, this.propMaterial, faceOf);
+    for (const mesh of baked.meshes) this.group.add(mesh);
+    for (const [id, r] of baked.refs) this.instances.set(id, { mesh: r.mesh, index: -1, start: r.start, count: r.count, placement: r.placement });
+    this.kitMeshes.push(...baked.meshes);
+    this.stats.kitPieces = kit.length;
+    this.stats.kitTris = baked.triangles;
+    this.stats.kitMeshes = baked.meshes.length;
+
     // Grass and flowers: chunked by nearest icosahedron face for culling.
     const grass = this.world.layout.placements.filter((p) => p.kind === 'grass');
     const keepEvery = Math.max(1, Math.round(1 / grassFraction));
@@ -469,14 +505,24 @@ export class PlanetView {
 
   /** Sets the dissolve target of a prop instance (0 = opaque, 1 = gone). */
   setInstanceFade(ref: PropInstanceRef, value: number): void {
-    const arr = this.fades.get(ref.mesh)!;
+    if (ref.count) {
+      const attr = ref.mesh.geometry.getAttribute('instanceFade') as THREE.BufferAttribute;
+      const arr = attr.array as Float32Array;
+      if (Math.abs(arr[ref.start!]! - value) < 1e-3) return;
+      arr.fill(value, ref.start!, ref.start! + ref.count);
+      attr.addUpdateRange(ref.start!, ref.count);
+      attr.needsUpdate = true;
+      return;
+    }
+    const arr = this.fades.get(ref.mesh as THREE.InstancedMesh)!;
     if (Math.abs(arr[ref.index]! - value) < 1e-3) return;
     arr[ref.index] = value;
     (ref.mesh.geometry.getAttribute('instanceFade') as THREE.InstancedBufferAttribute).needsUpdate = true;
   }
 
   getInstanceFade(ref: PropInstanceRef): number {
-    return this.fades.get(ref.mesh)![ref.index]!;
+    if (ref.count) return ((ref.mesh.geometry.getAttribute('instanceFade') as THREE.BufferAttribute).array as Float32Array)[ref.start!]!;
+    return this.fades.get(ref.mesh as THREE.InstancedMesh)![ref.index]!;
   }
 
   update(time: number, player: THREE.Vector3, sunDir: THREE.Vector3): void {

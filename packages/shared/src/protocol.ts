@@ -56,6 +56,10 @@ export const S2C = {
   LOOT_RESULT: 112,
   /** Dev builds only: chest contents and spot diagnostics for the requester. */
   LOOT_DEV: 113,
+  /** Persistent ability entities for join/reconnect (no hidden reconnaissance). */
+  ABILITY_STATE: 114,
+  /** Authorized reconnaissance, sent only to its caster. */
+  ABILITY_REVEAL: 115,
 } as const;
 export type S2CType = (typeof S2C)[keyof typeof S2C];
 
@@ -494,6 +498,17 @@ export interface SelfStatusMsg {
   /** Server time when the consumable being used takes effect (0 = none), and which one (CONSUMABLE_ORDER index, -1). */
   useUntil: number;
   useItem: number;
+  tempShield?: number;
+  tempShieldUntil?: number;
+  silencedUntil?: number;
+  rootedUntil?: number;
+  noSprintUntil?: number;
+  blockedUntil?: number;
+  passiveActive?: boolean[];
+  /** Authoritative movement multipliers ×100. */
+  speed?: number;
+  airControl?: number;
+  abilityMovement?: { mode: 'grapple' | 'glide' | 'flight'; remaining: number; speed: number; gravityFactor: number; airControl: number; lift: number; anchor?: { x: number; y: number; z: number } } | null;
 }
 
 // ------------------------------------------------------------------------------------------------ loot
@@ -620,6 +635,8 @@ export const AbilityReject = {
   BLOCKED: 9,
   /** Older than a request already handled. */
   STALE: 10,
+  PASSIVE: 11,
+  SILENCED: 12,
 } as const;
 export type AbilityReject = (typeof AbilityReject)[keyof typeof AbilityReject];
 
@@ -664,6 +681,8 @@ export const DraftReject = {
   ALREADY_OWNED: 5,
   /** This player already has this round's ability (or is not in the draft). */
   NOT_PICKING: 6,
+  PASSIVE_LIMIT: 7,
+  EXPIRED: 8,
 } as const;
 export type DraftReject = (typeof DraftReject)[keyof typeof DraftReject];
 
@@ -719,6 +738,31 @@ export interface DraftStateMsg {
 
 export type StatusFx = 'shield' | 'heal' | 'slow' | 'knock' | 'dash';
 
+/** Public persistent gameplay geometry. Position mm; full size/radius cm; tangent direction ×DIR_SCALE. */
+export interface AbilityEntityView {
+  id: number;
+  a: string;
+  by: number;
+  kind: 'barrier' | 'cloud' | 'portal' | 'beacon' | 'garden' | 'wave' | 'trap';
+  at: [number, number, number];
+  dir?: [number, number, number];
+  size?: [number, number, number];
+  radius?: number;
+  endsAt: number;
+  health?: number;
+  maxHealth?: number;
+  link?: number;
+}
+export interface AbilityStateMsg { entities: AbilityEntityView[] }
+interface AbilityRevealBase { by: number; a: string; endsAt: number }
+/** Bearings deliberately have no position fields. Enemy trails are server sampled and ephemeral. */
+export type AbilityRevealMsg = AbilityRevealBase & (
+  | { kind: 'enemy'; targets: { index: number; at: [number, number, number] }[] }
+  | { kind: 'loot'; targets: { id: number; at: [number, number, number]; kind?: 'chest' | 'pickup' }[] }
+  | { kind: 'trail'; points: [number, number, number][] }
+  | { kind: 'bearing'; bearings: { direction: [number, number, number]; strength?: number }[] }
+);
+
 /**
  * What hurt a player when nobody did (`by` = the target itself): the Tormenta. Self damage without a cause is
  * drowning.
@@ -726,6 +770,8 @@ export type StatusFx = 'shield' | 'heal' | 'slow' | 'knock' | 'dash';
 export type DamageCause = 'tormenta';
 
 export type GameEvent =
+  | { e: 'abilityEntity'; entity: AbilityEntityView }
+  | { e: 'abilityEntityEnd'; id: number }
   /** A shot happened with weapon `id` from slot `w`. `to` are impact points (mm); `t` is the target index or -1 for world. */
   | { e: 'shot'; by: number; w: number; id: string; s: number; from: [number, number, number]; to: [number, number, number][]; t: number[] }
   /** Damage dealt by `by` to `target`; kinds is the hit taxonomy. */

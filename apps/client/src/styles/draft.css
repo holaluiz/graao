@@ -322,3 +322,23 @@
 @media (prefers-reduced-motion: reduce) {
   .draft, .draft-card.revealed, .draft-clock.urgent .draft-timer > i { animation: none; }
 }
+
+/* Forty spells use category filters and bounded pages; the confirm action never leaves the screen. */
+.draft-catalogue { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.draft-filters { display: flex; flex-wrap: wrap; gap: 5px; }
+.draft-filters button, .draft-pagination button { border: 1.5px solid var(--ink); border-radius: 7px; padding: 5px 9px; background: #fffaf0; color: var(--ink); font: inherit; font-size: 10px; font-weight: 850; cursor: pointer; }
+.draft-filters button[aria-pressed='true'] { background: var(--sun); box-shadow: 0 2px 0 var(--ink); }
+.draft-filters button:focus-visible, .draft-pagination button:focus-visible { outline: 3px solid var(--sky); outline-offset: 2px; }
+.draft-pagination { display: flex; justify-content: center; align-items: center; gap: 13px; font-size: 10px; font-weight: 850; }
+.draft-pagination button { min-width: 32px; font-size: 16px; padding: 1px 8px; }
+.draft-pagination button:disabled { opacity: .35; cursor: default; }
+.draft-cards, .draft[data-kind='ultimate'] .draft-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+.db-key { width: max-content; min-width: 22px; padding-inline: 3px; }
+@media (max-width: 760px) { .draft-filters { gap: 4px; } .draft-filters button { font-size: 8px; padding: 4px 6px; } }
+@media (max-width: 560px), (max-height: 620px) {
+  .draft-cards, .draft[data-kind='ultimate'] .draft-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+  .draft-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .draft-filters button { font-size: 8px; padding: 4px 2px; }
+  .draft-pagination { gap: 9px; font-size: 9px; }
+}
+@media (min-width: 561px) and (max-height: 620px) { .draft-filters { display: flex; } }

@@ -1,10 +1,12 @@
 /**
  * GRALootSpawner: where chests and ground items go on the spherical planet.
  *
- * Chest spots are authored per region (game-data CHEST_SPOTS) and checked against the real collision world: the base
- * comes from a ray onto the terrain trimesh (never "radius + height" alone), the chest leans with the surface normal,
- * and a spot is refused under water, on steep or bumpy ground, inside or under a structure, overlapping a prop, near a
- * spawn point, or without a free side to approach and open it from. A refused spot is nudged up to a few metres to the
+ * Chest spots are authored per region (game-data CHEST_SPOTS, kept in the map file) and checked against the real
+ * collision world: the base comes from a ray onto the terrain trimesh (never "radius + height" alone) — or, for spots
+ * on a prop surface (a house floor, a flat roof), from a ray down onto the props from just above the authored height —
+ * the chest leans with the surface normal, and a spot is refused under water, on steep or bumpy ground, under a
+ * structure (unless it is meant to be indoors, then it needs headroom), overlapping a prop, near a spawn point, or
+ * without a free side to approach and open it from. A refused spot is nudged up to a few metres to the
  * nearest valid one. Per match the spawner picks which spots hold a chest (seeded, every region represented, kept
  * apart). Items are spread on the local tangent plane around a chest or a fallen player and projected onto the ground.
  *
@@ -65,28 +67,49 @@ export function groundAt(physics: GamePhysics, dir: Vec3): { pos: Vec3; normal: 
 }
 
 const SPAWN_DIRS = [...SPAWNS, ...MATCH_SPAWNS].map((s) => latLonToDir(s.lat, s.lon));
-const PROPS_AND_CHESTS = groups(0xffff, Group.PROP | Group.CHEST);
+const PROPS_AND_CHESTS = groups(0xffff, Group.PROP | Group.CHEST | Group.RAIL);
+
+/** Where a chest stands, beyond its direction (ChestSpotDef fields). */
+export type ChestSurface = Pick<ChestSpotDef, 'surface' | 'height' | 'covered'>;
+
+/** The first surface under `from` along −`up` (terrain or props), within `maxDist`: point and outward normal. */
+function surfaceBelow(physics: GamePhysics, from: Vec3, up: Vec3, maxDist: number, filter: number): { pos: Vec3; normal: Vec3 } | null {
+  const hit = physics.castRayNormal(from, neg(up), maxDist, filter);
+  if (!hit) return null;
+  const n = v3dot(hit.normal, up) < 0 ? neg(hit.normal) : hit.normal;
+  return { pos: add(from, neg(up), hit.toi), normal: v3normalize(n) };
+}
 
 /** Checks one chest base under `dir`, preferring to face `yaw`. */
-export function checkChestSpot(world: GameWorld, dir: Vec3, yaw: number): { ok: boolean; reason: string; pos: Vec3; up: Vec3; forward: Vec3 } {
+export function checkChestSpot(world: GameWorld, dir: Vec3, yaw: number, where: ChestSurface = {}): { ok: boolean; reason: string; pos: Vec3; up: Vec3; forward: Vec3 } {
   const physics = world.physics;
   const radial = v3normalize(dir);
   const fail = (reason: string, pos: Vec3 = radial) => ({ ok: false, reason, pos, up: radial, forward: headingTangent(radial, yaw) });
-  const g = groundAt(physics, radial);
+  const onProp = where.surface === 'prop';
+  const floorQuery = onProp ? GROUPS_WORLD_QUERY : GROUPS_TERRAIN_QUERY;
+  let g: { pos: Vec3; normal: Vec3 } | null;
+  if (onProp) {
+    // A floor or a roof: a short ray down from just above the authored height, onto whatever is there.
+    const want = PLANET.radius + world.terrain.heightAt(radial) + (where.height ?? 0);
+    g = surfaceBelow(physics, add({ x: 0, y: 0, z: 0 }, radial, want + 1.2), radial, 2.4, GROUPS_WORLD_QUERY);
+    if (g && Math.abs(Math.hypot(g.pos.x, g.pos.y, g.pos.z) - want) > 0.5) return fail('fora da superfície', g.pos);
+  } else g = groundAt(physics, radial);
   if (!g) return fail('sem chão');
   const p = g.pos;
   if (Math.hypot(p.x, p.y, p.z) - SEA < 0.35) return fail('na água', p);
   if (v3angle(g.normal, radial) > 17 * DEG) return fail('chão inclinado', p);
   for (const s of SPAWN_DIRS) if (v3angle(radial, s) * PLANET.radius < 2.6) return fail('em cima de um spawn', p);
-  // Nothing solid overhead (inside a house, under a roof or an arch).
-  if (physics.castRay(add(p, radial, 0.05), radial, 3.2, GROUPS_PROP_QUERY)) return fail('coberto por estrutura', p);
+  // Nothing solid overhead (inside a house, under a roof or an arch) — unless it is meant to be indoors: headroom then.
+  if (where.covered) {
+    if (physics.castRay(add(p, radial, 0.05), radial, 1.9, GROUPS_PROP_QUERY)) return fail('sem espaço em cima', p);
+  } else if (physics.castRay(add(p, radial, 0.05), radial, 3.2, GROUPS_PROP_QUERY)) return fail('coberto por estrutura', p);
   const up = g.normal;
   let forward = v3normalize(v3projectOnPlane(headingTangent(radial, yaw), up));
   // Flat enough under the whole footprint: every corner within a few cm of the base plane.
   for (let k = 0; k < 4; k++) {
     const b = chestBasis(up, forward);
     const c = add(add(p, b.side, k & 1 ? 0.45 : -0.45), b.forward, k & 2 ? 0.3 : -0.3);
-    const hit = physics.castRay(add(c, up, 0.6), neg(up), 1.2, GROUPS_TERRAIN_QUERY);
+    const hit = physics.castRay(add(c, up, 0.6), neg(up), 1.2, floorQuery);
     if (!hit || Math.abs(0.6 - hit.toi) > 0.16) return fail('chão irregular', p);
   }
   // A side to open it from: walkable, free of props and in sight of the chest. The preferred front first.
@@ -95,7 +118,8 @@ export function checkChestSpot(world: GameWorld, dir: Vec3, yaw: number): { ok: 
     const d = v3rotateAxis(forward, up, (-k * Math.PI) / 2);
     const a = add(add(p, d, 1.5), up, 0.95);
     if (physics.ballOverlaps(a, 0.35, PROPS_AND_CHESTS)) continue;
-    const ga = groundAt(physics, a);
+    const ga = onProp ? surfaceBelow(physics, a, up, 1.4, GROUPS_WORLD_QUERY) : groundAt(physics, a);
+    if (onProp && ga && v3dot(add(ga.pos, p, -1), up) < -0.3) continue;
     if (!ga || Math.hypot(ga.pos.x, ga.pos.y, ga.pos.z) - SEA < 0.1 || v3angle(ga.normal, v3normalize(a)) > 30 * DEG) continue;
     const center = add(p, up, 0.4);
     const to = { x: center.x - a.x, y: center.y - a.y, z: center.z - a.z };
@@ -122,7 +146,7 @@ export function resolveChestSpot(world: GameWorld, def: ChestSpotDef): ChestSpot
     for (let k = 0; k < steps; k++) {
       const t = v3rotateAxis(north, center, (k / steps) * Math.PI * 2);
       const dir = v3normalize(v3rotateAxis(center, v3normalize(v3cross(center, t)), ring / PLANET.radius));
-      const r = checkChestSpot(world, dir, def.yaw ?? 0);
+      const r = checkChestSpot(world, dir, def.yaw ?? 0, def);
       first ??= r;
       if (r.ok) return quantize(def, region, true, '', ring, r);
     }

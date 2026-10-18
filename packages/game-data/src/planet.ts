@@ -29,11 +29,38 @@ export type TerrainFeature =
   /** Digs a bowl (lakes, sea). */
   | { kind: 'basin'; lat: number; lon: number; radiusDeg: number; depth: number }
   /** A narrow crack between two points (the crystal fracture). */
-  | { kind: 'fissure'; lat1: number; lon1: number; lat2: number; lon2: number; widthDeg: number; depth: number; rimHeight: number };
+  | { kind: 'fissure'; lat1: number; lon1: number; lat2: number; lon2: number; widthDeg: number; depth: number; rimHeight: number }
+  /**
+   * A watercourse or a valley along a polyline ([lat, lon] points), carved down to an absolute `floor` height (m above
+   * the radius) over `widthDeg` either side of the line, with banks blending back to the ground over `bankDeg`. Carved
+   * after the flattening, so it cuts through squares and plateaus; a floor under the sea level holds real water.
+   */
+  | { kind: 'channel'; points: [number, number][]; widthDeg: number; bankDeg: number; floor: number }
+  /** A mountain crest between two points: a rounded ridge `height` m high, `widthDeg` either side, a jagged top. */
+  | { kind: 'ridge'; lat1: number; lon1: number; lat2: number; lon2: number; widthDeg: number; height: number };
+
+/** Polylines shared by the terrain and the map (docs/world/PLANET_LAYOUT.md). */
+export const RIVERS = {
+  /** Córrego das Lanternas: a spring east of the vila, under the stone bridge, the viaduct's valley, into the lake. */
+  corrego: [[-5.38, 19.39], [-1.82, 10.27], [-0.03, -2.28], [-3.52, -9.69], [-8.7, -14.86], [-13.25, -18.98], [-18.28, -23.89], [-23.71, -29.75]] as [number, number][],
+  /** The Bairro do Horizonte's valley (baixada), spanned by the viaduct. */
+  baixada: [[-4.1, -10.83], [-8.7, -14.86], [-13.25, -18.98], [-18.28, -23.89]] as [number, number][],
+};
 
 export const TERRAIN_FEATURES: TerrainFeature[] = [
-  // Lantern Village plaza.
-  { kind: 'flatten', lat: 8, lon: 0, radiusDeg: 13, falloffDeg: 7, height: 1.1 },
+  // Vila das Lanternas (after Ouro Preto): the largo at the foot of the chapel hill, the adro terrace on top.
+  { kind: 'flatten', lat: 8, lon: 0, radiusDeg: 6.5, falloffDeg: 4, height: 1.1 },
+  { kind: 'mound', lat: 30.9, lon: 0, radiusDeg: 20, height: 5.8 },
+  { kind: 'flatten', lat: 28.05, lon: 0, radiusDeg: 3.6, falloffDeg: 2.6, height: 6.4 },
+  // Bairro do Horizonte (after Belo Horizonte): a plateau cut by the valley of the stream; the viaduct spans it.
+  { kind: 'flatten', lat: -12.06, lon: -18.02, radiusDeg: 11, falloffDeg: 5, height: 1.7 },
+  { kind: 'channel', points: RIVERS.baixada, widthDeg: 3.0, bankDeg: 2.4, floor: 0.35 },
+  { kind: 'channel', points: RIVERS.corrego, widthDeg: 0.75, bankDeg: 0.6, floor: -1.55 },
+  // Lago Espelho's island (after the islands of the Pampulha lagoon).
+  { kind: 'mound', lat: -28.31, lon: -42.92, radiusDeg: 3.6, height: 5.6 },
+  // Serra do Mirante (after the Serra do Curral): two crests from the Planalto toward the Fenda, a pass between them.
+  { kind: 'ridge', lat1: 68.4, lon1: -63.5, lat2: 60.6, lon2: -83.5, widthDeg: 5.2, height: 6.2 },
+  { kind: 'ridge', lat1: 57.9, lon1: -87.7, lat2: 49.1, lon2: -96.9, widthDeg: 4.6, height: 5.0 },
   // Giant Tree hill.
   { kind: 'mound', lat: 34, lon: 62, radiusDeg: 16, height: 7 },
   // Observatory hill.
@@ -62,47 +89,22 @@ export type StructureKind =
   | 'well'
   | 'wall';
 
-export interface StructurePlacement {
-  kind: StructureKind;
-  lat: number;
-  lon: number;
-  /** Heading around the local up (degrees, 0 = toward the north pole tangent). */
-  yaw: number;
-  /** Uniform scale or variant-specific size. */
-  scale?: number;
-  variant?: number;
-  /** Extra height above the terrain (floating pieces). */
-  lift?: number;
-  /** Keeps scattered props away (degrees of arc). */
-  clearDeg?: number;
-}
+/**
+ * Authored structures and kit pieces live in the versioned map file (world/planeta-graao.map.json, see world/map.ts);
+ * classic structures appear there under STRUCTURE_PREFABS ids.
+ */
 
-export const STRUCTURES: StructurePlacement[] = [
-  // Lantern Village: houses around a small plaza with a well.
-  { kind: 'well', lat: 8, lon: 0, yaw: 0, clearDeg: 3 },
-  { kind: 'house', lat: 13.2, lon: -3.5, yaw: 170, variant: 0, clearDeg: 4.5 },
-  { kind: 'house', lat: 12.5, lon: 5.5, yaw: 200, variant: 1, clearDeg: 4.5 },
-  { kind: 'house', lat: 6.5, lon: 8.5, yaw: 265, variant: 2, clearDeg: 4.5 },
-  { kind: 'house', lat: 1.8, lon: 4.0, yaw: 330, variant: 0, clearDeg: 4.5 },
-  { kind: 'house', lat: 2.5, lon: -6.0, yaw: 30, variant: 1, clearDeg: 4.5 },
-  { kind: 'house', lat: 8.5, lon: -9.5, yaw: 95, variant: 2, clearDeg: 4.5 },
-  { kind: 'lamp', lat: 10.5, lon: 1.5, yaw: 0, clearDeg: 1 },
-  { kind: 'lamp', lat: 5.2, lon: -2.2, yaw: 0, clearDeg: 1 },
-  { kind: 'lamp', lat: 8.0, lon: 4.2, yaw: 0, clearDeg: 1 },
-  { kind: 'wall', lat: 16.5, lon: 1, yaw: 90, scale: 1, clearDeg: 3 },
-  // Landmarks.
-  { kind: 'giant_tree', lat: 34, lon: 62, yaw: 0, scale: 1, clearDeg: 7 },
-  { kind: 'tower', lat: -18, lon: 128, yaw: 40, scale: 1, clearDeg: 5 },
-  { kind: 'arch', lat: -4, lon: 58, yaw: 30, clearDeg: 3 },
-  { kind: 'arch', lat: -6, lon: 66, yaw: 75, clearDeg: 3 },
-  { kind: 'crystal_cluster', lat: 44, lon: -112, yaw: 10, scale: 1.4, clearDeg: 3 },
-  { kind: 'crystal_cluster', lat: 38, lon: -100, yaw: 80, scale: 1.0, clearDeg: 3 },
-  { kind: 'crystal_cluster', lat: 33, lon: -91, yaw: 140, scale: 1.2, clearDeg: 3 },
-  { kind: 'floating_shard', lat: 2, lon: -150, yaw: 0, scale: 1, lift: 16, clearDeg: 4 },
-];
+/** Landscapes (docs/world/MINAS_GERAIS_ART_DIRECTION.md): each keeps its own vegetation. */
+export type Biome = 'colonial' | 'urbano' | 'orla' | 'serra' | 'mata' | 'campo';
+
+/**
+ * Scattered vegetation and rocks: broadleaf trees, araucárias ('pine'), cerrado trees, flowering ipês, jerivá palms,
+ * rocks (with colliders), and bushes, grass, flowers, canelas-de-ema and golden grass tufts (decoration).
+ */
+export type ScatterKind = 'tree' | 'pine' | 'cerrado' | 'ipe' | 'palm' | 'rock' | 'bush' | 'grass' | 'flower' | 'canela' | 'capim';
 
 export interface ScatterRule {
-  kind: 'tree' | 'pine' | 'rock' | 'bush' | 'grass' | 'flower';
+  kind: ScatterKind;
   count: number;
   /** Minimum terrain height above sea level. */
   minHeight: number;
@@ -113,15 +115,28 @@ export interface ScatterRule {
   /** Client-only decoration: no collider. */
   visualOnly: boolean;
   seed: number;
+  /** Where it grows: acceptance per biome (missing biome = never). Without it, everywhere. */
+  biomes?: Partial<Record<Biome, number>>;
 }
 
 export const SCATTER: ScatterRule[] = [
-  { kind: 'tree', count: 130, minHeight: 0.6, maxSlope: 0.6, density: { frequency: 2.4, threshold: 0.05 }, visualOnly: false, seed: 11 },
-  { kind: 'pine', count: 70, minHeight: 1.6, maxSlope: 0.7, density: { frequency: 3.1, threshold: 0.15 }, visualOnly: false, seed: 12 },
-  { kind: 'rock', count: 90, minHeight: -0.4, maxSlope: 1.2, visualOnly: false, seed: 13 },
+  // Broadleaf woods: dense in the Bosque's mata, scattered in the open country.
+  { kind: 'tree', count: 130, minHeight: 0.6, maxSlope: 0.6, density: { frequency: 2.4, threshold: 0.05 }, visualOnly: false, seed: 11, biomes: { mata: 1, campo: 0.55, colonial: 0.5, orla: 0.35, urbano: 0.25 } },
+  // Araucárias on the higher ground.
+  { kind: 'pine', count: 55, minHeight: 1.6, maxSlope: 0.7, density: { frequency: 3.1, threshold: 0.15 }, visualOnly: false, seed: 12, biomes: { campo: 0.5, mata: 0.7, serra: 0.2 } },
+  // Cerrado: twisted trees with flat crowns, the serra and the open country.
+  { kind: 'cerrado', count: 95, minHeight: 0.5, maxSlope: 0.8, visualOnly: false, seed: 17, biomes: { serra: 1, campo: 0.75, mata: 0.15, orla: 0.2 } },
+  // Ipês flowering in the towns and along the lake.
+  { kind: 'ipe', count: 30, minHeight: 0.5, maxSlope: 0.5, visualOnly: false, seed: 18, biomes: { urbano: 1, colonial: 1, orla: 0.8, campo: 0.25 } },
+  // Jerivá palms by the water and the farms.
+  { kind: 'palm', count: 34, minHeight: 0.3, maxSlope: 0.5, visualOnly: false, seed: 19, biomes: { orla: 1, mata: 0.5, campo: 0.3, urbano: 0.3 } },
+  { kind: 'rock', count: 110, minHeight: -0.4, maxSlope: 1.2, visualOnly: false, seed: 13, biomes: { serra: 1, campo: 0.6, mata: 0.6, orla: 0.3, colonial: 0.3, urbano: 0.1 } },
   { kind: 'bush', count: 160, minHeight: 0.4, maxSlope: 0.8, visualOnly: true, seed: 14 },
+  // Campo rupestre: canelas-de-ema and golden grass on the serra.
+  { kind: 'canela', count: 320, minHeight: 0.5, maxSlope: 1.0, visualOnly: true, seed: 20, biomes: { serra: 1, campo: 0.08 } },
+  { kind: 'capim', count: 1100, minHeight: 0.4, maxSlope: 0.9, visualOnly: true, seed: 21, biomes: { serra: 1, campo: 0.35, orla: 0.2 } },
   { kind: 'grass', count: 42000, minHeight: 0.35, maxSlope: 0.75, density: { frequency: 3.4, threshold: -0.35 }, visualOnly: true, seed: 15 },
-  { kind: 'flower', count: 1800, minHeight: 0.5, maxSlope: 0.6, density: { frequency: 5.1, threshold: 0.1 }, visualOnly: true, seed: 16 },
+  { kind: 'flower', count: 1800, minHeight: 0.5, maxSlope: 0.6, density: { frequency: 5.1, threshold: 0.1 }, visualOnly: true, seed: 16, biomes: { campo: 1, mata: 1, orla: 1, colonial: 0.6, urbano: 0.35, serra: 0.45 } },
 ];
 
 /** Free-roam spawn points (also used as fallback landing points). */
@@ -134,7 +149,7 @@ export const SPAWNS: { lat: number; lon: number }[] = [
   { lat: -15, lon: -150 },
   { lat: 4, lon: -2 },
   { lat: 11, lon: -2 },
-  { lat: 7, lon: 6 },
+  { lat: 6.5, lon: 4.5 },
   { lat: 11, lon: -6 },
 ];
 
@@ -161,15 +176,37 @@ export const MATCH_SPAWNS: { lat: number; lon: number }[] = [
 /** Scattered props keep this far from every spawn point (degrees of arc). */
 export const SPAWN_CLEAR_DEG = 2;
 
-/** Named regions for HUD location labels and the UFO overview. */
-export const REGIONS: { name: string; lat: number; lon: number; radiusDeg: number }[] = [
-  { name: 'Vila das Lanternas', lat: 8, lon: 0, radiusDeg: 16 },
-  { name: 'A Árvore Gigante', lat: 34, lon: 62, radiusDeg: 16 },
-  { name: 'Velho Observatório', lat: -18, lon: 128, radiusDeg: 15 },
-  { name: 'Lago Espelho', lat: -30, lon: -38, radiusDeg: 16 },
-  { name: 'Fenda de Cristal', lat: 40, lon: -103, radiusDeg: 18 },
-  { name: 'Lasca do Céu', lat: 2, lon: -150, radiusDeg: 12 },
-  { name: 'Arcos Afundados', lat: -5, lon: 62, radiusDeg: 10 },
-  { name: 'Mar do Sul', lat: -78, lon: 20, radiusDeg: 28 },
-  { name: 'Planalto Norte', lat: 72, lon: -20, radiusDeg: 22 },
+/**
+ * Named regions for HUD location labels, the UFO overview and the map. The five `main` regions are the points of
+ * interest the planet is designed around (docs/world/PLANET_LAYOUT.md); the rest are smaller landmarks between them.
+ * A position takes the name of the closest region whose radius contains it.
+ */
+export interface RegionDef {
+  /** Stable key (map placements, docs). */
+  key: string;
+  name: string;
+  lat: number;
+  lon: number;
+  radiusDeg: number;
+  main?: boolean;
+  /** Landscape (vegetation): see Biome. */
+  biome?: Biome;
+  /** Built-up core (degrees of arc): no wild trees or rocks inside, the streets stay clear. */
+  builtDeg?: number;
+  /** What the place is after (docs and the editor). */
+  inspiration?: string;
+}
+
+export const REGIONS: RegionDef[] = [
+  { key: 'vila', name: 'Vila das Lanternas', lat: 14.5, lon: 0, radiusDeg: 18, main: true, biome: 'colonial', builtDeg: 15.5, inspiration: 'Ouro Preto, Mariana e as cidades históricas mineiras' },
+  { key: 'bairro', name: 'Bairro do Horizonte', lat: -12.06, lon: -18.02, radiusDeg: 11, main: true, biome: 'urbano', builtDeg: 10.5, inspiration: 'Belo Horizonte: Santa Tereza, viadutos, praças e o Mercado' },
+  { key: 'lago', name: 'Lago Espelho', lat: -30, lon: -38, radiusDeg: 15, main: true, biome: 'orla', inspiration: 'A orla modernista da Pampulha' },
+  { key: 'bosque', name: 'Bosque dos Varais', lat: 34, lon: 62, radiusDeg: 17, main: true, biome: 'mata', inspiration: 'Serra do Cipó, sítios e quintais mineiros' },
+  { key: 'fenda', name: 'Fenda de Cristal', lat: 40, lon: -103, radiusDeg: 15, main: true, biome: 'serra', inspiration: 'Rochas ferruginosas e minas antigas' },
+  { key: 'planalto', name: 'Planalto Norte', lat: 72, lon: -20, radiusDeg: 20, main: true, biome: 'serra', inspiration: 'Campos e mirantes da Serra do Curral' },
+  { key: 'serra', name: 'Serra do Mirante', lat: 60.5, lon: -82, radiusDeg: 11, biome: 'serra', inspiration: 'As cristas de itabirito da Serra do Curral' },
+  { key: 'observatorio', name: 'Velho Observatório', lat: -18, lon: 128, radiusDeg: 15, biome: 'campo' },
+  { key: 'lasca', name: 'Lasca do Céu', lat: 2, lon: -150, radiusDeg: 12, biome: 'serra' },
+  { key: 'arcos', name: 'Arcos Afundados', lat: -5, lon: 62, radiusDeg: 10, biome: 'mata' },
+  { key: 'mar', name: 'Mar do Sul', lat: -78, lon: 20, radiusDeg: 28 },
 ];

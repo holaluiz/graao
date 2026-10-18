@@ -114,9 +114,17 @@ describe('GRALootSpawner on the sphere', () => {
     for (const s of spots) {
       expect(s.ok, `${s.def.id}: ${s.reason}`).toBe(true);
       const r = Math.hypot(s.pos.x, s.pos.y, s.pos.z);
-      // On the collision trimesh itself (not at an assumed radius or the analytic height) and above the sea.
-      const ground = groundAt(world.physics, s.pos)!.pos;
-      expect(Math.abs(r - Math.hypot(ground.x, ground.y, ground.z))).toBeLessThan(0.01);
+      // On the collision surface itself (not at an assumed radius or the analytic height) and above the sea: the
+      // terrain trimesh, or for floor and roof spots the prop right under the chest.
+      if (s.def.surface === 'prop') {
+        const up = v3normalize(s.pos);
+        const hit = world.physics.castRay({ x: s.pos.x + up.x * 0.5, y: s.pos.y + up.y * 0.5, z: s.pos.z + up.z * 0.5 }, { x: -up.x, y: -up.y, z: -up.z }, 1);
+        expect(hit, s.def.id).not.toBeNull();
+        expect(Math.abs(hit!.toi - 0.5), s.def.id).toBeLessThan(0.01);
+      } else {
+        const ground = groundAt(world.physics, s.pos)!.pos;
+        expect(Math.abs(r - Math.hypot(ground.x, ground.y, ground.z))).toBeLessThan(0.01);
+      }
       expect(r).toBeGreaterThan(PLANET.radius + PLANET.seaLevel + 0.3);
       expect(v3angle(s.up, v3normalize(s.pos))).toBeLessThan((18 * Math.PI) / 180);
       expect(Math.abs(v3dot(s.up, s.forward))).toBeLessThan(1e-3);

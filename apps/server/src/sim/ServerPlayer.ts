@@ -1,7 +1,7 @@
 /** Authoritative per-player state on the server (movement, vitals, weapons, abilities). */
 import type { Client } from '@colyseus/core';
-import { manaShown, newInput, newInventory, newVitals, type AbilityActor, type CharacterBody, type CharacterInput, type CharacterState, type Inventory, type LootActor, type Vitals } from '@graao/game-core';
-import { AMMO_TYPES, BOT_KIT, CONSUMABLE_ORDER, LOADOUT_SLOTS, MOVEMENT, STARTING_KIT, WEAPON_SLOT_COUNT, type Loadout } from '@graao/game-data';
+import { manaShown, newAbilityRuntime, passiveModifiers, statusModifiers, newInput, newInventory, newVitals, type AbilityActor, type CharacterBody, type CharacterInput, type CharacterState, type Inventory, type LootActor, type Vitals } from '@graao/game-core';
+import { ABILITIES, AMMO_TYPES, BOT_KIT, CONSUMABLE_ORDER, LOADOUT_SLOTS, MOVEMENT, STARTING_KIT, WEAPON_SLOT_COUNT, type Loadout } from '@graao/game-data';
 import { DeployState, type CharacterAppearance, type InputCmd, type SelfStatusMsg, type Vec3 } from '@graao/shared';
 
 /** A dash accepted by the ability system, started when movement command `seq` is simulated. */
@@ -75,6 +75,7 @@ export class ServerPlayer implements AbilityActor, LootActor {
   slowUntil = 0;
   slowFactor = 1;
   lastAbilitySeq = -1;
+  runtime = newAbilityRuntime(Date.now());
   pendingDash: PendingDash | null = null;
   private lastStatusKey = '';
 
@@ -97,6 +98,10 @@ export class ServerPlayer implements AbilityActor, LootActor {
   }
 
   status(): SelfStatusMsg {
+    const now = Date.now();
+    const passive = passiveModifiers(this.loadout, this.runtime.passive, now, this.vitals.alive);
+    const status = statusModifiers(this.runtime, now);
+    const until = (kind: string) => Math.max(0, ...this.runtime.effects.filter((e) => e.kind === kind && e.endsAt > now).map((e) => e.endsAt));
     return {
       weapon: this.weapon,
       ammo: this.inv.slots.map((s) => s?.ammo ?? 0),
@@ -116,6 +121,16 @@ export class ServerPlayer implements AbilityActor, LootActor {
       inv: CONSUMABLE_ORDER.map((c) => this.inv.consumables[c]),
       useUntil: this.useUntil,
       useItem: this.useItem,
+      tempShield: this.vitals.temporaryShield ?? 0,
+      tempShieldUntil: this.vitals.temporaryShieldUntil ?? 0,
+      silencedUntil: until('silence'),
+      rootedUntil: until('root'),
+      noSprintUntil: until('noSprint'),
+      blockedUntil: this.state.abilityMovement?.mode === 'flight' ? now + this.state.abilityMovement.remaining * 1000 : 0,
+      passiveActive: this.loadout.map((id) => ABILITIES[id].kind === 'passive' && this.runtime.passive.active),
+      speed: Math.round(passive.speed * status.speedFactor * 100),
+      airControl: Math.round(passive.airControl * 100),
+      abilityMovement: this.state.abilityMovement ? { ...this.state.abilityMovement } : null,
     };
   }
 

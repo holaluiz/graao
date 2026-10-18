@@ -160,8 +160,11 @@ describe('spherical character controller', () => {
   });
 
   it('runs a full lap around the planet without flips, NaNs or getting stuck', () => {
-    // Run along the great circle through the spawn heading "east" (constant camera-relative forward input).
-    const s = createCharacterState(start, northTangent(spawnDir));
+    // Run along the meridian through the village plaza, heading north up Rua do Norte (the spawn itself faces the
+    // Casa da Laje's wall: a straight runner would just stand against it) and on around the planet.
+    const lapDir = latLonToDir(8.9, 0.35);
+    const lapGround = world.terrain.surfaceAt(lapDir);
+    const s = createCharacterState({ x: lapGround.x + lapDir.x * 0.3, y: lapGround.y + lapDir.y * 0.3, z: lapGround.z + lapDir.z * 0.3 }, northTangent(lapDir));
     const body = motor.createBody(s);
     const inp = newInput();
     let heading = northTangent(spawnDir);

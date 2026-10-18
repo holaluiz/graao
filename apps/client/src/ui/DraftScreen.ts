@@ -4,6 +4,7 @@ import type { CharacterAppearance, DraftStateMsg } from '@graao/shared';
 import type { Cue } from '../audio/GRAAudioManager';
 import { ABILITY_ICONS } from './abilityIcons';
 import { avatarPortrait } from './creatorPreviews';
+import { DEFAULT_BINDINGS, keyLabel, type KeyBindings } from '../game/KeyBindings';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -31,12 +32,23 @@ const TAGS: Record<string, string> = {
 };
 const number = (n: number) => String(Math.round(n * 10) / 10).replace('.', ',');
 const seconds = (n: number) => `${number(n)} s`;
+const CATEGORIES = { all: 'Todas', mobility: 'Mobilidade', control: 'Controle', defense: 'Defesa', exploration: 'Exploração', passive: 'Passivas', ultimate: 'Supremos' } as const;
+type Category = keyof typeof CATEGORIES;
+
+/** The same page powers keyboard selection and cards, so hidden pages cannot be selected by accident. */
+export function draftCatalogPage(pool: readonly string[], category: Category, page: number, size: number): { ids: string[]; page: number; pages: number; total: number } {
+  const filtered = pool.filter((id) => isAbilityId(id) && (category === 'all' || ABILITIES[id].category === category));
+  const pages = Math.max(1, Math.ceil(filtered.length / size));
+  const current = Math.max(0, Math.min(page, pages - 1));
+  return { ids: filtered.slice(current * size, (current + 1) * size), page: current, pages, total: filtered.length };
+}
 
 /** Ownership can repeat across players in larger rooms, but never inside a player's own build. */
 export function isDraftChoiceAvailable(s: DraftStateMsg, me: number, id: string | null): boolean {
   if (!id || !isAbilityId(id) || s.stage !== 'pick' || !s.pool.includes(id) || ABILITIES[id].slotType !== s.kind) return false;
   const seat = s.seats.find((x) => x.index === me);
   if (!seat?.picking || seat.picks.includes(id)) return false;
+  if (ABILITIES[id].kind === 'passive' && seat.picks.some((pick) => isAbilityId(pick) && ABILITIES[pick].kind === 'passive')) return false;
   return !s.unique || !s.owners.some(([owned]) => owned === id);
 }
 
@@ -60,6 +72,7 @@ function effectFacts(effects: readonly AbilityEffect[]): string[] {
         `Área de ${number(e.radius)} m de raio${e.delay ? ` · aviso de ${seconds(e.delay)}` : ''}${e.pulses > 1 ? ` · ${e.pulses} pulsos` : ''}`,
         ...effectFacts(e.effects),
       ];
+      default: return [];
     }
   });
 }
@@ -92,7 +105,9 @@ export class DraftScreen {
   private readonly catalogueHead = el('div', 'draft-catalogue-head', this.catalogue);
   private readonly catalogueTitle = el('strong', '', this.catalogueHead);
   private readonly priorityEl = el('span', 'draft-priority', this.catalogueHead);
+  private readonly filters = el('nav', 'draft-filters', this.catalogue);
   private readonly cardsEl = el('div', 'draft-cards', this.catalogue);
+  private readonly pagination = el('nav', 'draft-pagination', this.catalogue);
   private readonly details = el('aside', 'draft-details', this.workspace);
   private readonly detailBody = el('div', 'draft-detail-body', this.details);
   private readonly detailHead = el('div', 'draft-detail-head', this.detailBody);
@@ -129,12 +144,20 @@ export class DraftScreen {
   private cardKey = '';
   private detailKey = '';
   private readonly cards = new Map<string, HTMLButtonElement>();
+  private keyBindings: KeyBindings = { ...DEFAULT_BINDINGS };
+  private category: Category = 'all';
+  private page = 0;
+  private visibleIds: string[] = [];
+  private readonly small = window.matchMedia('(max-width: 560px), (max-height: 620px)');
 
   constructor(private readonly actions: DraftActions) {
     this.el.hidden = true;
     this.el.setAttribute('aria-label', 'Escolha de habilidades');
     this.build.setAttribute('aria-label', 'Sua combinação de quatro habilidades');
     this.cardsEl.setAttribute('aria-label', 'Habilidades disponíveis');
+    this.filters.setAttribute('aria-label', 'Categorias de magias');
+    this.pagination.setAttribute('aria-label', 'Páginas de magias');
+    this.small.addEventListener('change', () => { this.cardKey = ''; this.render(); });
     this.statusEl.setAttribute('role', 'status');
     this.confirm.type = this.change.type = 'button';
     this.confirm.addEventListener('click', () => this.submitSelection());
@@ -148,9 +171,9 @@ export class DraftScreen {
         return;
       }
       const n = Number(e.key);
-      if (!Number.isInteger(n) || n < 1 || n > this.state.pool.length) return;
+      if (!Number.isInteger(n) || n < 1 || n > this.visibleIds.length) return;
       e.preventDefault();
-      this.choose(this.state.pool[n - 1]!);
+      this.choose(this.visibleIds[n - 1]!);
     });
   }
 
@@ -168,6 +191,11 @@ export class DraftScreen {
 
   get visible(): boolean { return !this.el.hidden; }
 
+  setKeyBindings(bindings: KeyBindings): void {
+    this.keyBindings = { ...bindings };
+    if (this.state) this.renderBuild(this.state);
+  }
+
   /** Only the server commits choices and reveals opponents' abilities. */
   setState(s: DraftStateMsg, me: number, names: (index: number) => string, looks?: (index: number) => CharacterAppearance | undefined): void {
     const prev = this.state;
@@ -177,6 +205,7 @@ export class DraftScreen {
     this.names = names;
     if (looks) this.looks = looks;
     if (newWindow) {
+      if (!prev || prev.round !== s.round) { this.category = s.kind === 'ultimate' ? 'ultimate' : 'all'; this.page = 0; }
       this.selected = s.mine;
       this.sending = null;
       this.editing = false;
@@ -269,6 +298,7 @@ export class DraftScreen {
     this.priorityEl.classList.toggle('mine', top === this.me);
     this.priorityEl.textContent = top === this.me ? '★ Sua prioridade' : `★ Prioridade: ${this.names(top ?? 0)}`;
     this.renderBuild(s);
+    this.renderFilters(s);
     this.renderCards(s);
     this.renderDetails();
     this.renderActions(s);
@@ -280,19 +310,22 @@ export class DraftScreen {
     const pending = this.selected ?? s.mine;
     const complete = seat?.picks.length ?? 0;
     const selectedCount = complete + (s.stage === 'pick' && seat?.picking && pending ? 1 : 0);
-    this.buildProgress.textContent = `Progresso: ${selectedCount} de ${s.rounds} selecionadas`;
+    const passives = seat?.picks.filter((id) => isAbilityId(id) && ABILITIES[id].kind === 'passive').length ?? 0;
+    this.buildProgress.textContent = `${selectedCount}/${s.rounds} selecionadas · ${passives}/1 passiva`;
     this.buildSlots.replaceChildren();
     for (let k = 0; k < s.rounds; k++) {
       const current = s.stage === 'pick' && k === s.round && !!seat?.picking;
       const committed = seat?.picks[k];
       const id = committed ?? (current ? pending : null);
       const slot = el('div', `draft-build-slot${k === s.rounds - 1 ? ' ultimate' : ''}${current ? ' current' : ''}${committed ? ' filled' : ''}`, this.buildSlots);
-      el('span', 'db-key', slot, String(k + 1));
+      const passive = !!id && isAbilityId(id) && ABILITIES[id].kind === 'passive';
+      const binding = keyLabel(this.keyBindings[(['ability1', 'ability2', 'ability3', 'ultimate'] as const)[k]!]);
+      el('span', 'db-key', slot, passive ? 'P' : binding);
       const art = el('span', 'db-art', slot);
       if (id && isAbilityId(id)) art.appendChild(icon(ABILITIES[id], 'db-icon'));
       else art.textContent = k === s.rounds - 1 ? '✦' : '+';
       const identity = el('div', 'db-identity', slot);
-      el('span', 'db-kind', identity, k === s.rounds - 1 ? 'SUPREMO · TECLA 4' : `BÁSICA ${k + 1} · TECLA ${k + 1}`);
+      el('span', 'db-kind', identity, passive ? 'PASSIVA · AUTOMÁTICA' : `${k === s.rounds - 1 ? 'SUPREMO' : `BÁSICA ${k + 1}`} · ${binding}`);
       el('strong', 'db-name', identity, id && isAbilityId(id) ? ABILITIES[id].name : current ? 'Escolha agora' : 'A escolher');
       el('span', 'db-state', identity, committed ? '✓ Confirmada' : current && id ? s.mine && !this.editing ? '✓ Confirmada · aguardando' : 'Prévia · falta confirmar' : current ? 'Sua vez de escolher' : `Rodada ${k + 1}`);
       // A confirmed choice can still be swapped while its round is open.
@@ -304,13 +337,36 @@ export class DraftScreen {
     }
   }
 
+  private renderFilters(s: DraftStateMsg): void {
+    this.filters.replaceChildren();
+    const categories: Category[] = s.kind === 'ultimate' ? ['ultimate'] : ['all', 'mobility', 'control', 'defense', 'exploration', 'passive'];
+    for (const category of categories) {
+      const button = el('button', '', this.filters, CATEGORIES[category]);
+      button.type = 'button';
+      button.setAttribute('aria-pressed', String(this.category === category));
+      button.addEventListener('click', () => { this.category = category; this.page = 0; this.render(); });
+    }
+  }
+
   private renderCards(s: DraftStateMsg): void {
-    const key = `${s.round}|${s.pool.join(',')}`;
+    const size = this.small.matches ? 4 : 6;
+    const page = draftCatalogPage(s.pool, this.category, this.page, size);
+    this.page = page.page;
+    this.visibleIds = page.ids;
+    this.pagination.replaceChildren();
+    const previous = el('button', '', this.pagination, '←');
+    previous.type = 'button'; previous.disabled = page.page === 0; previous.setAttribute('aria-label', 'Página anterior de magias');
+    previous.addEventListener('click', () => { this.page--; this.render(); });
+    el('span', '', this.pagination, `${page.page + 1} / ${page.pages} · ${page.total} magias`);
+    const next = el('button', '', this.pagination, '→');
+    next.type = 'button'; next.disabled = page.page + 1 >= page.pages; next.setAttribute('aria-label', 'Próxima página de magias');
+    next.addEventListener('click', () => { this.page++; this.render(); });
+    const key = `${s.round}|${this.category}|${this.page}|${page.ids.join(',')}`;
     if (key !== this.cardKey) {
       this.cardKey = key;
       this.cardsEl.replaceChildren();
       this.cards.clear();
-      s.pool.forEach((id, i) => {
+      page.ids.forEach((id, i) => {
         if (!isAbilityId(id)) return;
         const def = ABILITIES[id];
         const b = el('button', 'draft-card', this.cardsEl);
@@ -320,12 +376,15 @@ export class DraftScreen {
         el('span', 'dc-key', b, String(i + 1));
         const art = el('span', 'dc-art', b);
         art.appendChild(icon(def, 'dc-icon'));
-        el('span', 'dc-category', b, def.slotType === 'ultimate' ? 'SUPREMO' : 'BÁSICA');
+        el('span', 'dc-category', b, CATEGORIES[def.category]);
         el('span', 'dc-name', b, def.name);
         el('span', 'dc-blurb', b, def.blurb);
         const stats = el('span', 'dc-stats', b);
-        el('span', 'dc-mana', stats, `◆ ${def.manaCost} mana`);
-        el('span', 'dc-cd', stats, `⟳ ${seconds(def.cooldown)}`);
+        if (def.kind === 'passive') el('span', 'dc-mana', stats, 'PASSIVA · AUTOMÁTICA');
+        else {
+          el('span', 'dc-mana', stats, `◆ ${def.manaCost} mana`);
+          el('span', 'dc-cd', stats, `⟳ ${seconds(def.cooldown)}`);
+        }
         el('span', 'dc-stamp', b);
         b.addEventListener('click', () => this.choose(id));
         b.addEventListener('mouseenter', () => this.inspect(id));
@@ -355,7 +414,8 @@ export class DraftScreen {
       b.classList.toggle('revealed', !!rev);
       b.classList.toggle('contested', !!rev?.contested);
       const stamp = b.querySelector('.dc-stamp') as HTMLElement;
-      stamp.textContent = mine ? 'JÁ ESCOLHIDA' : taken ? this.names(owner!) : confirmed ? 'CONFIRMADA' : selected ? 'SELECIONADA' : '';
+      const passiveLimit = isAbilityId(id) && ABILITIES[id].kind === 'passive' && mySeat?.picks.some((pick) => isAbilityId(pick) && ABILITIES[pick].kind === 'passive');
+      stamp.textContent = mine ? 'JÁ ESCOLHIDA' : passiveLimit ? 'LIMITE: 1 PASSIVA' : taken ? this.names(owner!) : confirmed ? 'CONFIRMADA' : selected ? 'SELECIONADA' : '';
       b.setAttribute('aria-label', `${ABILITIES[id as keyof typeof ABILITIES]?.name ?? id}${taken ? `, ${mine ? 'já está na sua combinação' : `já é de ${this.names(owner!)}`}` : ''}${selected ? ', selecionada' : ''}${confirmed ? ', confirmada' : ''}`);
     }
   }
@@ -370,13 +430,13 @@ export class DraftScreen {
     this.detailArt.replaceChildren(icon(def, 'draft-detail-icon'));
     this.detailArt.style.setProperty('--ab-color', def.presentation.color);
     this.detailArt.style.setProperty('--ab-color2', def.presentation.color2);
-    this.detailCategory.textContent = def.slotType === 'ultimate' ? 'HABILIDADE SUPREMA' : 'HABILIDADE BÁSICA';
+    this.detailCategory.textContent = `${CATEGORIES[def.category]} · ${def.kind === 'passive' ? 'PASSIVA' : def.slotType === 'ultimate' ? 'SUPREMO' : 'ATIVA'}`;
     this.detailName.textContent = def.name;
     this.detailDescription.textContent = def.blurb;
     this.detailStats.replaceChildren();
     for (const [label, value] of [
-      ['MANA', String(def.manaCost)],
-      ['RECARGA', seconds(def.cooldown)],
+      ['MANA', def.kind === 'passive' ? 'Sem custo' : String(def.manaCost)],
+      ['RECARGA', def.kind === 'passive' ? 'Automática' : seconds(def.cooldown)],
       ['ALCANCE', def.targetType === 'self' ? 'Em você' : `${number(def.range)} m`],
     ]) {
       const stat = el('div', '', this.detailStats);
@@ -384,7 +444,7 @@ export class DraftScreen {
       el('strong', '', stat, value);
     }
     this.detailEffects.replaceChildren();
-    for (const fact of [...new Set(effectFacts(def.effects))]) el('li', '', this.detailEffects, fact);
+    for (const fact of [...new Set(effectFacts(def.effects))].slice(0, 3)) el('li', '', this.detailEffects, fact);
     this.detailTags.replaceChildren();
     for (const t of def.tags) if (TAGS[t]) el('span', 'dc-tag', this.detailTags, TAGS[t]);
   }
@@ -422,7 +482,7 @@ export class DraftScreen {
     this.confirm.textContent = this.sending ? 'CONFIRMANDO…' : 'CONFIRMAR ESCOLHA';
     this.change.hidden = !choosing || !confirmed;
     this.change.disabled = !!this.sending;
-    this.help.textContent = s.stage !== 'pick' ? 'As habilidades reveladas ficam visíveis para todos.' : confirmed ? 'Você pode alterar enquanto esta rodada estiver aberta. Suas escolhas ficam em segredo até a revelação.' : 'Teclas 1–8 selecionam. Ao fim do tempo, sua seleção é confirmada; sem seleção, o jogo escolhe por você.';
+    this.help.textContent = s.stage !== 'pick' ? 'As habilidades reveladas ficam visíveis para todos.' : confirmed ? 'Você pode alterar enquanto esta rodada estiver aberta.' : `Teclas 1–${this.visibleIds.length} selecionam nesta página. Máximo: 1 passiva. Sem confirmar, a seleção é automática.`;
   }
 
   private renderSeats(s: DraftStateMsg): void {
