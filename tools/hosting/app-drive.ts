@@ -92,7 +92,10 @@ try {
   await win.setViewportSize({ width: 480, height: 760 });
 
   const closed = new Promise<number>((r) => guest.onLeave((c) => r(c)));
+  // A friend is in the room: the app asks before ending it for everyone.
+  const asked = new Promise<string>((r) => win.once('dialog', (d) => void d.accept().then(() => r(d.message()))));
   await win.click('#stop');
+  log(`confirmação: ${(await asked).replace(/\s+/g, ' ')}`);
   await waitStatus('OFFLINE', 20000);
   log(`convidado desconectado (código ${await closed})`);
   log(`lista depois de encerrar: ${(await createHostCentral({ url: central.url, key: 'dev' }).publicRooms()).length} salas`);

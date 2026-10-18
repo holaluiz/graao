@@ -159,6 +159,8 @@ export class RoomBrowser {
     } else {
       clearInterval(this.hostTimer);
       clearInterval(this.timer);
+      // Never show rooms from the last visit (a host may have closed meanwhile) before the first new poll answers.
+      this.hostRooms = [];
       this.request?.abort();
       this.unwatch?.();
       this.unwatch = null;
@@ -167,15 +169,21 @@ export class RoomBrowser {
   }
   /** The Graao Host list (the central service): merged into whatever the primary source shows. */
   private async pollHostRooms(): Promise<void> {
+    let rooms: RoomListing[];
     try {
-      this.hostRooms = await graaoHostRooms();
+      rooms = await graaoHostRooms();
     } catch {
       return;
     }
     if (!this.visible) return;
-    if (this.source === 'none' || this.hostRooms.length) {
+    const had = this.hostRooms.length > 0;
+    this.hostRooms = rooms;
+    if (this.source === 'none' || rooms.length) {
       this.online = true;
       if (this.source === 'none') this.setStatus('● Lista ao vivo', 'good');
+      this.render();
+    } else if (had) {
+      // The last Graao Host room closed: drop its row now, not only when the other source changes.
       this.render();
     }
   }

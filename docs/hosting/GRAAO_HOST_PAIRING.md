@@ -33,7 +33,10 @@ site                         central (Supabase)                    Graao Host
 ## Regras (todas no SQL, testadas em `tests/hostCentral.test.ts`)
 
 - Ticket: uso único (`ticket_used`), expira em 5 min (`ticket_expired`), segredo errado = `ticket_not_found` (não diz
-  se existe), até 20 por conta a cada 10 min (`rate_limited`).
+  se existe), até 20 por conta a cada 10 min (`rate_limited`). Um ticket que já expirou é sempre `ticket_expired`, mesmo
+  depois de o poll do site tê-lo marcado `EXPIRED` (migration `0004_host_ticket_expired.sql`; antes o app dizia "Pedido
+  já usado"). No site, "Já instalei — abrir de novo" pede um ticket novo quando o atual tem mais de 4 min 30 s (instalar
+  pela primeira vez pode levar mais que a validade).
 - Versão: o ticket leva o `PROTOCOL_VERSION` do site; o app manda o dele no claim; diferença → ticket `FAILED`
   `version_mismatch` (o site mostra "Atualize o Graao Host").
 - Instalação nova → criada para o dono do ticket. Instalação existente: dono diferente → `installation_conflict`

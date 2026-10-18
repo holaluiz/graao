@@ -1,6 +1,6 @@
 /**
- * The Graao Host central service on an embedded Postgres (PGlite): the real migration
- * (`packages/database/migrations/0003_graao_host.sql`) on a minimal stand-in of what Supabase provides (roles, the
+ * The Graao Host central service on an embedded Postgres (PGlite): the real migrations
+ * (`packages/database/migrations/0003_graao_host.sql` and the ones after it) on a minimal stand-in of what Supabase provides (roles, the
  * `auth.users` table, `auth.uid()` from the request's JWT subject). Used by the tests and by the local development
  * central (`central-dev.ts`), so both exercise the exact SQL that production runs.
  */
@@ -9,7 +9,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
 
-const MIGRATION = join(dirname(fileURLToPath(import.meta.url)), '../../packages/database/migrations/0003_graao_host.sql');
+const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../packages/database/migrations');
+/** The Graao Host migrations, in the order production applies them. */
+const MIGRATIONS = ['0003_graao_host.sql', '0004_host_ticket_expired.sql'];
 
 const SUPABASE_STANDIN = `
   create role anon nologin;
@@ -66,7 +68,7 @@ export interface CentralDb {
 export async function createCentralDb(opts: { allowLoopbackEndpoints?: boolean; tunnelMode?: string } = {}): Promise<CentralDb> {
   const db = new PGlite();
   await db.exec(SUPABASE_STANDIN);
-  await db.exec(readFileSync(MIGRATION, 'utf8'));
+  for (const file of MIGRATIONS) await db.exec(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
   const setConfig = async (key: string, value: unknown) => {
     await db.query(`insert into private.host_config (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value`, [key, JSON.stringify(value)]);
   };

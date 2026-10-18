@@ -128,6 +128,9 @@ describe('Graao Host central service', () => {
     await dev.central.db.query(`update public.host_tickets set expires_at = now() - interval '1 minute' where id = $1`, [late.id]);
     await expect(app.ticketPeek(late.id, late.secret, null)).rejects.toMatchObject({ code: 'ticket_expired' });
     expect((await as(ANA).ticketStatus(late.id, late.secret)).status).toBe('EXPIRED');
+    // The site's poll marked it EXPIRED: an app opening it late still says "expirado", never "já usado".
+    await expect(app.ticketPeek(late.id, late.secret, null)).rejects.toMatchObject({ code: 'ticket_expired' });
+    await expect(app.ticketClaim({ ticketId: late.id, secret: late.secret, installationId: null, installSecret: randomSecret(), appVersion: '0.1.0', protocol: PROTOCOL_VERSION })).rejects.toMatchObject({ code: 'ticket_expired' });
   });
 
   it('hides quiet hosts and private rooms from the list; private rooms still resolve by code', async () => {

@@ -173,7 +173,16 @@ function pushLog(line: string): void {
 }
 
 $('open-room').addEventListener('click', () => void host.openRoom());
-$('stop').addEventListener('click', () => void host.stop());
+$('stop').addEventListener('click', () => {
+  // One click must not end a match for everyone by accident: ask when friends are in the room or it already started.
+  const r = state?.phase === 'READY' || state?.phase === 'HOSTING' ? state.room : null;
+  const others = r ? r.humanCount - (r.hostPresent ? 1 : 0) : 0;
+  if (r && (r.status !== 'LOBBY' || others > 0)) {
+    const who = others > 0 ? `${others} ${others === 1 ? 'amigo está' : 'amigos estão'} na sala` : 'A partida está em andamento';
+    if (!confirm(`Encerrar a hospedagem agora?\n\n${who}. A partida termina para todos e a sala sai da lista.`)) return;
+  }
+  void host.stop();
+});
 $('notice').addEventListener('click', () => void host.clearNotice());
 
 const dialog = $('settings-dialog') as HTMLDialogElement;

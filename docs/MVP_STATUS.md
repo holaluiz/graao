@@ -15,15 +15,22 @@ Supabase só autoriza, lista e resolve salas.
 - Instalador NSIS por usuário (`GraaoHost-Setup-0.1.0.exe`, ≈ 122 MB): instalar, protocolo, reinstalar, atualizar,
   desinstalar limpo.
 - Central: migration `0003_graao_host.sql` (tickets de uso único, instalações, sessões, salas, grants/RLS) validada
-  num Postgres embutido; Edge Function de túneis gerenciados escrita.
+  num Postgres embutido e **aplicada na Supabase de produção** (2026-10-18; um host headless publicou e removeu uma
+  sala real — `docs/hosting/GRAAO_HOST_TEST_REPORT.md`); Edge Function de túneis gerenciados escrita.
 - Site: **Criar e hospedar**, painel "instale o Graao Host", lista com selo GRAAO HOST, entrar pelo endpoint sem
   token Supabase, `?sala=` do app, aviso **O HOST ENCERROU A PARTIDA**.
 - Três hosts simultâneos por túneis reais da Cloudflare (Quick Tunnel), partidas completas 1+9, 2+8, 3+7, 5+5, 10+0,
   ping 23–31 ms; queda do host detectada e sala removida da lista em 30 s.
+- **App empacotado + central de produção + site** (cliente local apontando para a Supabase real): vincular com clique
+  real, sala na lista pública, convidada entrando pelo `wss://`, segunda sala sem novo vínculo, Draft → OVNI → partida
+  com as fases vindas do PC do host, e encerrar no meio da partida com aviso e lista limpa. Achados e corrigidos nessa
+  rodada: sala fechada que ficava na lista até Atualizar, "Pedido já usado" no lugar de "Pedido expirado" (migration
+  `0004`, aplicada e conferida em produção) e encerrar a partida de todos sem confirmação.
 
-**Falta (bloqueios do dono do projeto):** aplicar a migration no Supabase (CLI sem login aqui), conta/zona Cloudflare
-para túneis gerenciados (hoje só túnel de teste), local para publicar o instalador, assinatura de código, e o teste
-com **outro computador em outra rede** e três PCs reais.
+**Falta:** deploy do site (graao.vercel.app ainda é um build sem Supabase nem
+hospedagem); e os bloqueios do dono do projeto — conta/zona Cloudflare para túneis gerenciados (hoje só túnel de
+teste), local para publicar o instalador, assinatura de código, e o teste com **outro computador em outra rede** e
+três PCs reais.
 
 Detalhes: [arquitetura](hosting/GRAAO_HOST_ARCHITECTURE.md), [instalador](hosting/GRAAO_HOST_INSTALLER.md),
 [vínculo](hosting/GRAAO_HOST_PAIRING.md), [ciclo de vida](hosting/GRAAO_HOST_LIFECYCLE.md),

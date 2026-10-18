@@ -31,7 +31,7 @@ para executar uma partida; o graao só autoriza, lista e conecta.
 | Bundle | `apps/server/build-desktop.mjs` | Um único `.mjs` (≈ 6,3 MB) com Colyseus, `ws`, express, Rapier (WASM embutido) e os pacotes do jogo; `NODE_ENV=production` fixo |
 | App | `apps/host` | Electron 43: `main.ts` (janela, bandeja, protocolo, IPC), `HostController.ts` (ciclo de vida), `tunnel.ts`, `store.ts`, `serverProcess.ts`, janela em `renderer/` |
 | Instalador | `apps/host/package.json` (`build`) + `resources/installer.nsh` | NSIS por usuário, registra `graao-host://`, atalhos, desinstalador |
-| Central | `packages/database/migrations/0003_graao_host.sql` | Tabelas com RLS sem políticas + funções `security definer` |
+| Central | `packages/database/migrations/0003_graao_host.sql` (+ `0004_host_ticket_expired.sql`) | Tabelas com RLS sem políticas + funções `security definer` |
 | Túneis gerenciados | `supabase/functions/graao-host-tunnel` | Token administrativo da Cloudflare só aqui |
 | Site | `apps/client/src/net/graaoHost/hostSite.ts`, `ui/HostSetupDialog.ts`, `ui/RoomBrowser.ts`, `app/GraaoApp.ts` | Criar e hospedar, painel de instalação, lista mesclada, entrar pelo endpoint, "O HOST ENCERROU A PARTIDA" |
 | Tipos compartilhados | `packages/shared/src/hosting.ts` | `GraaoPublicRoom`, `GraaoHostRegistration`, deep link, mensagens app↔servidor, cliente da API central |

@@ -10,7 +10,10 @@ contagem (humanos + bots ≤ capacidade ≤ 10) antes de aparecer.
 | Servidor dedicado (`GET /rooms`) | `VITE_SERVER_URL` ou `?server=` | O servidor | A cada 5 s |
 
 As linhas do Graao Host aparecem primeiro, com o selo **GRAAO HOST**; códigos repetidos entre fontes ficam com a do
-Graao Host.
+Graao Host. Quando a última sala do Graao Host fecha, a linha sai na consulta seguinte (≤ 5 s), mesmo que a outra fonte
+não mude; ao sair da tela a lista do Graao Host é esquecida, para a volta (por exemplo depois de "O HOST ENCERROU A
+PARTIDA") nunca mostrar a sala que acabou de fechar. Medido em produção em 2026-10-18: ~3 s entre "Encerrar
+hospedagem" e a linha sumir da lista aberta de outro jogador.
 
 ## Modelo público (`GraaoPublicRoom`)
 

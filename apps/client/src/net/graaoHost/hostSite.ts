@@ -83,7 +83,7 @@ const REASONS: Record<string, [string, boolean?]> = {
 export class HostLaunch {
   state: LaunchState = { s: 'creating' };
   onChange: (s: LaunchState) => void = () => {};
-  private ticket: { id: string; secret: string } | null = null;
+  private ticket: { id: string; secret: string; createdAt: number } | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private openedAt = 0;
   private stopped = false;
@@ -105,7 +105,7 @@ export class HostLaunch {
       const site = createHostCentral({ url: API, key: KEY, accessToken: async () => (await this.accessToken()) ?? null, timeoutMs: 8000 });
       const secret = randomSecret(32);
       const { ticketId } = await site.ticketCreate(await sha256Hex(secret), this.settings, PROTOCOL_VERSION);
-      this.ticket = { id: ticketId, secret };
+      this.ticket = { id: ticketId, secret, createdAt: Date.now() };
       this.open();
     } catch (e) {
       const code = e instanceof HostCentralError ? e.code : '';
@@ -124,9 +124,9 @@ export class HostLaunch {
     }
   }
 
-  /** Opens the link again (same ticket while it is still waiting for the app). */
+  /** Opens the link again (same ticket while it is still waiting for the app; installing can take longer than it lasts). */
   reopen(): void {
-    if (!this.ticket) return void this.start();
+    if (!this.ticket || Date.now() - this.ticket.createdAt > (HOST_TICKET_TTL_S - 30) * 1000) return void this.start();
     this.open();
   }
 
