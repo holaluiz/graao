@@ -72,9 +72,10 @@ import {
   type GameWorld,
   type PlayerHitTarget,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, MOVEMENT, PLANET, SPAWNS, UFO, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, validateAppearance, type AbilityId } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, MATCH_SPAWNS, MOVEMENT, SPAWNS, UFO, ULTIMATE_SLOT, WEAPONS, WEAPON_SLOTS, randomAppearance, validateAppearance, type AbilityId } from '@graao/game-data';
 import {
   AbilityReject,
+  AIM_SCALE,
   ActionState,
   C2S,
   CLIENT_VERSION,
@@ -87,7 +88,7 @@ import {
   MAX_INPUT_BACKLOG,
   MAX_MESSAGES_PER_SECOND,
   MAX_PLAYERS,
-  MVP_PLAYERS,
+  MAX_SOLO_BOTS,
   MatchPhase,
   NoticeCode,
   PITCH_SCALE,
@@ -104,6 +105,7 @@ import {
   SNAPSHOT_HZ,
   SnapFlag,
   VEL_SCALE,
+  WISH_SCALE,
   sanitizeName,
   v3normalize,
   v3projectOnPlane,
@@ -134,7 +136,8 @@ import {
 import { authVerifier } from '../auth/SupabaseAuth';
 import { serverConfig } from '../config';
 import { matchStore } from '../persistence/MatchStore';
-import { ServerPlayer } from '../sim/ServerPlayer';
+import { ServerPlayer, type PlayerConnection } from '../sim/ServerPlayer';
+import { botIntent } from '../sim/BotBrain';
 import { getWorld } from '../world';
 import { log } from '../log';
 
@@ -157,6 +160,8 @@ function newCode(): string {
 
 export interface RoomCreateOptions {
   maxPlayers?: number;
+  /** Private practice room: one human and this many server-controlled opponents. Zero keeps ordinary multiplayer. */
+  soloBots?: number;
   /** Overrides for tests and dev (clamped to sane ranges). */
   countdownMs?: number;
   resultsMs?: number;
@@ -193,14 +198,25 @@ const FIRE_RATE_TOLERANCE = 0.85;
 const SWITCH_DELAY_MS = 220;
 const mm = (v: Vec3): [number, number, number] => [Math.round(v.x * POS_SCALE), Math.round(v.y * POS_SCALE), Math.round(v.z * POS_SCALE)];
 
+interface BotRuntime {
+  seq: number;
+  fireSeq: number;
+  acc: number;
+  target: number;
+  acquiredAt: number;
+  nextShotAt: number;
+}
+
 export class GraaoMatchRoom extends Room {
-  override maxClients = MVP_PLAYERS;
+  override maxClients = MAX_PLAYERS;
   override maxMessagesPerSecond = MAX_MESSAGES_PER_SECOND;
   override patchRate = null;
 
   private world!: GameWorld;
   private motor!: CharacterMotor;
   private readonly players = new Map<string, ServerPlayer>();
+  private soloBotCount = 0;
+  private readonly bots = new Map<number, BotRuntime>();
   private phase: MatchPhase = MatchPhase.FREE_ROAM;
   private phaseEndsAt = 0;
   private startsAt = 0;
@@ -228,11 +244,19 @@ export class GraaoMatchRoom extends Room {
   /** Moving average of tick CPU cost (ms). */
   private tickCost = 0;
   private events: GameEvent[] = [];
+  /** Damage updates share one public-state broadcast per simulation tick. */
+  private roomStateDirty = false;
 
   override async onCreate(options: RoomCreateOptions = {}): Promise<void> {
+    if (options.soloBots !== undefined && (typeof options.soloBots !== 'number' || !Number.isFinite(options.soloBots) || options.soloBots < 0)) {
+      throw new ServerError(4004, 'invalid solo bot count');
+    }
+    this.soloBotCount = options.soloBots ? Math.max(1, Math.min(MAX_SOLO_BOTS, Math.floor(options.soloBots))) : 0;
     this.roomId = newCode();
     activeCodes.add(this.roomId);
-    this.maxClients = Math.max(1, Math.min(MAX_PLAYERS, Math.floor(options.maxPlayers ?? MVP_PLAYERS)));
+    const requestedPlayers = typeof options.maxPlayers === 'number' && Number.isFinite(options.maxPlayers) ? options.maxPlayers : MAX_PLAYERS;
+    this.maxClients = this.soloBotCount ? 1 : Math.max(1, Math.min(MAX_PLAYERS, Math.floor(requestedPlayers)));
+    if (this.soloBotCount) await this.setPrivate(true);
     this.countdownMs = clampMs(options.countdownMs, MATCH_RULES.countdownMs);
     this.resultsMs = clampMs(options.resultsMs, MATCH_RULES.resultsMs);
     this.closeSpawns = options.closeSpawns === true;
@@ -285,6 +309,7 @@ export class GraaoMatchRoom extends Room {
   }
 
   override onJoin(client: Client, options?: JoinOptions): void {
+    if (this.soloBotCount && this.players.size) throw new ServerError(4004, 'solo practice is private');
     if (!options || options.protocol !== PROTOCOL_VERSION) {
       throw new ServerError(4001, `${JoinError.VERSION_MISMATCH}: server speaks protocol ${PROTOCOL_VERSION}`);
     }
@@ -300,6 +325,7 @@ export class GraaoMatchRoom extends Room {
     p.profileId = (client.auth as PlayerAuth | undefined)?.profileId ?? null;
     resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
     this.players.set(client.sessionId, p);
+    if (this.soloBotCount) this.createBots();
     const welcome: WelcomeMsg & { spawn: [number, number, number] } = {
       you: client.sessionId,
       index,
@@ -325,6 +351,15 @@ export class GraaoMatchRoom extends Room {
     p.body.dispose();
     this.players.delete(client.sessionId);
     this.abilities.cancelFor(p.index);
+    if (this.soloBotCount) {
+      // Bots are not Colyseus clients, so they must never keep an abandoned practice room alive.
+      for (const bot of this.players.values()) bot.body.dispose();
+      this.players.clear();
+      this.bots.clear();
+      this.abilities.clear();
+      this.ledger = null;
+      return;
+    }
     this.broadcastRoomState();
     log('leave', { code: this.roomId, id: client.sessionId });
     // The opponent leaving can end a match (the one still standing wins); in warmup the rest may now all be ready;
@@ -341,8 +376,22 @@ export class GraaoMatchRoom extends Room {
 
   override onDispose(): void {
     for (const p of this.players.values()) p.body.dispose();
+    this.bots.clear();
     activeCodes.delete(this.roomId);
     log('room disposed', { code: this.roomId });
+  }
+
+  private createBots(): void {
+    for (let index = 1; index <= this.soloBotCount; index++) {
+      const connection: PlayerConnection = { sessionId: `bot-${index}`, send: () => {} };
+      const state = this.spawnState(index);
+      const p = new ServerPlayer(connection, index, `Bot ${index}`, randomAppearance(), state, this.motor.createBody(state), defaultLoadout(index), true);
+      p.ready = true;
+      p.simTime = Date.now() - 60;
+      resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
+      this.players.set(connection.sessionId, p);
+      this.bots.set(index, { seq: 0, fireSeq: 0, acc: 0, target: -1, acquiredAt: 0, nextShotAt: 0 });
+    }
   }
 
   private spawnState(index: number, avoid?: Vec3, match = false) {
@@ -513,6 +562,7 @@ export class GraaoMatchRoom extends Room {
       p.inMatch = p.connected && (!afterDraft || p.inMatch);
       p.kills = 0;
       p.deaths = 0;
+      p.damageDealt = 0;
       p.deploy = p.inMatch ? DeployState.SHIP : DeployState.NONE;
       if (!p.inMatch) continue;
       p.state = createCharacterState(ufoPosition(route, now), ufoHeading(route, now));
@@ -613,6 +663,7 @@ export class GraaoMatchRoom extends Room {
       p.inMatch = p.connected && (!afterDraft || p.inMatch);
       p.kills = 0;
       p.deaths = 0;
+      p.damageDealt = 0;
       if (p.inMatch) this.resetForSpawn(p, this.spawnState(slot++, undefined, !this.closeSpawns));
     }
     this.beginLedger(now);
@@ -642,14 +693,14 @@ export class GraaoMatchRoom extends Room {
     this.phaseEndsAt = now + this.resultsMs;
     const w = this.byIndex(r.winner);
     if (w) w.wins++;
-    for (const p of this.players.values()) p.back = false;
+    for (const p of this.players.values()) p.back = p.bot;
     // The summary first, so every client has it when the phase turns to RESULTS.
     const summary = this.ledger?.finish(this.roomId, r.winner, now) ?? null;
     this.ledger = null;
     if (summary) this.broadcast(S2C.MATCH_SUMMARY, summary);
     this.broadcastRoomState();
     log('match end', { code: this.roomId, winner: w?.name ?? '-', durationS: summary ? Math.round(summary.durationMs / 1000) : 0 });
-    if (summary) void this.persist(summary, this.roster);
+    if (summary && !this.soloBotCount) void this.persist(summary, this.roster);
   }
 
   /**
@@ -695,9 +746,12 @@ export class GraaoMatchRoom extends Room {
     this.ufo = null;
     this.ledger = null;
     for (const p of this.players.values()) {
-      p.ready = false;
+      p.ready = p.bot;
       p.back = false;
       p.inMatch = false;
+      p.kills = 0;
+      p.deaths = 0;
+      p.damageDealt = 0;
       // Still aboard or in the air (the match ended during the deployment): back on a spawn.
       const airborne = p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING;
       p.deploy = DeployState.NONE;
@@ -743,7 +797,7 @@ export class GraaoMatchRoom extends Room {
     this.events.push({ e: 'reload', by: p.index, w: p.weapon });
   }
 
-  private onFire(c: Client, m: unknown): void {
+  private onFire(c: PlayerConnection, m: unknown): void {
     const p = this.players.get(c.sessionId);
     const f = validateFire(m);
     if (!p || !f) return;
@@ -817,6 +871,8 @@ export class GraaoMatchRoom extends Room {
     if (!q.vitals.alive || !this.canFight(q, now)) return false;
     const res = drowning ? applyDrowning(q.vitals, amount) : ability ? applyAbilityDamage(q.vitals, amount) : applyDamage(q.vitals, amount, crit);
     if (!res.kinds.length) return false;
+    if (by !== q) by.damageDealt += res.shieldDamage + res.healthDamage;
+    this.roomStateDirty = true;
     this.events.push({ e: 'dmg', by: by.index, target: q.index, amount: res.shieldDamage + res.healthDamage, kinds: res.kinds, health: q.vitals.health, shield: q.vitals.shield, ...(ability ? { a: ability } : {}) });
     this.ledger?.damage(by.index, q.index, res.shieldDamage + res.healthDamage);
     if (!res.eliminated) return false;
@@ -903,6 +959,71 @@ export class GraaoMatchRoom extends Room {
 
   // ------------------------------------------------------------------------------------------------ simulation
 
+  /** Generate normal player intents; all gameplay consequences still run through the usual room paths. */
+  private updateBots(now: number, dt: number): void {
+    if (!this.bots.size) return;
+    if (this.phase === MatchPhase.ABILITY_DRAFT && this.draft) {
+      let picked = false;
+      for (const [index] of this.bots) {
+        const seat = this.draft.seat(index);
+        if (!seat || seat.pending) continue;
+        const free = this.draft.available(index);
+        const id = free[(index + this.draft.round) % free.length];
+        if (id) picked = this.draft.pick(index, this.draft.round, id, now) === DraftReject.OK || picked;
+      }
+      if (picked) this.sendDraftStates();
+      return;
+    }
+    if (this.phase === MatchPhase.RESULTS) return;
+    const human = [...this.players.values()].find((p) => !p.bot);
+    for (const [index, brain] of this.bots) {
+      const p = this.byIndex(index);
+      if (!p?.vitals.alive) {
+        brain.acc = 0;
+        continue;
+      }
+      if (p.deploy === DeployState.SHIP) {
+        brain.acc = 0;
+        // Follow the human out of the hatch, with a short stagger, and steer toward their landing.
+        if (this.ufo && human && human.deploy !== DeployState.SHIP && jumpOpen(this.ufo, now) && now >= this.ufo.open + index * 160) this.jump(p, now, false);
+        continue;
+      }
+      let target: ServerPlayer | undefined;
+      if (this.phase === MatchPhase.UFO) target = human;
+      else {
+        let nearest = Infinity;
+        for (const q of this.players.values()) {
+          if (q === p || !q.connected || !q.vitals.alive || (this.phase === MatchPhase.MATCH && !q.inMatch)) continue;
+          const distance = Math.hypot(q.state.pos.x - p.state.pos.x, q.state.pos.y - p.state.pos.y, q.state.pos.z - p.state.pos.z);
+          if (distance < nearest) {
+            nearest = distance;
+            target = q;
+          }
+        }
+      }
+      if ((target?.index ?? -1) !== brain.target) {
+        brain.target = target?.index ?? -1;
+        brain.acquiredAt = now;
+      }
+      let intent = botIntent(p.state, target?.state.pos, index, now);
+      if (p.state.grounded && target) {
+        const up = v3normalize(p.state.pos);
+        const probe = { x: p.state.pos.x + up.x * 0.7, y: p.state.pos.y + up.y * 0.7, z: p.state.pos.z + up.z * 0.7 };
+        if (this.world.physics.castRay(probe, intent.wish, 2)) intent = botIntent(p.state, target.state.pos, index, now, true);
+      }
+      brain.acc = Math.min(brain.acc + dt * SIM_HZ, MAX_INPUT_BACKLOG);
+      while (brain.acc >= 1 && p.queue.length < MAX_INPUT_BACKLOG) {
+        brain.seq = (brain.seq + 1) & 0x7fffffff;
+        p.queue.push([brain.seq, Math.round(intent.wish.x * WISH_SCALE), Math.round(intent.wish.y * WISH_SCALE), Math.round(intent.wish.z * WISH_SCALE), Math.round(intent.aim.x * AIM_SCALE), Math.round(intent.aim.y * AIM_SCALE), Math.round(intent.aim.z * AIM_SCALE), intent.buttons]);
+        brain.acc -= 1;
+      }
+      if (this.phase !== MatchPhase.MATCH || !this.canFight(p, now) || !target || intent.distance > 55 || now - brain.acquiredAt < 650 || now < brain.nextShotAt) continue;
+      brain.nextShotAt = now + 340 + index * 20;
+      brain.fireSeq = (brain.fireSeq + 1) & 0x7fffffff;
+      this.onFire(p.client, { s: brain.fireSeq, w: p.weapon, o: mm(intent.origin), d: [Math.round(intent.aim.x * DIR_SCALE), Math.round(intent.aim.y * DIR_SCALE), Math.round(intent.aim.z * DIR_SCALE)], a: 1 });
+    }
+  }
+
   private update(): void {
     const t0 = performance.now();
     const dt = Math.min(0.25, (t0 - this.lastTickAt) / 1000);
@@ -910,6 +1031,7 @@ export class GraaoMatchRoom extends Room {
     this.tick++;
     const wall = Date.now();
     if (this.phase === MatchPhase.RESULTS && wall >= this.phaseEndsAt) this.returnToWarmup();
+    this.updateBots(wall, dt);
     if (this.phase === MatchPhase.ABILITY_DRAFT && this.draft?.update(wall)) {
       this.sendDraftStates();
       this.checkDraftDone();
@@ -982,6 +1104,7 @@ export class GraaoMatchRoom extends Room {
     this.maybeBeginFight();
 
     this.abilities.update(wall, dt);
+    if (this.roomStateDirty) this.broadcastRoomState();
 
     for (const p of this.players.values()) {
       const st = p.statusIfChanged();
@@ -1037,6 +1160,7 @@ export class GraaoMatchRoom extends Room {
     p.simTime = Date.now() - 60;
     this.resetAbilities(p, Date.now());
     this.events.push({ e: 'respawn', target: p.index });
+    this.roomStateDirty = true;
   }
 
   private broadcastSnapshot(): void {
@@ -1090,6 +1214,7 @@ export class GraaoMatchRoom extends Room {
   }
 
   private broadcastRoomState(): void {
+    this.roomStateDirty = false;
     const players: PlayerPublic[] = [...this.players.values()].map((p) => ({
       index: p.index,
       sessionId: p.client.sessionId,
@@ -1100,10 +1225,13 @@ export class GraaoMatchRoom extends Room {
       inMatch: p.inMatch,
       kills: p.kills,
       deaths: p.deaths,
+      alive: p.vitals.alive,
+      damageDealt: Math.round(p.damageDealt),
       loadout: [...p.loadout],
       deploy: p.deploy,
       wins: p.wins,
       back: p.back,
+      ...(p.bot ? { bot: true } : {}),
     }));
     const msg: RoomStateMsg = { code: this.roomId, phase: this.phase, phaseEndsAt: this.phaseEndsAt, startsAt: this.startsAt, winner: this.winner, players, ufo: this.ufo };
     this.broadcast(S2C.ROOM_STATE, msg);

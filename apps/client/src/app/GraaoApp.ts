@@ -37,6 +37,7 @@ import { LobbyPanel } from '../ui/LobbyPanel';
 import { Menu } from '../ui/Menu';
 import { DraftScreen } from '../ui/DraftScreen';
 import { ResultsScreen } from '../ui/ResultsScreen';
+import { Scoreboard } from '../ui/Scoreboard';
 import { PlanetView } from '../world/PlanetView';
 import { NetSession } from '../net/NetSession';
 import { ProfileService, type CloudProfile } from '../net/ProfileService';
@@ -73,6 +74,7 @@ export class GraaoApp {
   readonly camera: GraaoThirdPersonCamera;
   readonly audio = new GRAAudioManager();
   readonly hud = new Hud();
+  readonly scoreboard = new Scoreboard();
   /** Cloud profile (Supabase): identity for the match server, name/look/settings, match history. */
   readonly profile = new ProfileService();
   /** After a match: the server's summary and the way back to the lobby. */
@@ -230,7 +232,10 @@ export class GraaoApp {
   private buildUi(): void {
     this.menu = new Menu(
       {
-        solo: () => this.playSolo(),
+        solo: (bots) => {
+          if (bots > 0) void this.online('solo', '', this.menu.name(), bots);
+          else this.playSolo();
+        },
         create: (name) => void this.online('create', '', name),
         join: (code, name) => void this.online('join', code, name),
         customize: () => this.setPhase('CHARACTER_CREATOR'),
@@ -283,7 +288,7 @@ export class GraaoApp {
     });
     this.history = new HistoryPanel(() => this.history.show(false));
     this.hud.show(false);
-    this.ui.append(this.menu.el, this.history.el, this.creator.el, this.hud.el, this.lobby.el, this.draftUi.el, this.results.el);
+    this.ui.append(this.menu.el, this.history.el, this.creator.el, this.hud.el, this.lobby.el, this.draftUi.el, this.results.el, this.scoreboard.el);
     this.dev = new DevOverlay({ renderer: this.r.renderer, extra: () => this.devStats() });
 
     const canvas = this.r.canvas;
@@ -412,6 +417,8 @@ export class GraaoApp {
   setPhase(p: HudPhase): void {
     this.phase = p;
     if (p !== 'MATCH') {
+      this.scoreboard.hide();
+      this.input.scoreboardEnabled = false;
       this.draftUi.show(false);
       this.deploy.reset();
       this.results.hide();
@@ -445,16 +452,18 @@ export class GraaoApp {
     if (!new URLSearchParams(location.search).has('nodrop')) this.deploy.startOffline();
   }
 
-  private async online(kind: 'create' | 'join', code: string, name: string): Promise<void> {
+  private async online(kind: 'create' | 'join' | 'solo', code: string, name: string, bots = 0): Promise<void> {
     this.rememberName(name);
     this.menu.setBusy(true);
-    this.menu.setNote(kind === 'create' ? 'Abrindo uma sala…' : `Entrando em ${code}…`);
+    this.menu.setNote(kind === 'solo' ? `Preparando partida com ${bots} ${bots === 1 ? 'bot' : 'bots'}…` : kind === 'create' ? 'Abrindo uma sala…' : `Entrando em ${code}…`);
     try {
       this.net?.leave();
-      this.net = await NetSession.connect(this, kind, code, name || 'Jogador');
-      this.hud.setRoom(this.net.code);
+      this.net = null;
+      this.net = await NetSession.connect(this, kind, code, name || 'Jogador', bots);
+      this.hud.setRoom(this.net.solo ? 'SOLO · BOTS' : this.net.code);
       this.menu.setNote('');
       this.setPhase('MATCH');
+      this.net.syncState();
     } catch (e) {
       this.menu.setBusy(false);
       this.menu.setNote((e as Error).message ?? String(e), true);
@@ -540,12 +549,21 @@ export class GraaoApp {
     for (const c of this.lineup) c.update(dt, { moveState: MovementState.IDLE, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE });
     this.vfx.update(dt);
     this.draftUi.update(this.net ? this.net.serverNow() : Date.now());
+    this.updateScoreboard();
     this.r.updateSun(this.phase === 'MATCH' ? feet : this.spawn, this.time);
     this.planet.update(this.time, feet, this.r.sunDir);
     this.planet.setOrbit(this.r.setAltitude(PLANET.radius), this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
     this.r.render();
     this.frameMs = performance.now() - t0;
     this.dev.frame();
+  }
+
+  private updateScoreboard(): void {
+    const available = this.phase === 'MATCH' && !!this.net && (this.combat.phase === MatchPhase.MATCH || this.combat.phase === MatchPhase.UFO);
+    this.input.scoreboardEnabled = available;
+    const held = available && this.input.isDown('scoreboard');
+    if (held) this.scoreboard.setState(this.combat.scoreboardState);
+    if (held !== this.scoreboard.visible) this.scoreboard.show(held);
   }
 
   /** Double jumps (ours and everyone else's, once each): a puff of air kicked down from the feet and a soft swish. */

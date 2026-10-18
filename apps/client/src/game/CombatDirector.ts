@@ -32,6 +32,7 @@ import type { GraaoApp } from '../app/GraaoApp';
 import type { Cue } from '../audio/GRAAudioManager';
 import { WeaponHolder } from '../character/WeaponModels';
 import { Shape } from '../render/vfx/GRAVFXSystem';
+import type { ScoreboardState } from '../ui/Scoreboard';
 import { AbilityDirector } from './AbilityDirector';
 import { WeaponController } from './WeaponController';
 
@@ -154,6 +155,11 @@ export class CombatDirector {
   /** Everyone in the room as of the last ROOM_STATE (lobby panel, results). */
   get roomPlayers(): readonly PlayerPublic[] {
     return this.players;
+  }
+
+  /** Live authoritative room statistics, with elimination events as a fallback until ROOM_STATE arrives. */
+  get scoreboardState(): ScoreboardState {
+    return { players: this.players, phase: this.phase, me: this.myIndex, eliminated: this.eliminatedInMatch, summary: this.summary };
   }
 
   /** Upper body holds the aim pose while aiming and shortly after any shot. */
@@ -335,7 +341,8 @@ export class CombatDirector {
     const connected = this.players.filter((p) => p.connected);
     if (this.phase === MatchPhase.FREE_ROAM) {
       const ready = connected.filter((p) => p.ready).length;
-      if (connected.length < 2) hud.setStatus(`AQUECIMENTO · aguardando oponente · código ${this.app.net?.code ?? ''}`);
+      if (this.app.net?.solo) hud.setStatus('SOLO COM BOTS · ENTER para começar', 'relevant');
+      else if (connected.length < 2) hud.setStatus(`AQUECIMENTO · aguardando oponente · código ${this.app.net?.code ?? ''}`);
       else if (this.me()?.ready) hud.setStatus(`PRONTO ✓ · aguardando os outros (${ready}/${connected.length}) · ENTER cancela`, 'relevant');
       else hud.setStatus(`AQUECIMENTO · ENTER quando estiver pronto (${ready}/${connected.length})`, 'relevant');
     } else if (this.phase === MatchPhase.MATCH) {
@@ -350,7 +357,7 @@ export class CombatDirector {
       } else {
         if (this.countdownShown > 0) {
           this.countdownShown = 0;
-          hud.banner('LUTEM!', 'O último de pé vence', 1.2, 'good');
+          hud.banner('LUTEM!', 'O último de pé vence · TAB: placar', 1.2, 'good');
           this.app.audio.play('go');
         }
         const standing = this.players.filter((p) => p.inMatch && p.connected).length - this.eliminatedInMatch.size;
@@ -362,7 +369,7 @@ export class CombatDirector {
       const app = this.app;
       if (this.summary && performance.now() - this.resultsAt >= RESULTS_DELAY_MS) {
         if (!app.results.visible) app.input.exitLock();
-        app.results.show(this.summary, this.myIndex, this.players, this.saved ? 'saved' : app.profile.status === 'cloud' ? 'pending' : 'guest');
+        app.results.show(this.summary, this.myIndex, this.players, app.net?.solo ? 'solo' : this.saved ? 'saved' : app.profile.status === 'cloud' ? 'pending' : 'guest');
         app.results.update(Math.ceil((this.phaseEndsAt - now) / 1000), this.players);
       }
     }

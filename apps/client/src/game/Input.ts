@@ -1,10 +1,10 @@
 /**
  * Desktop input: WASD move, mouse camera (pointer lock), Space jump, Shift sprint, LMB fire, RMB aim, E/Q weapon
- * slots, R reload, Enter ready (warmup), 1–4 abilities, Esc menu. On focus loss every held input is released so nothing stays stuck.
+ * slots, R reload, Enter ready (warmup), 1–4 abilities, Tab scoreboard, Esc menu. On focus loss every held input is released so nothing stays stuck.
  */
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'fire' | 'aim'
-  | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug';
+  | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard';
 
 const KEYS: Record<string, Action> = {
   KeyW: 'forward',
@@ -29,6 +29,7 @@ const KEYS: Record<string, Action> = {
   NumpadEnter: 'ready',
   Escape: 'menu',
   F3: 'debug',
+  Tab: 'scoreboard',
 };
 
 export class Input {
@@ -39,6 +40,7 @@ export class Input {
   sensitivity = 0.0022;
   invertY = false;
   enabled = true;
+  private allowScoreboard = false;
   private readonly unsub: (() => void)[] = [];
 
   constructor(private readonly target: HTMLElement) {
@@ -51,7 +53,13 @@ export class Input {
       const a = KEYS[e.code];
       if (!a) return;
       // Typing a name or a room code is not gameplay (Enter would mark "ready", E/Q would switch weapons...).
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.closest('input, textarea, select, [role="textbox"]'))) return;
+      // Tab keeps its normal focus-navigation behavior in menus. In the match it only reveals a held overlay;
+      // pointer lock stays with the game and keyup / blur / visibility loss all close it through the held set.
+      if (a === 'scoreboard') {
+        if (!this.enabled || !this.allowScoreboard) return;
+        e.preventDefault();
+      }
       // Space never scrolls or presses a focused button (it jumps, also out of the UFO without pointer lock).
       if (a === 'debug' || a === 'jump' || (this.locked && ['weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate'].includes(a))) e.preventDefault();
       if (!e.repeat) this.pressed.add(a);
@@ -90,6 +98,19 @@ export class Input {
 
   get locked(): boolean {
     return document.pointerLockElement === this.target;
+  }
+
+  /** The UI controller enables Tab only while the live match is on screen. */
+  set scoreboardEnabled(enabled: boolean) {
+    this.allowScoreboard = enabled;
+    if (!enabled) {
+      this.held.delete('scoreboard');
+      this.pressed.delete('scoreboard');
+    }
+  }
+
+  get scoreboardEnabled(): boolean {
+    return this.allowScoreboard;
   }
 
   requestLock(): void {

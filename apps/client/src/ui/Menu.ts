@@ -1,14 +1,14 @@
 /** Main menu (DOM): name, create/join by room code, free roam, customize, profile and history, quality, frame-rate cap. */
-import { ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '@graao/shared';
+import { MAX_SOLO_BOTS, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '@graao/shared';
 import { FPS_CAPS, type FpsCap } from '../app/FrameLimiter';
 import type { Quality } from '../render/GRARenderer';
 
 export interface MenuActions {
-  solo(): void;
+  solo(bots: number): void;
   create(name: string): void;
   join(code: string, name: string): void;
   customize(): void;
-  history(): void;
+  history?(): void;
   quality(q: Quality): void;
   fpsCap(c: FpsCap): void;
   click(): void;
@@ -22,8 +22,7 @@ export class Menu {
   private readonly note = document.createElement('div');
   private readonly nameInput = document.createElement('input');
   private readonly codeInput = document.createElement('input');
-  private readonly profileEl = document.createElement('div');
-  private readonly profileText = document.createElement('span');
+  private readonly botSelect = document.createElement('select');
   private readonly buttons: HTMLButtonElement[] = [];
 
   constructor(private readonly actions: MenuActions, name: string, quality: Quality, fps: FpsCap) {
@@ -59,21 +58,43 @@ export class Menu {
     joinRow.className = 'row';
     this.codeInput.style.flex = '1.4';
     joinRow.append(this.codeInput, join);
-    const solo = this.btn('Explorar sozinho', () => this.actions.solo());
+    const solo = this.btn('Explorar sozinho', () => this.actions.solo(Number(this.botSelect.value)));
+    const soloOptions = document.createElement('label');
+    soloOptions.className = 'solo-options';
+    const botLabel = document.createElement('span');
+    botLabel.className = 'choice-label';
+    botLabel.textContent = 'Bots na partida solo';
+    this.botSelect.className = 'field';
+    this.botSelect.setAttribute('aria-label', 'Bots na partida solo');
+    for (let count = 0; count <= MAX_SOLO_BOTS; count++) {
+      const option = document.createElement('option');
+      option.value = String(count);
+      option.textContent = count === 0 ? 'Sem bots · exploração' : `${count} ${count === 1 ? 'bot' : 'bots'}`;
+      this.botSelect.append(option);
+    }
+    this.botSelect.addEventListener('change', () => {
+      const bots = Number(this.botSelect.value);
+      solo.textContent = bots > 0 ? 'Jogar solo' : 'Explorar sozinho';
+      this.setNote(bots > 0 ? 'Enfrente os bots em uma sala só sua. Requer conexão com o servidor.' : 'Explore o planeta e pratique à vontade.');
+    });
+    soloOptions.append(botLabel, this.botSelect);
     const custom = this.btn('Personalizar', () => this.actions.customize());
     const row = document.createElement('div');
     row.className = 'row';
     row.append(solo, custom);
-    // Who you are to graao: a cloud profile (name, look, settings, history) or this browser only.
-    this.profileEl.className = 'profile-line';
-    const hist = this.btn('Histórico', () => this.actions.history());
-    hist.classList.add('small');
-    this.profileEl.append(this.profileText, hist);
     const q = this.choiceRow('Qualidade', ['LOW', 'MEDIUM', 'HIGH'] as Quality[], quality, QUALITY_LABEL, (v) => this.actions.quality(v));
     const fpsRow = this.choiceRow('Limite de FPS', [...FPS_CAPS], fps, FPS_LABEL, (v) => this.actions.fpsCap(v));
     this.note.className = 'note';
-    this.el.append(h, tag, this.nameInput, create, joinRow, row, this.profileEl, q, fpsRow, this.note);
-    this.setProfile('Perfil: conectando…', false);
+    const heading = document.createElement('div');
+    heading.className = 'menu-heading';
+    heading.append(h, tag);
+    const play = document.createElement('div');
+    play.className = 'menu-play';
+    play.append(this.nameInput, create, joinRow, soloOptions, row);
+    const settings = document.createElement('div');
+    settings.className = 'menu-settings';
+    settings.append(q, fpsRow);
+    this.el.append(heading, play, settings, this.note);
   }
 
   private choiceRow<T extends string | number>(label: string, values: T[], current: T, names: Record<T, string>, onPick: (v: T) => void): HTMLElement {
@@ -118,11 +139,8 @@ export class Menu {
     this.nameInput.value = name;
   }
 
-  /** The profile line; `history` = the history button is useful (a cloud profile); `why` goes in the tooltip. */
-  setProfile(text: string, history: boolean, why = ''): void {
-    this.profileText.textContent = text;
-    this.profileText.title = why;
-    (this.profileEl.lastElementChild as HTMLElement).hidden = !history;
+  setProfile(_text?: string, _history?: boolean, _why = ''): void {
+    // Profile indicator and history button removed from the menu per UI requirements.
   }
 
   setNote(text: string, error = false): void {
@@ -132,6 +150,7 @@ export class Menu {
 
   setBusy(busy: boolean): void {
     for (const b of this.buttons) b.disabled = busy;
+    this.botSelect.disabled = busy;
   }
 
   show(v: boolean): void {

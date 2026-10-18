@@ -1,0 +1,72 @@
+/* All ten seats remain on screen. Rows share the available height on short viewports. */
+.scoreboard-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  padding: clamp(8px, 2vw, 24px);
+  background: rgba(42, 33, 48, .48);
+  pointer-events: none !important;
+}
+.scoreboard {
+  width: min(760px, 100%);
+  height: min(690px, calc(100dvh - 48px));
+  max-height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: clamp(6px, 1.2vh, 12px);
+  padding: clamp(12px, 2vw, 24px);
+  border: 3px solid var(--ink);
+  border-radius: 22px;
+  background: var(--paper);
+  box-shadow: 0 6px 0 var(--ink);
+  overflow: hidden;
+}
+.sb-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sb-header h2 { margin: 0; font-size: clamp(18px, 3vw, 30px); font-weight: 900; line-height: 1.1; letter-spacing: .02em; }
+.sb-key { border: 2px solid var(--ink); border-radius: 7px; padding: 3px 7px; font-size: 12px; font-weight: 900; box-shadow: 0 2px 0 var(--ink); }
+.sb-counters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.sb-counter { display: flex; align-items: baseline; justify-content: center; gap: 8px; padding: 8px; border: 2px solid var(--ink); border-radius: 12px; background: #fffaf0; }
+.sb-counter:first-child { background: var(--sun); }
+.sb-counter strong { font-size: clamp(22px, 4vh, 34px); line-height: 1; font-weight: 900; font-variant-numeric: tabular-nums; }
+.sb-counter > span { font-size: 11px; text-transform: uppercase; font-weight: 900; }
+.sb-leader { min-width: 0; font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-table { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 4px; }
+.sb-rows { display: grid; grid-auto-rows: minmax(0, 1fr); gap: 4px; min-height: 0; }
+.sb-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 58px 58px 76px; align-items: center; column-gap: 8px; padding: 3px 10px; border: 2px solid var(--ink); border-radius: 10px; background: #fffaf0; min-height: 0; }
+.sb-head { border: 0; background: transparent; border-radius: 0; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+.sb-head > :nth-child(n+3), .sb-num { text-align: right; }
+.sb-rank { font-weight: 900; font-size: 12px; opacity: .6; }
+.sb-player { min-width: 0; }
+.sb-name { font-weight: 900; font-size: 15px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-meta { font-weight: 800; font-size: 9px; line-height: 1.2; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-row[data-status='alive'] .sb-meta { color: #426b27; opacity: 1; }
+.sb-row[data-status='out'] .sb-meta { color: #a3362b; opacity: 1; }
+.sb-num { font-size: 15px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.sb-me { background: #fff3cc; box-shadow: inset 0 0 0 2px var(--sun); }
+.sb-top .sb-rank { opacity: 1; }
+.sb-foot { text-align: center; font-size: 11px; font-weight: 800; opacity: .7; }
+@media (max-width: 560px) {
+  .scoreboard { height: min(690px, calc(100dvh - 24px)); padding: 12px; gap: 8px; border-radius: 16px; }
+  .sb-header h2 { font-size: 20px; }
+  .sb-row { grid-template-columns: 16px minmax(0, 1fr) 35px 39px 48px; column-gap: 5px; padding-inline: 6px; border-radius: 8px; }
+  .sb-counter { flex-direction: column; align-items: center; gap: 3px; padding: 6px 2px; }
+  .sb-counter > span { font-size: 9px; }
+  .sb-name, .sb-num { font-size: 13px; }
+  .sb-leader { font-size: 11px; }
+}
+@media (max-height: 560px) {
+  .scoreboard-screen { padding: 8px; }
+  .scoreboard { height: calc(100dvh - 20px); padding: 10px; gap: 4px; border-radius: 14px; }
+  .sb-header h2 { font-size: 18px; }
+  .sb-counters { gap: 6px; }
+  .sb-counter { padding-block: 3px; flex-direction: row; gap: 6px; }
+  .sb-counter strong { font-size: 20px; }
+  .sb-rows { gap: 2px; }
+  .sb-row { padding-block: 0; border-width: 1px; border-radius: 5px; }
+  .sb-name, .sb-num { font-size: 11px; }
+  .sb-meta { font-size: 8px; }
+  .sb-foot, .sb-leader { font-size: 10px; }
+}

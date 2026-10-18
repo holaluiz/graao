@@ -7,7 +7,7 @@ import { Client, type Room } from '@colyseus/sdk';
 import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, PLANET, UFO, WEAPONS, randomAppearance } from '@graao/game-data';
 import { castOrigin, chestOf, diveStart, ufoPosition, ufoSpeed } from '@graao/game-core';
 import { SnapshotInterpolator } from '../apps/client/src/net/SnapshotInterpolator';
-import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
+import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MAX_PLAYERS, MAX_SOLO_BOTS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
 import type { RecordMatchPayload } from '@graao/database';
 import { createGraaoServer } from '../apps/server/src/app';
 import { setAuthVerifier } from '../apps/server/src/auth/SupabaseAuth';
@@ -81,7 +81,7 @@ describe('two clients in one graao room', () => {
 
   it('creates a room with a short code and lets a second client join by that code', async () => {
     const ca = new Client(url);
-    a = await ca.create(ROOM_NAME, opts('A'));
+    a = await ca.create(ROOM_NAME, { ...opts('A'), maxPlayers: 2 });
     welcomeA = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
     expect(welcomeA.code).toMatch(/^GR-[2-9A-HJ-NP-Z]{4}$/);
     const cb = new Client(url);
@@ -218,7 +218,7 @@ describe('two clients in one graao room', () => {
   it('rejects a client speaking another protocol version', async () => {
     const cc = new Client(url);
     await expect(cc.create(ROOM_NAME, opts('C', PROTOCOL_VERSION + 99))).rejects.toThrow(/VERSION_MISMATCH/);
-    // A full room refuses a third player in the 2-player MVP configuration.
+    // An explicitly configured two-player room still refuses a third player.
     await expect(new Client(url).joinById(welcomeA.code, opts('D'))).rejects.toThrow(/locked|full/);
   });
 
@@ -925,4 +925,228 @@ describe('a complete match loop (gate 8: summary, persistence, return to the lob
     await a.leave(true);
     await b.leave(true);
   });
+});
+
+describe('room capacity', () => {
+  it.each([
+    { label: 'default', options: {} },
+    { label: 'oversized request', options: { maxPlayers: 999 } },
+    { label: 'invalid request', options: { maxPlayers: 'unbounded' } },
+  ])('accepts ten players and rejects an eleventh ($label)', async ({ options }) => {
+    const clients: Room[] = [];
+    try {
+      const host = await new Client(url).create(ROOM_NAME, { ...opts('A'), ...options });
+      clients.push(host);
+      const states = inbox<RoomStateMsg>(host, S2C.ROOM_STATE);
+      const welcome = await waitFor<WelcomeMsg>(host, S2C.WELCOME);
+      for (let index = 1; index < 10; index++) {
+        const client = await new Client(url).joinById(welcome.code, opts(`Player ${index + 1}`));
+        clients.push(client);
+        await waitFor<WelcomeMsg>(client, S2C.WELCOME);
+      }
+      const full = await states.until((m) => m.players.length === 10);
+      expect(MAX_PLAYERS).toBe(10);
+      expect(new Set(full.players.map((p) => p.index)).size).toBe(10);
+      expect(full.players.every((p) => !p.bot)).toBe(true);
+      await expect(new Client(url).joinById(welcome.code, opts('Player 11'))).rejects.toThrow(/locked|full/);
+    } finally {
+      await Promise.all(clients.map((client) => client.leave(true)));
+    }
+  });
+});
+
+describe('live room scoreboard', () => {
+  it('publishes damage before an elimination, alive status and fresh round totals', async () => {
+    const clients: Room[] = [];
+    try {
+      const a = await new Client(url).create(ROOM_NAME, {
+        ...opts('A'), countdownMs: 0, resultsMs: 15000, closeSpawns: true, skipDraft: true, skipUfo: true,
+      });
+      clients.push(a);
+      const states = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+      const events = inbox<EventsMsg>(a, S2C.EVENTS);
+      const summaries = inbox<MatchSummaryMsg>(a, S2C.MATCH_SUMMARY);
+      const wa = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
+      const b = await new Client(url).joinById(wa.code, opts('B'));
+      clients.push(b);
+      const wb = await waitFor<WelcomeMsg>(b, S2C.WELCOME);
+      await states.until((m) => m.players.length === 2);
+      a.send(C2S.READY, { r: 1 });
+      b.send(C2S.READY, { r: 1 });
+      const start = await states.until((m) => m.phase === MatchPhase.MATCH);
+      expect(start.players.every((p) => p.alive && p.damageDealt === 0 && p.kills === 0 && p.deaths === 0)).toBe(true);
+      await sleep(250);
+      const shoot = shooter(a, () => wa.index, () => wb.index);
+      await shoot(1);
+      const hit = await states.until((m) => (m.players.find((p) => p.index === wa.index)?.damageDealt ?? 0) > 0);
+      expect(hit.phase).toBe(MatchPhase.MATCH);
+      expect(hit.players.every((p) => p.alive && p.kills === 0 && p.deaths === 0)).toBe(true);
+      const damage = await events.until((m) => m.ev.some((e) => e.e === 'dmg' && e.by === wa.index));
+      const dealt = damage.ev.reduce((n, e) => n + (e.e === 'dmg' && e.by === wa.index ? e.amount : 0), 0);
+      expect(hit.players.find((p) => p.index === wa.index)!.damageDealt).toBe(Math.round(dealt));
+      for (let seq = 2; seq <= 24 && states.latest()!.phase === MatchPhase.MATCH; seq++) {
+        await sleep(170);
+        await shoot(seq);
+      }
+      const results = await states.until((m) => m.phase === MatchPhase.RESULTS);
+      const summary = await summaries.until(() => true);
+      expect(results.players.find((p) => p.index === wa.index)).toMatchObject({ alive: true, kills: 1, deaths: 0 });
+      expect(results.players.find((p) => p.index === wb.index)).toMatchObject({ alive: false, kills: 0, deaths: 1 });
+      expect(results.players.find((p) => p.index === wa.index)!.damageDealt).toBe(summary.players.find((p) => p.index === wa.index)!.damageDealt);
+      const afterResults = states.all.length;
+      a.send(C2S.RETURN_LOBBY, {});
+      b.send(C2S.RETURN_LOBBY, {});
+      const warmup = await states.until((m) => m.phase === MatchPhase.FREE_ROAM && states.all.indexOf(m) >= afterResults);
+      expect(warmup.players.every((p) => p.alive && p.damageDealt === 0 && p.kills === 0 && p.deaths === 0)).toBe(true);
+    } finally {
+      await Promise.all(clients.map((client) => client.leave(true)));
+    }
+  }, 15000);
+});
+
+describe('solo matches with server-controlled bots', () => {
+  it.each([
+    { count: 0, expected: 0 },
+    { count: 2.8, expected: 2 },
+    { count: 9, expected: 9 },
+    { count: 999, expected: MAX_SOLO_BOTS },
+  ])('creates the requested bot roster, with a bounded integer count ($count)', async ({ count, expected }) => {
+    const a = await new Client(url).create(ROOM_NAME, { ...opts('A'), soloBots: count });
+    const states = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+    try {
+      const welcome = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
+      const state = await states.until((m) => m.players.length === expected + 1);
+      const bots = state.players.filter((p) => p.bot);
+      expect(bots).toHaveLength(expected);
+      expect(new Set(state.players.map((p) => p.index)).size).toBe(expected + 1);
+      expect(new Set(state.players.map((p) => p.name)).size).toBe(expected + 1);
+      expect(bots.every((p) => p.ready && !p.inMatch)).toBe(true);
+      expect(state.players.find((p) => p.index === welcome.index)).toMatchObject({ name: 'A', ready: false });
+      expect(state.phase).toBe(MatchPhase.FREE_ROAM);
+      if (expected) {
+        await expect(new Client(url).joinById(welcome.code, opts('B'))).rejects.toThrow(/locked|full/);
+      } else {
+        const b = await new Client(url).joinById(welcome.code, opts('B'));
+        try {
+          await waitFor<WelcomeMsg>(b, S2C.WELCOME);
+          expect((await states.until((m) => m.players.length === 2)).players.every((p) => !p.bot)).toBe(true);
+        } finally {
+          await b.leave(true);
+        }
+      }
+    } finally {
+      await a.leave(true);
+    }
+  });
+
+  it.each([-1, '2', true, null, Infinity, NaN])('rejects an invalid solo bot count (%s)', async (soloBots) => {
+    await expect(new Client(url).create(ROOM_NAME, { ...opts('A'), soloBots })).rejects.toThrow();
+  });
+
+  it('waits for the human, completes the draft promptly and lets bots jump from the UFO', async () => {
+    const a = await new Client(url).create(ROOM_NAME, {
+      ...opts('A'), soloBots: 9, draftPickMs: 8000, draftRepickMs: 8000, draftRevealMs: 30,
+      ufoRevealMs: 150, ufoWindowMs: 2500, ufoLandTimeoutMs: 1000,
+    });
+    const states = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+    const drafts = inbox<DraftStateMsg>(a, S2C.DRAFT_STATE);
+    const events = inbox<EventsMsg>(a, S2C.EVENTS);
+    try {
+      const human = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+      const roster = await states.until((m) => m.players.length === 10);
+      const bots = roster.players.filter((p) => p.bot).map((p) => p.index);
+      await sleep(200);
+      expect(states.latest()!.phase).toBe(MatchPhase.FREE_ROAM);
+      // The human chooses from the same public draft state as the browser. A disputed pick is retried.
+      const off = a.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => {
+        const seat = m.seats.find((p) => p.index === human);
+        if (m.stage !== 'pick' || !seat?.picking || m.mine) return;
+        const choice = m.pool.find((id) => !seat.picks.includes(id) && (!m.unique || !m.owners.some(([owned]) => owned === id)));
+        if (choice) a.send(C2S.DRAFT_PICK, { r: m.round, a: choice });
+      });
+      a.send(C2S.READY, { r: 1 });
+      const done = await drafts.until((m) => m.stage === 'done', 6000);
+      off();
+      expect(done.seats).toHaveLength(10);
+      expect(done.seats.every((p) => p.picks.length === 4 && new Set(p.picks).size === 4)).toBe(true);
+      const deployment = await states.until((m) => m.phase === MatchPhase.UFO);
+      expect(deployment.players.every((p) => p.inMatch && p.loadout.length === 4)).toBe(true);
+      const route = deployment.ufo!;
+      await sleep(Math.max(0, route.open - Date.now()) + 50);
+      a.send(C2S.UFO_JUMP, {});
+      const jump = await events.until((m) => m.ev.some((e) => e.e === 'jump' && bots.includes(e.target)), 2000);
+      // They follow the human through the hatch, before the end of the automatic-drop window.
+      expect(jump.t).toBeLessThan(route.close);
+    } finally {
+      await a.leave(true);
+    }
+  }, 15000);
+
+  it('simulates movement and both sides of combat, then returns and starts another match without saving practice results', async () => {
+    const saved: RecordMatchPayload[] = [];
+    setAuthVerifier({ verify: async () => ({ id: '6f1c1a8e-1234-4abc-8def-0123456789ab', anonymous: true }) });
+    setMatchStore({ name: 'solo-test', record: async (payload) => (saved.push(payload), 'unexpected-practice-save') });
+    let a: Room | undefined;
+    try {
+      a = await new Client(url).create(ROOM_NAME, {
+        ...opts('A'), token: 'solo-token', soloBots: 1, closeSpawns: true, skipDraft: true, skipUfo: true,
+        countdownMs: 150, resultsMs: 15000,
+      });
+      const states = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+      const snapshots = inbox<SnapshotMsg>(a, S2C.SNAPSHOT);
+      const events = inbox<EventsMsg>(a, S2C.EVENTS);
+      const summaries = inbox<MatchSummaryMsg>(a, S2C.MATCH_SUMMARY);
+      const human = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+      const roster = await states.until((m) => m.players.length === 2);
+      const bot = roster.players.find((p) => p.bot)!.index;
+      const first = await snapshots.until((m) => m.p.some((p) => p[0] === bot));
+      const initial = first.p.find((p) => p[0] === bot)!;
+      const moved = await snapshots.until((m) => {
+        const p = m.p.find((p) => p[0] === bot);
+        return !!p && Math.hypot(p[1] - initial[1], p[2] - initial[2], p[3] - initial[3]) > 500;
+      });
+      expect(moved.p.find((p) => p[0] === bot)![14]).toBeGreaterThan(initial[14]);
+      expect(events.all.flatMap((m) => m.ev).some((e) => e.e === 'shot')).toBe(false);
+
+      a.send(C2S.READY, { r: 1 });
+      const match = await states.until((m) => m.phase === MatchPhase.MATCH);
+      await sleep(Math.max(0, match.startsAt - Date.now()) + 50);
+      const shoot = shooter(a, () => human, () => bot);
+      const humanHit = () => events.all.some((m) => m.ev.some((e) => e.e === 'dmg' && e.by === human && e.target === bot));
+      for (let seq = 1; seq <= 8 && !humanHit(); seq++) {
+        await shoot(seq);
+        await sleep(160);
+      }
+      expect(humanHit()).toBe(true);
+      await events.until((m) => m.ev.some((e) => e.e === 'shot' && e.by === bot), 5000);
+      const damage = await events.until((m) => m.ev.some((e) => e.e === 'dmg' && e.by === bot && e.target === human), 5000);
+      const hit = damage.ev.find((e) => e.e === 'dmg' && e.by === bot && e.target === human);
+      expect(hit && hit.e === 'dmg' && hit.amount).toBeGreaterThan(0);
+
+      const summary = await summaries.until(() => true, 12000);
+      expect(summary.winner).toBe(bot);
+      expect(summary.players.find((p) => p.index === bot)).toMatchObject({ won: true, kills: 1 });
+      const results = await states.until((m) => m.phase === MatchPhase.RESULTS);
+      expect(results.players.find((p) => p.index === bot)!.back).toBe(true);
+      expect(results.players.find((p) => p.index === human)!.back).toBe(false);
+      await sleep(150);
+      expect(saved).toHaveLength(0);
+
+      const from = states.all.length;
+      a.send(C2S.RETURN_LOBBY, {});
+      const warmup = await states.until((m) => m.phase === MatchPhase.FREE_ROAM && states.all.indexOf(m) >= from);
+      expect(warmup.players).toHaveLength(2);
+      expect(warmup.players.find((p) => p.index === bot)).toMatchObject({ bot: true, ready: true, back: false, inMatch: false, wins: 1 });
+      expect(warmup.players.find((p) => p.index === human)).toMatchObject({ ready: false, back: false, inMatch: false });
+      const next = states.all.length;
+      a.send(C2S.READY, { r: 1 });
+      const rematch = await states.until((m) => m.phase === MatchPhase.MATCH && states.all.indexOf(m) >= next);
+      expect(rematch.players.every((p) => p.inMatch)).toBe(true);
+      expect(saved).toHaveLength(0);
+    } finally {
+      await a?.leave(true);
+      setAuthVerifier(null);
+      setMatchStore({ name: 'none', record: async () => null });
+    }
+  }, 25000);
 });

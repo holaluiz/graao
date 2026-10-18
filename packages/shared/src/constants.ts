@@ -12,9 +12,12 @@ export const SNAPSHOT_HZ = 20;
 /** Jitter margin: remotes render this far behind their newest expected sample (on top of measured lag). */
 export const INTERPOLATION_DELAY_MS = 70;
 
-/** Configured room sizes. MVP plays 1v1, the architecture is sized for 20. */
+/** Legacy 1v1 size for callers that explicitly request a smaller room. */
 export const MVP_PLAYERS = 2;
-export const MAX_PLAYERS = 20;
+/** Default and maximum participants per room, including bots. */
+export const MAX_PLAYERS = 10;
+/** Solo rooms reserve one human seat; the remaining seats may be bots. */
+export const MAX_SOLO_BOTS = MAX_PLAYERS - 1;
 
 /** Inputs a client may queue ahead of the server (anti speed-hack + jitter buffer). */
 export const MAX_INPUT_BACKLOG = 12;

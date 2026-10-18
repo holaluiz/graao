@@ -119,6 +119,8 @@ export interface JoinOptions {
   appearance: CharacterAppearance;
   /** Supabase access token in production; absent for DEV GUEST. */
   token?: string;
+  /** Create only: computer opponents in a private solo room (0 keeps a regular room). */
+  soloBots?: number;
   /** Dev/tests only (ignored in production): ability ids for slots 1–4 instead of the default loadout. */
   loadout?: string[];
 }
@@ -201,6 +203,11 @@ export interface PlayerPublic {
   index: number;
   sessionId: string;
   name: string;
+  /** Computer-controlled opponent in a solo room. */
+  bot?: boolean;
+  /** Live scoreboard state, owned by the match server. */
+  alive?: boolean;
+  damageDealt?: number;
   appearance: CharacterAppearance;
   ready: boolean;
   connected: boolean;

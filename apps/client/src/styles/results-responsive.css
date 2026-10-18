@@ -1,0 +1,66 @@
+/* Every participant and the return actions fit together, including a full ten-player room. */
+.results-screen { overflow: visible; }
+.results { width: min(720px, 100%); gap: 7px; padding: 16px; }
+.results-table { gap: 3px; }
+.rt-row { padding: 5px 7px; }
+.rt-name { flex-wrap: nowrap; gap: 4px; }
+.rt-name > span:first-child { min-width: 0; }
+.rt-tag, .rt-loadout { flex-shrink: 0; }
+.rt-loadout svg { width: 16px; height: 16px; }
+.results-score { display: grid; gap: 3px; }
+.results-scores { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px 10px; }
+.results-score-player { display: flex; justify-content: center; gap: 5px; min-width: 0; font-size: 11px; }
+.results-score-player > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.results-save:empty, .results-wait:empty { display: none; }
+
+@media (max-width: 640px), (max-height: 780px) {
+  .results-screen { padding: 10px; }
+  .results { gap: 5px; padding: 12px; border-radius: 18px; }
+  .results-title { font-size: 36px; -webkit-text-stroke-width: 5px; }
+  .results-sub { font-size: 12px; }
+  .rt-row { padding: 4px 5px; border-radius: 9px; }
+  .rt-name, .rt-place, .rt-num { font-size: 12px; }
+  .rt-tag { font-size: 8px; padding: 1px 4px; }
+  .rt-loadout { display: none; }
+  .results-save, .results-wait { font-size: 11px; min-height: 0; }
+  .results-foot { font-size: 10px; }
+  .results-actions > .btn { font-size: 12px; padding: 9px; letter-spacing: .04em; }
+}
+
+@media (max-width: 640px) {
+  .rt-row { grid-template-columns: 22px minmax(0, 1fr) repeat(3, 39px); gap: 3px; }
+  .rt-head { font-size: 8px !important; letter-spacing: 0; }
+  .results-score-player { font-size: 10px; }
+}
+
+@media (max-width: 640px) and (max-height: 650px) {
+  .results-screen { padding: 8px; }
+  .results { gap: 4px; padding: 8px; }
+  .results-title { font-size: 28px; -webkit-text-stroke-width: 4px; }
+  .results-sub, .results-save, .results-wait { font-size: 10px; line-height: 1.2; }
+  .results-table { gap: 2px; margin-top: 0; }
+  .rt-row { padding: 2px 4px; }
+  .rt-name, .rt-place, .rt-num { font-size: 11px; line-height: 1.2; }
+  .rt-row.won .rt-place { font-size: 14px; }
+  .rt-tag { padding: 0 3px; font-size: 7px; }
+  .results-scores { gap: 2px 5px; }
+  .results-score-player, .results-score-k { font-size: 9px; }
+  .results-actions > .btn { font-size: 10px; padding: 7px 5px; border-width: 2px; border-radius: 10px; }
+}
+
+@media (min-width: 641px) and (max-height: 520px) {
+  .results-screen { padding: 8px; }
+  .results { width: min(920px, 100%); grid-template-columns: minmax(0, .65fr) minmax(0, 1.35fr); column-gap: 14px; row-gap: 5px; padding: 10px; }
+  .results > :not(.results-table) { grid-column: 1; }
+  .results-table { grid-column: 2; grid-row: 1 / 9; align-content: center; margin: 0; gap: 2px; }
+  .results-title { font-size: 30px; }
+  .results-sub { font-size: 11px; }
+  .rt-row { grid-template-columns: 22px minmax(0, 1fr) repeat(5, 40px); gap: 3px; padding: 3px 4px; }
+  .rt-head { font-size: 8px !important; letter-spacing: 0; }
+  .rt-name, .rt-place, .rt-num { font-size: 11px; }
+  .rt-row.won .rt-place { font-size: 14px; }
+  .results-scores { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 7px; }
+  .results-score-player { font-size: 10px; }
+  .results-actions { flex-direction: column; gap: 7px; }
+  .results-actions > .btn { font-size: 11px; padding: 7px; border-width: 2px; border-radius: 11px; }
+}
