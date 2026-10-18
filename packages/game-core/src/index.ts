@@ -10,6 +10,8 @@ export * from './combat';
 export * from './match';
 export * from './abilities';
 export * from './abilitySystem';
+export * from './statusEffects';
+export * from './passives';
 export * from './draft';
 export * from './deploy';
 export * from './tormenta';

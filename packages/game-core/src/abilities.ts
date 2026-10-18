@@ -57,6 +57,7 @@ export function validateLoadout(ids: unknown): Loadout | null {
     if (ABILITIES[l[i]!].slotType !== want) return null;
   }
   if (new Set(l).size !== LOADOUT_SLOTS) return null;
+  if (l.filter((id) => ABILITIES[id].kind === 'passive').length > ABILITY_RULES.maxPassives) return null;
   return [...l] as Loadout;
 }
 
@@ -74,6 +75,8 @@ export interface CastState {
   cooldownEnds: readonly number[];
   /** Server time when the current wind-up ends. */
   castUntil: number;
+  silenced?: boolean;
+  blocked?: boolean;
 }
 
 /**
@@ -84,6 +87,9 @@ export function checkCast(c: CastState, slot: number, abilityId: string, now: nu
   if (!c.alive) return AbilityReject.DEAD;
   if (slot < 0 || slot >= LOADOUT_SLOTS || c.loadout[slot] !== abilityId || !isAbilityId(abilityId)) return AbilityReject.NOT_OWNED;
   if (!c.canFight) return AbilityReject.PHASE;
+  if (ABILITIES[abilityId].kind === 'passive') return AbilityReject.PASSIVE;
+  if (c.silenced) return AbilityReject.SILENCED;
+  if (c.blocked) return AbilityReject.BLOCKED;
   if (now < c.castUntil) return AbilityReject.BUSY;
   if (now < (c.cooldownEnds[slot] ?? 0)) return AbilityReject.COOLDOWN;
   if (c.mana + 1e-6 < ABILITIES[abilityId].manaCost) return AbilityReject.NO_MANA;

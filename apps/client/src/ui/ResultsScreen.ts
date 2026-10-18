@@ -47,6 +47,9 @@ export class ResultsScreen {
   private readonly leaveBtn = el('button', 'btn', undefined, 'Sair da sala');
   private shownFor = '';
   private asked = false;
+  private readyKey = 'ENTER';
+
+  setReadyKey(key: string): void { this.readyKey = key; }
 
   constructor(private readonly actions: ResultsActions) {
     this.el.hidden = true;
@@ -162,7 +165,7 @@ export class ResultsScreen {
     if (this.el.hidden) return;
     const here = room.filter((p) => p.connected);
     const back = here.filter((p) => p.back).length;
-    const foot = `De volta ao lobby em ${Math.max(0, secondsLeft)} s · ENTER volta agora`;
+    const foot = `De volta ao lobby em ${Math.max(0, secondsLeft)} s · ${this.readyKey} volta agora`;
     if (this.foot.textContent !== foot) this.foot.textContent = foot;
     const pending = here.filter((p) => !p.back);
     const waitingFor = pending.length > 2 ? `${pending.length} jogadores` : pending.map((p) => p.name).join(', ');

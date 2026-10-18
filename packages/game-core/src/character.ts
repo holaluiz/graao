@@ -26,6 +26,8 @@ import {
 import { Group, groups, quatFromUp, type GamePhysics } from './physics';
 import { transportTangent } from './sphere';
 
+const v3scaleLocal = (v: Vec3, factor: number): Vec3 => ({ x: v.x * factor, y: v.y * factor, z: v.z * factor });
+
 export interface CharacterState {
   /** Feet position (capsule bottom), world space. */
   pos: Vec3;
@@ -54,6 +56,23 @@ export interface CharacterState {
   diving: boolean;
   /** Floating in deep water (see MOVEMENT.swim*). Replicated as MovementState.SWIM. */
   swimming: boolean;
+  /** Authoritative ability movement, also replayed by the owning client's fixed-step motor. */
+  abilityMovement?: CharacterAbilityMovement;
+  rooted?: boolean;
+  noSprint?: boolean;
+  /** Passive air steering multiplier (1 = normal). */
+  airControl?: number;
+}
+
+export interface CharacterAbilityMovement {
+  mode: 'grapple' | 'glide' | 'flight';
+  remaining: number;
+  speed: number;
+  gravityFactor: number;
+  airControl: number;
+  lift: number;
+  anchor?: Vec3;
+  originHeight?: number;
 }
 
 export interface CharacterInput {
@@ -111,7 +130,9 @@ export function stepBreath(breath: number, feet: Vec3, dt: number): number {
 }
 
 export function cloneCharacterState(s: CharacterState): CharacterState {
-  return { ...s, pos: { ...s.pos }, vel: { ...s.vel }, facing: { ...s.facing }, aim: { ...s.aim }, dashDir: { ...s.dashDir } };
+  return { ...s, pos: { ...s.pos }, vel: { ...s.vel }, facing: { ...s.facing }, aim: { ...s.aim }, dashDir: { ...s.dashDir },
+    ...(s.abilityMovement ? { abilityMovement: { ...s.abilityMovement, ...(s.abilityMovement.anchor ? { anchor: { ...s.abilityMovement.anchor } } : {}) } } : {}),
+  };
 }
 
 /**
@@ -143,7 +164,7 @@ export function decodeInput(cmd: InputCmd, out: CharacterInput): CharacterInput 
 export const newInput = (): CharacterInput => ({ wish: v3(), aim: { x: 0, y: 0, z: 1 }, buttons: 0 });
 
 const CAPSULE_CENTER = MOVEMENT.capsuleHalfHeight + MOVEMENT.capsuleRadius;
-const PLAYER_GROUPS = groups(Group.PLAYER, Group.TERRAIN | Group.PROP | Group.CHEST);
+const PLAYER_GROUPS = groups(Group.PLAYER, Group.TERRAIN | Group.PROP | Group.CHEST | Group.BARRIER | Group.RAIL);
 
 /** One character's Rapier objects: a parentless capsule collider moved by the shared kinematic controller. */
 export interface CharacterBody {
@@ -167,7 +188,10 @@ export class CharacterMotor {
    * passes its own chests; null (the client: one room per world) collides with every chest.
    */
   chestFilter: ReadonlySet<number> | null = null;
-  private readonly predicate = (c: { handle: number }): boolean => !this.physics.chestHandles.has(c.handle) || !!this.chestFilter?.has(c.handle);
+  barrierFilter: ReadonlySet<number> | null = null;
+  private readonly predicate = (c: { handle: number }): boolean =>
+    (this.chestFilter === null || !this.physics.chestHandles.has(c.handle) || this.chestFilter.has(c.handle))
+    && (this.barrierFilter === null || !this.physics.barrierHandles.has(c.handle) || this.barrierFilter.has(c.handle));
 
   constructor(private readonly physics: GamePhysics) {
     const c = physics.world.createCharacterController(MOVEMENT.skin);
@@ -183,7 +207,7 @@ export class CharacterMotor {
   createBody(state: CharacterState): CharacterBody {
     const { R, world } = this.physics;
     const desc = R.ColliderDesc.capsule(MOVEMENT.capsuleHalfHeight, MOVEMENT.capsuleRadius).setCollisionGroups(
-      groups(Group.PLAYER, Group.TERRAIN | Group.PROP),
+      groups(Group.PLAYER, Group.TERRAIN | Group.PROP | Group.BARRIER | Group.RAIL),
     );
     const collider = world.createCollider(desc);
     this.placeCollider(collider, state.pos);
@@ -203,6 +227,12 @@ export class CharacterMotor {
   /** Advances `s` by one fixed step `dt` with input `inp`. Deterministic for the same state, input and world. */
   step(body: CharacterBody, s: CharacterState, inp: CharacterInput, dt: number): void {
     const up = v3normalize(s.pos, this.tmpUp);
+    if (s.abilityMovement) {
+      s.abilityMovement.remaining = Math.max(0, s.abilityMovement.remaining - dt);
+      if (s.abilityMovement.remaining <= 0 || s.swimming || s.rooted || (s.grounded && s.abilityMovement.mode === 'glide')) delete s.abilityMovement;
+    }
+    const abilityMove = s.abilityMovement;
+    if (s.rooted) s.dashSteps = 0;
     // Water: touching the surface ends a dive; deep enough the character swims until the bottom lifts the feet near
     // the surface again (hysteresis, so wading at chest depth does not flicker in and out of swimming).
     const depth = waterDepth(s.pos);
@@ -212,16 +242,17 @@ export class CharacterMotor {
     const diving = s.diving;
     const swimming = s.swimming;
     if (swimming) s.airJumped = false;
-    const jumpDown = !diving && (inp.buttons & InputButton.JUMP) !== 0;
-    const sprint = (inp.buttons & InputButton.SPRINT) !== 0;
+    const jumpDown = !diving && !s.rooted && (inp.buttons & InputButton.JUMP) !== 0;
+    const sprint = !s.noSprint && (inp.buttons & InputButton.SPRINT) !== 0;
     // Hands are spread while skydiving and stroking while swimming: no aiming, no firing pose.
-    const handsFree = !diving && !swimming;
+    const handsFree = !diving && !swimming && abilityMove?.mode !== 'flight';
     s.aiming = handsFree && (inp.buttons & InputButton.AIM) !== 0;
     const firing = handsFree && (inp.buttons & InputButton.FIRE) !== 0;
     if (v3len(inp.aim) > 0.5) v3normalize(inp.aim, s.aim);
 
     // Wish direction on the tangent plane, length ≤ 1.
     const wish = v3projectOnPlane(inp.wish, up, this.tmpWish);
+    if (s.rooted) v3set(wish, 0, 0, 0);
     const wl = v3len(wish);
     if (wl > 1) v3set(wish, wish.x / wl, wish.y / wl, wish.z / wl);
     const wishLen = Math.min(1, wl);
@@ -232,7 +263,7 @@ export class CharacterMotor {
 
     const forwardish = wishLen > 0.1 ? v3dot(wish, s.facing) / Math.max(wishLen, 1e-6) : 0;
     const canSprint = handsFree && sprint && !s.aiming && !firing && forwardish > 0.3;
-    const maxSpeed = diving
+    const maxSpeed = abilityMove?.mode === 'flight' || abilityMove?.mode === 'glide' ? abilityMove.speed * s.slow : diving
       ? sprint
         ? MOVEMENT.diveFastSpeed
         : MOVEMENT.diveSpeed
@@ -257,7 +288,7 @@ export class CharacterMotor {
             ? wishLen > 0.05
               ? MOVEMENT.groundAccel
               : MOVEMENT.groundDecel
-            : MOVEMENT.airAccel;
+            : MOVEMENT.airAccel * (s.airControl ?? 1) * (abilityMove?.airControl ?? 1);
       const dx = target.x - h.x, dy = target.y - h.y, dz = target.z - h.z;
       const dl = Math.hypot(dx, dy, dz);
       const maxDv = accel * dt;
@@ -309,13 +340,30 @@ export class CharacterMotor {
           ? MOVEMENT.swimMaxRise
           : Math.max(-MOVEMENT.swimMaxRise, Math.min(MOVEMENT.swimFloatRise, (depth - MOVEMENT.swimFloatDepth) * MOVEMENT.swimBuoyancy));
       vs += (target - vs) * Math.min(1, MOVEMENT.swimDrag * dt);
-    } else if (!s.grounded || jumped) vs -= PLANET.gravity * dt;
+    } else if (!s.grounded || jumped) vs -= PLANET.gravity * (abilityMove?.gravityFactor ?? 1) * dt;
     else vs = -0.5; // keep contact; snap-to-ground does the rest
     if (diving) {
       // Skydive: the fall is capped (head-first with sprint is faster); slowing down from a faster fall brakes smoothly.
       const terminal = sprint ? MOVEMENT.diveFastTerminalSpeed : MOVEMENT.diveTerminalSpeed;
       if (vs < -terminal) vs = Math.min(-terminal, vs + MOVEMENT.diveBrake * dt);
     } else vs = Math.max(vs, -MOVEMENT.terminalSpeed);
+
+    if (abilityMove?.mode === 'glide') vs = Math.max(vs, -Math.max(1, abilityMove.lift));
+    else if (abilityMove?.mode === 'flight') {
+      const ceiling = (abilityMove.originHeight ?? v3len(s.pos)) + 18;
+      vs = v3len(s.pos) < ceiling ? Math.max(vs, abilityMove.lift) : Math.min(vs, 0);
+      s.grounded = false;
+    } else if (abilityMove?.mode === 'grapple' && abilityMove.anchor) {
+      const to = { x: abilityMove.anchor.x - s.pos.x, y: abilityMove.anchor.y - s.pos.y, z: abilityMove.anchor.z - s.pos.z };
+      const distance = v3len(to);
+      if (distance < 0.8) delete s.abilityMovement;
+      else {
+        const velocity = v3scaleLocal(to, Math.min(abilityMove.speed, distance / Math.max(dt, 1e-4)) / distance);
+        v3projectOnPlane(velocity, up, h);
+        vs = v3dot(velocity, up);
+      }
+    }
+    if (s.rooted) v3set(h, 0, 0, 0);
 
     const desired = v3set(this.tmpDesired, (h.x + up.x * vs) * dt, (h.y + up.y * vs) * dt, (h.z + up.z * vs) * dt);
 
@@ -329,7 +377,8 @@ export class CharacterMotor {
     this.controller.setUp(up);
     this.placeCollider(body.collider, s.pos);
     // Another room's chests are invisible here (only checked when this world holds chests this motor does not own).
-    const foreign = this.chestFilter && this.physics.chestHandles.size > this.chestFilter.size;
+    const foreign = (this.chestFilter !== null && this.physics.chestHandles.size > this.chestFilter.size)
+      || (this.barrierFilter !== null && this.physics.barrierHandles.size > this.barrierFilter.size);
     this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS, foreign ? this.predicate : undefined);
     const mv = this.controller.computedMovement();
     const groundedNow = this.controller.computedGrounded();

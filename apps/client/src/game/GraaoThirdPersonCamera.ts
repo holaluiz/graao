@@ -39,6 +39,8 @@ export class GraaoThirdPersonCamera {
   private readonly tmp = new THREE.Vector3();
   private shake = 0;
   private shakeT = 0;
+  /** Visual displacement only; recoil and the gameplay view direction retain their normal strength. */
+  shakeIntensity = 1;
   /** Recoil offsets (rad) added to the view; they recover on their own. */
   private recoilPitch = 0;
   private recoilYaw = 0;
@@ -82,8 +84,18 @@ export class GraaoThirdPersonCamera {
   }
 
   addShake(amount: number, duration = 0.18): void {
+    if (this.shakeIntensity === 0) return;
     this.shake = Math.max(this.shake, amount);
     this.shakeT = Math.max(this.shakeT, duration);
+  }
+
+  setShakeIntensity(value: number): void {
+    if (!Number.isFinite(value)) return;
+    this.shakeIntensity = THREE.MathUtils.clamp(value, 0, 1);
+    if (this.shakeIntensity === 0) {
+      this.shake = 0;
+      this.shakeT = 0;
+    }
   }
 
   update(dt: number, feet: THREE.Vector3, physics: GamePhysics | null): CameraFrame {
@@ -127,7 +139,7 @@ export class GraaoThirdPersonCamera {
     }
     if (this.shakeT > 0) {
       this.shakeT -= dt;
-      const s = this.shake * Math.max(0, this.shakeT) * 6;
+      const s = this.shake * this.shakeIntensity * Math.max(0, this.shakeT) * 6;
       pos.addScaledVector(right, (Math.random() - 0.5) * s * 0.12).addScaledVector(this.up, (Math.random() - 0.5) * s * 0.12);
     }
     this.camera.position.copy(pos);

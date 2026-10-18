@@ -64,7 +64,7 @@ export interface HeadShape {
   mesh: HeadMesh;
 }
 
-function bytes(b64: string): Uint8Array {
+export function bytes(b64: string): Uint8Array {
   const s = atob(b64);
   const out = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);

@@ -24,12 +24,16 @@ export const Group = {
   PLAYER: 0x0004,
   /** Chests added at run time (per room on the server, whose world is shared: see `CharacterMotor.chestFilter`). */
   CHEST: 0x0008,
+  /** Temporary ability cover, scoped to one room by ray/motor predicates. */
+  BARRIER: 0x0010,
+  /** Map railings and fences: they stop characters, never shots or sight (not in the world queries). */
+  RAIL: 0x0020,
 } as const;
 
 /** Rapier InteractionGroups: membership in the high 16 bits, filter in the low 16 bits. */
 export const groups = (membership: number, filter: number): number => ((membership & 0xffff) << 16) | (filter & 0xffff);
 
-export const GROUPS_WORLD_QUERY = groups(0xffff, Group.TERRAIN | Group.PROP);
+export const GROUPS_WORLD_QUERY = groups(0xffff, Group.TERRAIN | Group.PROP | Group.BARRIER);
 export const GROUPS_TERRAIN_QUERY = groups(0xffff, Group.TERRAIN);
 export const GROUPS_PROP_QUERY = groups(0xffff, Group.PROP);
 export const GROUPS_CHEST_QUERY = groups(0xffff, Group.CHEST);
@@ -69,6 +73,16 @@ export function quatFromBasis(xa: Vec3, ya: Vec3, za: Vec3): { x: number; y: num
   return { x, y, z, w };
 }
 
+/** Hamilton product a·b (apply b, then a). */
+export function quatMul(a: { x: number; y: number; z: number; w: number }, b: { x: number; y: number; z: number; w: number }): { x: number; y: number; z: number; w: number } {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  };
+}
+
 /** Quaternion rotating +Y onto unit vector `up`. */
 export function quatFromUp(up: Vec3): { x: number; y: number; z: number; w: number } {
   const d = up.y;
@@ -89,14 +103,16 @@ export interface GamePhysics {
   terrainHandle: number;
   /** Every chest collider currently in this world (any room's). */
   chestHandles: Set<number>;
+  /** Every ability barrier in this shared world; a server query must filter foreign rooms. */
+  barrierHandles: Set<number>;
   /** Casts a ray; returns distance and collider handle of the first hit, or null. */
-  castRay(origin: Vec3, dir: Vec3, maxDist: number, filterGroups?: number): { toi: number; handle: number } | null;
+  castRay(origin: Vec3, dir: Vec3, maxDist: number, filterGroups?: number, predicate?: (collider: RAPIER.Collider) => boolean): { toi: number; handle: number } | null;
   /** Like castRay, plus the surface normal at the hit. */
-  castRayNormal(origin: Vec3, dir: Vec3, maxDist: number, filterGroups?: number): { toi: number; handle: number; normal: Vec3 } | null;
+  castRayNormal(origin: Vec3, dir: Vec3, maxDist: number, filterGroups?: number, predicate?: (collider: RAPIER.Collider) => boolean): { toi: number; handle: number; normal: Vec3 } | null;
   /** True when a box (half extents, centre, basis side/up/forward) overlaps any collider in `filterGroups`. */
-  boxOverlaps(center: Vec3, half: Vec3, side: Vec3, up: Vec3, forward: Vec3, filterGroups: number): boolean;
+  boxOverlaps(center: Vec3, half: Vec3, side: Vec3, up: Vec3, forward: Vec3, filterGroups: number, predicate?: (collider: RAPIER.Collider) => boolean): boolean;
   /** True when a ball overlaps any collider in `filterGroups`. */
-  ballOverlaps(center: Vec3, r: number, filterGroups: number): boolean;
+  ballOverlaps(center: Vec3, r: number, filterGroups: number, predicate?: (collider: RAPIER.Collider) => boolean): boolean;
   dispose(): void;
 }
 
@@ -123,7 +139,7 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
           p.position.z + p.side.z * c.x + p.up.z * c.y + p.forward.z * c.z,
         );
       }
-      desc.setRotation(q).setCollisionGroups(groups(Group.PROP, 0xffff));
+      desc.setRotation(c.type !== 'hull' && c.type !== 'ball' && c.q ? quatMul(q, c.q) : q).setCollisionGroups(groups(c.block === 'move' ? Group.RAIL : Group.PROP, 0xffff));
       const col = world.createCollider(desc);
       propByCollider.set(col.handle, p);
     }
@@ -138,32 +154,33 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
     propByCollider,
     terrainHandle: terrain.handle,
     chestHandles: new Set(),
-    castRay(origin, dir, maxDist, filterGroups = GROUPS_WORLD_QUERY) {
+    barrierHandles: new Set(),
+    castRay(origin, dir, maxDist, filterGroups = GROUPS_WORLD_QUERY, predicate) {
       ray.origin = origin;
       ray.dir = dir;
-      const hit = world.castRay(ray, maxDist, true, undefined, filterGroups);
+      const hit = world.castRay(ray, maxDist, true, undefined, filterGroups, undefined, undefined, predicate);
       return hit ? { toi: hit.timeOfImpact, handle: hit.collider.handle } : null;
     },
-    castRayNormal(origin, dir, maxDist, filterGroups = GROUPS_WORLD_QUERY) {
+    castRayNormal(origin, dir, maxDist, filterGroups = GROUPS_WORLD_QUERY, predicate) {
       ray.origin = origin;
       ray.dir = dir;
-      const hit = world.castRayAndGetNormal(ray, maxDist, true, undefined, filterGroups);
+      const hit = world.castRayAndGetNormal(ray, maxDist, true, undefined, filterGroups, undefined, undefined, predicate);
       return hit ? { toi: hit.timeOfImpact, handle: hit.collider.handle, normal: { x: hit.normal.x, y: hit.normal.y, z: hit.normal.z } } : null;
     },
-    boxOverlaps(center, half, side, up, forward, filterGroups) {
+    boxOverlaps(center, half, side, up, forward, filterGroups, predicate) {
       let any = false;
       world.intersectionsWithShape(center, quatFromBasis(side, up, forward), new R.Cuboid(half.x, half.y, half.z), () => {
         any = true;
         return false;
-      }, undefined, filterGroups);
+      }, undefined, filterGroups, undefined, undefined, predicate);
       return any;
     },
-    ballOverlaps(center, r, filterGroups) {
+    ballOverlaps(center, r, filterGroups, predicate) {
       let any = false;
       world.intersectionsWithShape(center, { x: 0, y: 0, z: 0, w: 1 }, new R.Ball(r), () => {
         any = true;
         return false;
-      }, undefined, filterGroups);
+      }, undefined, filterGroups, undefined, undefined, predicate);
       return any;
     },
     dispose() {
@@ -178,6 +195,8 @@ function colliderDesc(R: Rapier, c: ColliderPrimitive) {
       return R.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
     case 'cylinder':
       return R.ColliderDesc.cylinder(c.hh, c.r);
+    case 'cone':
+      return R.ColliderDesc.cone(c.hh, c.r);
     case 'ball':
       return R.ColliderDesc.ball(c.r);
     case 'hull':
@@ -214,4 +233,39 @@ export function removeChestCollider(physics: GamePhysics, handle: number): void 
 /** Rebuilds the broad phase after colliders were added or removed (one step of a world with no dynamic bodies). */
 export function refreshQueries(physics: GamePhysics): void {
   physics.world.step();
+}
+
+/** Metres, world-space radial basis. `center` is the collider's centre, not the ground point. */
+export interface AbilityBarrierFrame {
+  center: Vec3;
+  side: Vec3;
+  up: Vec3;
+  forward: Vec3;
+  width: number;
+  height: number;
+  depth: number;
+}
+
+/** Temporary solid cover shared by shots and the capsule motor; lifecycle belongs to the room's ability engine. */
+export function createAbilityBarrier(physics: GamePhysics, frame: AbilityBarrierFrame): { handle: number; dispose(): void } {
+  const { R, world } = physics;
+  const desc = R.ColliderDesc.cuboid(frame.width / 2, frame.height / 2, frame.depth / 2)
+    .setTranslation(frame.center.x, frame.center.y, frame.center.z)
+    .setRotation(quatFromBasis(frame.side, frame.up, frame.forward))
+    .setCollisionGroups(groups(Group.BARRIER, 0xffff));
+  const collider = world.createCollider(desc);
+  physics.barrierHandles.add(collider.handle);
+  refreshQueries(physics);
+  let disposed = false;
+  return {
+    handle: collider.handle,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      const current = world.getCollider(collider.handle);
+      if (current) world.removeCollider(current, false);
+      physics.barrierHandles.delete(collider.handle);
+      refreshQueries(physics);
+    },
+  };
 }

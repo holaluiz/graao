@@ -1,39 +1,20 @@
-/**
- * Desktop input: WASD move, mouse camera (pointer lock), Space jump, Shift sprint, LMB fire, RMB aim, E/Q weapon
- * slots, R reload, Enter ready (warmup), 1–4 abilities, F interact (open a chest, pick up), Z/X/C consumables (Vida,
- * Escudo, Mana), Tab scoreboard, Esc menu, Left/Right change spectator target. On focus loss every held input is
- * released so nothing stays stuck.
- */
+import { DEFAULT_BINDINGS, normalizeBindings, type KeyBindings, type RebindableAction } from './KeyBindings';
+
+/** Remappable desktop controls, fixed mouse/navigation shortcuts, and release on focus loss. */
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'fire' | 'aim'
   | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard'
   | 'interact' | 'item1' | 'item2' | 'item3' | 'spectatePrevious' | 'spectateNext';
 
-const KEYS: Record<string, Action> = {
-  KeyW: 'forward',
-  KeyS: 'back',
-  KeyA: 'left',
-  KeyD: 'right',
+const ALIASES: Record<string, RebindableAction> = {
   ArrowUp: 'forward',
   ArrowDown: 'back',
   ArrowLeft: 'left',
   ArrowRight: 'right',
-  Space: 'jump',
-  ShiftLeft: 'sprint',
   ShiftRight: 'sprint',
-  KeyE: 'weapon1',
-  KeyQ: 'weapon2',
-  Digit1: 'ability1',
-  Digit2: 'ability2',
-  Digit3: 'ability3',
-  Digit4: 'ultimate',
-  KeyR: 'reload',
-  KeyF: 'interact',
-  KeyZ: 'item1',
-  KeyX: 'item2',
-  KeyC: 'item3',
-  Enter: 'ready',
   NumpadEnter: 'ready',
+};
+const FIXED_KEYS: Record<string, Action> = {
   Escape: 'menu',
   F3: 'debug',
   Tab: 'scoreboard',
@@ -42,6 +23,9 @@ const KEYS: Record<string, Action> = {
 export class Input {
   private readonly held = new Set<Action>();
   private readonly pressed = new Set<Action>();
+  private readonly keyboardHeld = new Map<string, Action>();
+  private currentBindings: KeyBindings = { ...DEFAULT_BINDINGS };
+  private keys = new Map<string, Action>();
   mouseDX = 0;
   mouseDY = 0;
   sensitivity = 0.0022;
@@ -52,23 +36,26 @@ export class Input {
   private readonly unsub: (() => void)[] = [];
 
   constructor(private readonly target: HTMLElement) {
+    this.setBindings(DEFAULT_BINDINGS);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const on = (t: EventTarget, type: string, fn: (e: any) => void, opts?: AddEventListenerOptions) => {
       t.addEventListener(type, fn as EventListener, opts);
       this.unsub.push(() => t.removeEventListener(type, fn as EventListener, opts));
     };
     on(window, 'keydown', (e: KeyboardEvent) => {
-      let a = KEYS[e.code];
+      let a: Action | undefined = this.allowSpectator && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')
+        ? e.code === 'ArrowLeft' ? 'spectatePrevious' : 'spectateNext'
+        : this.keys.get(e.code);
       if (!a) return;
       // Typing a name or a room code is not gameplay (Enter would mark "ready", E/Q would switch weapons...).
       if (e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.closest('input, textarea, select, [role="textbox"]'))) return;
+      if (!this.enabled) return;
       if (this.allowSpectator && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
         // Arrow keys keep their native navigation on focused controls and while a menu has disabled gameplay.
         if (!this.enabled || (e.target instanceof HTMLElement && e.target.closest('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="combobox"], [role="option"]'))) return;
         e.preventDefault();
         a = e.code === 'ArrowLeft' ? 'spectatePrevious' : 'spectateNext';
-        if (!e.repeat && !this.held.has(a)) this.pressed.add(a);
-        this.held.add(a);
+        this.pressCode(e.code, a, e.repeat);
         return;
       }
       // Tab keeps its normal focus-navigation behavior in menus. In the match it only reveals a held overlay;
@@ -77,16 +64,12 @@ export class Input {
         if (!this.enabled || !this.allowScoreboard) return;
         e.preventDefault();
       }
-      // Space never scrolls or presses a focused button (it jumps, also out of the UFO without pointer lock).
-      if (a === 'debug' || (a === 'jump' && this.enabled) || (this.locked && ['weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate', 'interact', 'item1', 'item2', 'item3'].includes(a))) e.preventDefault();
-      if (!e.repeat) this.pressed.add(a);
-      this.held.add(a);
+      // A remapped Space still must not scroll/press a focused control; jumping also works without pointer lock.
+      if (a === 'debug' || a === 'jump' || e.code === 'Space' || (this.locked && ['weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate', 'interact', 'item1', 'item2', 'item3'].includes(a))) e.preventDefault();
+      this.pressCode(e.code, a, e.repeat);
     });
     on(window, 'keyup', (e: KeyboardEvent) => {
-      const a = KEYS[e.code];
-      if (a) this.held.delete(a);
-      const spectatorAction = e.code === 'ArrowLeft' ? 'spectatePrevious' : e.code === 'ArrowRight' ? 'spectateNext' : null;
-      if (spectatorAction) this.held.delete(spectatorAction);
+      this.releaseCode(e.code);
     });
     on(target, 'mousedown', (e: MouseEvent) => {
       if (!this.enabled) return;
@@ -119,6 +102,38 @@ export class Input {
     return document.pointerLockElement === this.target;
   }
 
+  get bindings(): KeyBindings {
+    return { ...this.currentBindings };
+  }
+
+  keyFor(action: RebindableAction): string {
+    return this.currentBindings[action];
+  }
+
+  setBindings(bindings: Readonly<KeyBindings>): void {
+    this.releaseAll();
+    this.currentBindings = normalizeBindings(bindings);
+    this.keys = new Map(Object.entries(this.currentBindings).map(([action, code]) => [code, action as RebindableAction]));
+    // Legacy aliases follow only unchanged defaults; an explicit remapping always owns its key.
+    for (const [code, action] of Object.entries(ALIASES)) {
+      if (!this.keys.has(code) && this.currentBindings[action] === DEFAULT_BINDINGS[action]) this.keys.set(code, action);
+    }
+    for (const [code, action] of Object.entries(FIXED_KEYS)) this.keys.set(code, action);
+  }
+
+  private pressCode(code: string, action: Action, repeat: boolean): void {
+    if (this.keyboardHeld.has(code)) return;
+    if (!repeat && !this.held.has(action)) this.pressed.add(action);
+    this.keyboardHeld.set(code, action);
+    this.held.add(action);
+  }
+
+  private releaseCode(code: string): void {
+    const action = this.keyboardHeld.get(code);
+    this.keyboardHeld.delete(code);
+    if (action && ![...this.keyboardHeld.values()].includes(action)) this.held.delete(action);
+  }
+
   get enabled(): boolean {
     return this.inputEnabled;
   }
@@ -131,6 +146,8 @@ export class Input {
   /** Left/Right change the followed player only while the spectator HUD is active. */
   set spectatorEnabled(enabled: boolean) {
     if (enabled !== this.allowSpectator) {
+      this.releaseCode('ArrowLeft');
+      this.releaseCode('ArrowRight');
       for (const action of ['spectatePrevious', 'spectateNext'] as const) {
         this.held.delete(action);
         this.pressed.delete(action);
@@ -147,6 +164,7 @@ export class Input {
   set scoreboardEnabled(enabled: boolean) {
     this.allowScoreboard = enabled;
     if (!enabled) {
+      this.releaseCode('Tab');
       this.held.delete('scoreboard');
       this.pressed.delete('scoreboard');
     }
@@ -188,6 +206,7 @@ export class Input {
   }
 
   releaseAll(): void {
+    this.keyboardHeld.clear();
     this.held.clear();
     this.pressed.clear();
     this.mouseDX = 0;

@@ -53,7 +53,7 @@ function fixture() {
   const app = {
     phase: 'MATCH', local: { state: localState }, character, input,
     combat: {
-      alive: false, inMatch: true, phase: MatchPhase.MATCH,
+      alive: false, inMatch: true, phase: MatchPhase.MATCH as MatchPhase,
       scoreboardState: { players, me: 0, eliminated: new Set([0]) },
     },
     net: {

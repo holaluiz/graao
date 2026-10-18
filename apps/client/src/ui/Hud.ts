@@ -21,9 +21,11 @@
  */
 import type { AbilityIcon } from '@graao/game-data';
 import { HitKind } from '@graao/shared';
+import { DEFAULT_BINDINGS, keyLabel, type KeyBindings } from '../game/KeyBindings';
 import { ABILITY_ICONS } from './abilityIcons';
 import { TormentaMap, type TormentaMapView } from './TormentaMap';
 import '../styles/tormenta.css';
+import '../styles/abilities-v2.css';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 /** The reticle follows the spread cone at this fraction of its true screen size: it still opens and closes with the
@@ -73,11 +75,14 @@ export interface AbilitySlotView {
   color: string;
   cost: number;
   ultimate: boolean;
+  kind?: 'active' | 'passive' | 'ultimate';
+  description?: string;
+  active?: boolean;
   /** 0..1 of the cooldown still to run. */
   cd: number;
   secondsLeft: number;
   /** Mirror of the server state (the HUD only displays it). */
-  state: 'ready' | 'cooldown' | 'nomana' | 'casting' | 'locked';
+  state: 'ready' | 'cooldown' | 'nomana' | 'casting' | 'locked' | 'silenced' | 'invalid_target' | 'blocked' | 'passive' | 'disabled';
 }
 
 /** UFO deployment panel (aboard, falling, landed). */
@@ -194,6 +199,7 @@ export class Hud {
   private readonly weaponsEl = el('div', 'weapons', this.el);
   private readonly slots: { root: HTMLElement; name: HTMLElement; ammo: HTMLElement; fill: HTMLElement; key: HTMLElement; rarity: HTMLElement; last: string }[] = [];
   private readonly ammoHint = el('div', 'ammo-hint', this.el);
+  private reloadKey = keyLabel(DEFAULT_BINDINGS.reload);
 
   // Overlays.
   private readonly deathEl = el('div', 'death', this.el);
@@ -288,6 +294,21 @@ export class Hud {
 
   show(v: boolean): void {
     this.el.hidden = !v;
+  }
+
+  setKeyBindings(bindings: KeyBindings): void {
+    const previousHint = `SEM MUNIÇÃO · ${this.reloadKey}`;
+    this.reloadKey = keyLabel(bindings.reload);
+    if (this.ammoHint.textContent === previousHint) this.ammoHint.textContent = `SEM MUNIÇÃO · ${this.reloadKey}`;
+    this.slots.forEach((slot, i) => {
+      slot.key.textContent = keyLabel(bindings[i === 0 ? 'weapon1' : 'weapon2']);
+      slot.last = '';
+    });
+    const actions = ['ability1', 'ability2', 'ability3', 'ultimate'] as const;
+    this.abSlots.forEach((slot, i) => {
+      slot.key.textContent = slot.root.dataset.kind === 'passive' ? 'PASSIVA' : keyLabel(bindings[actions[i]!]);
+      slot.last = '';
+    });
   }
 
   /** Combat widgets (vitals, weapons, abilities, reticle) hide aboard the UFO and during the drop. */
@@ -555,7 +576,7 @@ export class Hud {
     const a = slots[active];
     const dry = !!a && !a.empty && a.ammo === 0 && reload < 0;
     this.ammoHint.hidden = !(dry || reload >= 0);
-    this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : a && a.reserve <= 0 ? 'SEM MUNIÇÃO · procure caixas de munição' : 'SEM MUNIÇÃO · R';
+    this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : a && a.reserve <= 0 ? 'SEM MUNIÇÃO · procure caixas de munição' : `SEM MUNIÇÃO · ${this.reloadKey}`;
   }
 
   /** Ability slots 1–4. The views mirror the server (cooldowns, Mana, wind-up); the HUD never decides. */
@@ -573,21 +594,31 @@ export class Hud {
     }
     slots.forEach((v, i) => {
       const s = this.abSlots[i]!;
-      const ident = `${v.name}|${v.icon}|${v.color}|${v.cost}|${v.key}|${v.ultimate}`;
+      const passive = v.kind === 'passive';
+      const ident = `${v.name}|${v.icon}|${v.color}|${v.cost}|${v.key}|${v.ultimate}|${v.kind}`;
       if (s.last !== ident) {
         s.last = ident;
         s.icon.innerHTML = ABILITY_ICONS[v.icon];
         s.root.style.setProperty('--ab-color', v.color);
         s.root.classList.toggle('ult', v.ultimate);
-        s.key.textContent = v.key;
+        s.root.dataset.kind = v.kind ?? (v.ultimate ? 'ultimate' : 'active');
+        s.key.textContent = passive ? 'PASSIVA' : v.key;
         s.cost.textContent = String(v.cost);
+        s.cost.hidden = s.sweep.hidden = s.time.hidden = passive;
         s.name.textContent = v.name;
       }
+      const stateLabel: Record<AbilitySlotView['state'], string> = {
+        ready: 'Pronta', cooldown: 'Recarregando', nomana: 'Mana insuficiente', casting: 'Conjurando', locked: 'Indisponível',
+        silenced: 'Silenciado', invalid_target: 'Alvo inválido', blocked: 'Bloqueada', passive: v.active ? 'Passiva ativa' : 'Passiva equipada', disabled: 'Indisponível',
+      };
+      s.root.title = `${v.name} · ${stateLabel[v.state]}${v.description ? `\n${v.description}` : ''}`;
+      s.root.setAttribute('aria-label', s.root.title);
+      s.root.dataset.active = String(v.active ?? false);
       if (s.root.dataset.state !== v.state) s.root.dataset.state = v.state;
       s.sweep.style.setProperty('--p', v.cd.toFixed(3));
       const t = v.secondsLeft > 0 ? (v.secondsLeft >= 10 ? String(Math.ceil(v.secondsLeft)) : v.secondsLeft.toFixed(1).replace('.', ',')) : '';
       if (s.time.textContent !== t) s.time.textContent = t;
-      if (v.ultimate && v.state !== 'cooldown' && v.state !== 'locked') s.root.classList.add('charged');
+      if (v.ultimate && v.state === 'ready') s.root.classList.add('charged');
       else s.root.classList.remove('charged');
     });
   }
@@ -596,6 +627,22 @@ export class Hud {
   abilityDenied(slot: number): void {
     const s = this.abSlots[slot];
     if (s) replay(s.root, 'denied');
+  }
+
+  manaDenied(): void {
+    replay(this.manaRow.root, 'mana-denied');
+  }
+
+  setAbilityStatus(silencedSeconds: number, temporaryShield: number): void {
+    this.effectsEl.dataset.silenced = String(silencedSeconds > 0);
+    let silence = this.effectsEl.querySelector<HTMLElement>('.silence-chip');
+    if (!silence) silence = el('div', 'fx-chip silence-chip', this.effectsEl);
+    silence.hidden = silencedSeconds <= 0;
+    if (!silence.hidden) silence.textContent = `SILENCIADO · ${silencedSeconds.toFixed(1).replace('.', ',')} s`;
+    let temporary = this.effectsEl.querySelector<HTMLElement>('.temporary-shield-chip');
+    if (!temporary) temporary = el('div', 'fx-chip temporary-shield-chip', this.effectsEl);
+    temporary.hidden = temporaryShield <= 0;
+    if (!temporary.hidden) temporary.textContent = `◈ ${Math.ceil(temporaryShield)} ESCUDO TEMPORÁRIO`;
   }
 
   /** Ultimate charged: URGENT once (pop + notice), then RELEVANT (a short shimmer), then a quiet golden rim. */

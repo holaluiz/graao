@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import type { GamePhysics } from '@graao/game-core';
 import { GraaoThirdPersonCamera } from './GraaoThirdPersonCamera';
@@ -50,5 +50,79 @@ describe('camera target reset', () => {
     expect(camera.fovBoost).toBe(7);
     expect(camera.pivotPoint.y).toBeGreaterThan(90);
     expect(camera.pivotPoint.y).toBeLessThan(140);
+  });
+});
+
+describe('camera shake comfort setting', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const feet = new THREE.Vector3(0, 90, 0);
+  const facing = new THREE.Vector3(0, 0, 1);
+
+  function makeCamera(intensity: number): GraaoThirdPersonCamera {
+    const camera = new GraaoThirdPersonCamera(new THREE.PerspectiveCamera());
+    camera.reset(feet, facing, true);
+    camera.setShakeIntensity(intensity);
+    return camera;
+  }
+
+  it('scales displacement while retaining heading, aiming and weapon recoil', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const off = makeCamera(0);
+    const half = makeCamera(0.5);
+    const full = makeCamera(1);
+    for (const camera of [off, half, full]) {
+      camera.look(0.22, 0.12);
+      camera.aim = true;
+      camera.kick(0.1, 0.03);
+      camera.addShake(1, 0.5);
+      camera.update(1 / 60, feet, null);
+    }
+
+    const fullOffset = full.camera.position.clone().sub(off.camera.position);
+    const halfOffset = half.camera.position.clone().sub(off.camera.position);
+    expect(fullOffset.length()).toBeGreaterThan(0.1);
+    expect(halfOffset.distanceTo(fullOffset.clone().multiplyScalar(0.5))).toBeLessThan(1e-10);
+    for (const camera of [half, full]) {
+      expect(camera.heading.distanceTo(off.heading)).toBeLessThan(1e-10);
+      expect(camera.frame.forward.distanceTo(off.frame.forward)).toBeLessThan(1e-10);
+      expect(camera.frame.view.distanceTo(off.frame.view)).toBeLessThan(1e-10);
+      expect(camera.camera.fov).toBe(off.camera.fov);
+    }
+    const noRecoil = makeCamera(0);
+    noRecoil.look(0.22, 0.12);
+    noRecoil.aim = true;
+    noRecoil.update(1 / 60, feet, null);
+    expect(off.frame.view.distanceTo(noRecoil.frame.view)).toBeGreaterThan(0.05);
+  });
+
+  it('turning shake off clears an existing impulse and ignores new impulses until reenabled', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const camera = makeCamera(1);
+    const clean = makeCamera(0);
+    camera.addShake(2, 5);
+    camera.update(1 / 60, feet, null);
+    camera.setShakeIntensity(0);
+    camera.addShake(3, 10);
+    camera.update(1 / 60, feet, null);
+    clean.update(1 / 60, feet, null);
+    expect(camera.camera.position.distanceTo(clean.camera.position)).toBeLessThan(1e-10);
+    camera.setShakeIntensity(1);
+    camera.update(1 / 60, feet, null);
+    expect(camera.camera.position.distanceTo(clean.camera.position)).toBeLessThan(1e-10);
+    camera.addShake(1, 0.5);
+    camera.update(1 / 60, feet, null);
+    expect(camera.camera.position.distanceTo(clean.camera.position)).toBeGreaterThan(0.1);
+  });
+
+  it('clamps valid strengths and ignores nonfinite input without changing the selected strength', () => {
+    const camera = makeCamera(1);
+    camera.setShakeIntensity(-2);
+    expect(camera.shakeIntensity).toBe(0);
+    camera.setShakeIntensity(2);
+    expect(camera.shakeIntensity).toBe(1);
+    camera.setShakeIntensity(0.35);
+    for (const value of [NaN, Infinity, -Infinity]) camera.setShakeIntensity(value);
+    expect(camera.shakeIntensity).toBe(0.35);
   });
 });

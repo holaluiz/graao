@@ -34,6 +34,7 @@ import { WeaponHolder } from '../character/WeaponModels';
 import { Shape } from '../render/vfx/GRAVFXSystem';
 import type { ScoreboardState } from '../ui/Scoreboard';
 import { AbilityDirector } from './AbilityDirector';
+import { keyLabel } from './KeyBindings';
 import { WeaponController, type WeaponKit } from './WeaponController';
 
 /** Camera response presets (shake and kick; always at full strength for every player). */
@@ -337,7 +338,7 @@ export class CombatDirector {
     hud.setWeapons(
       this.weapon.slot,
       this.weapon.ids.map((id, i) => {
-        const key = i === 0 ? 'E' : 'Q';
+        const key = keyLabel(app.input.keyFor(i === 0 ? 'weapon1' : 'weapon2'));
         if (!id) return { key, name: '', ammo: 0, magazine: 0, reserve: 0, empty: true };
         const item = weaponItem(id);
         const r = item ? RARITIES[ITEMS[item].rarity] : null;
@@ -372,10 +373,11 @@ export class CombatDirector {
     const connected = this.players.filter((p) => p.connected);
     if (this.phase === MatchPhase.FREE_ROAM) {
       const ready = connected.filter((p) => p.ready).length;
-      if (this.app.net?.solo) hud.setStatus('SOLO COM BOTS · ENTER para começar', 'relevant');
+      const readyKey = keyLabel(this.app.input.keyFor('ready'));
+      if (this.app.net?.solo) hud.setStatus(`SOLO COM BOTS · ${readyKey} para começar`, 'relevant');
       else if (connected.length < 2) hud.setStatus(`AQUECIMENTO · aguardando oponente · código ${this.app.net?.code ?? ''}`);
-      else if (this.me()?.ready) hud.setStatus(`PRONTO ✓ · aguardando os outros (${ready}/${connected.length}) · ENTER cancela`, 'relevant');
-      else hud.setStatus(`AQUECIMENTO · ENTER quando estiver pronto (${ready}/${connected.length})`, 'relevant');
+      else if (this.me()?.ready) hud.setStatus(`PRONTO ✓ · aguardando os outros (${ready}/${connected.length}) · ${readyKey} cancela`, 'relevant');
+      else hud.setStatus(`AQUECIMENTO · ${readyKey} quando estiver pronto (${ready}/${connected.length})`, 'relevant');
     } else if (this.phase === MatchPhase.MATCH) {
       if (now < this.startsAt) {
         const n = Math.ceil((this.startsAt - now) / 1000);
@@ -468,7 +470,7 @@ export class CombatDirector {
       } else if (m.phase === MatchPhase.FREE_ROAM) {
         this.app.results.hide();
         if (prev === MatchPhase.ABILITY_DRAFT) this.app.hud.banner('DRAFT CANCELADO', 'Faltaram jogadores · de volta ao aquecimento', 2.4, 'bad');
-        else this.app.hud.banner('AQUECIMENTO', 'Treine à vontade · ENTER quando estiver pronto', 2.2);
+        else this.app.hud.banner('AQUECIMENTO', `Treine à vontade · ${keyLabel(this.app.input.keyFor('ready'))} quando estiver pronto`, 2.2);
       }
     }
     this.abilities.onRoomState(m);

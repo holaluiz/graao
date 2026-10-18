@@ -9,6 +9,7 @@
  * it never scales damage (a weapon's numbers live in WEAPONS, one set per weapon).
  */
 import type { AmmoType, WeaponId } from './weapons';
+import { GRAAO_MAP } from './world/map';
 
 // ------------------------------------------------------------------------------------------------ rarity
 
@@ -230,10 +231,13 @@ export const BOT_KIT = {
 };
 
 export const LOOT_RULES = {
-  /** Active chests per match (MVP 1v1 on R = 100 m: about one every 50 s of running). */
-  chestsPerMatch: 14,
+  /**
+   * Active chests per match: every region gets its minimum (CHEST_REGIONS: 18 in all), the rest spread out; for up
+   * to 10 players on R = 100 m that is about two chests per player, denser in the towns.
+   */
+  chestsPerMatch: 22,
   /** No two active chests closer than this (degrees of arc; 1° ≈ 1.75 m). */
-  minChestSpacingDeg: 8,
+  minChestSpacingDeg: 6,
   /** Chest lid opening before the rewards appear (server time, ms). Short: nobody is locked in place. */
   openMs: 450,
   /** Interaction reach from the feet (m): chest centre, item. The server allows `slack` more (latency). */
@@ -263,15 +267,25 @@ export interface ChestSpotDef {
   hint: string;
   /** Preferred facing (degrees clockwise from north); the validator may turn it toward a free approach. */
   yaw?: number;
+  /**
+   * What the chest stands on: the terrain (default) or a prop surface — a house floor, a flat roof — found by a ray
+   * cast down from `height` (m above the terrain) + 1.2 m, and refused when it lands more than 0.5 m away from it.
+   */
+  surface?: 'terrain' | 'prop';
+  height?: number;
+  /** Under a roof on purpose (inside a house, a workshop): checks 1.9 m of headroom instead of open sky. */
+  covered?: boolean;
 }
 
 /** Region groups the spawner spreads chests over (wilderness spots use 'Trilhas'). */
 export const CHEST_REGIONS: { name: string; min: number }[] = [
-  { name: 'Vila das Lanternas', min: 2 },
-  { name: 'A Árvore Gigante', min: 1 },
+  { name: 'Vila das Lanternas', min: 3 },
+  { name: 'Bairro do Horizonte', min: 3 },
+  { name: 'Bosque dos Varais', min: 2 },
   { name: 'Velho Observatório', min: 1 },
-  { name: 'Lago Espelho', min: 1 },
+  { name: 'Lago Espelho', min: 2 },
   { name: 'Fenda de Cristal', min: 1 },
+  { name: 'Serra do Mirante', min: 1 },
   { name: 'Lasca do Céu', min: 1 },
   { name: 'Arcos Afundados', min: 1 },
   { name: 'Planalto Norte', min: 1 },
@@ -279,49 +293,8 @@ export const CHEST_REGIONS: { name: string; min: number }[] = [
 ];
 
 /**
- * Authored candidates. Each is checked against the real collision surface (trimesh + props) and nudged up to a few
- * metres to the nearest valid spot (see game-core chests.ts); `tools/loot/chest-spots.ts` prints the result.
+ * Authored candidates, kept in the map file with the rest of the layout (world/planeta-graao.map.json; the dev map
+ * editor shows and moves them). Each is checked against the real collision surface (trimesh + props) and nudged up to
+ * a few metres to the nearest valid spot (see game-core chests.ts); `tools/loot/chest-spots.ts` prints the result.
  */
-export const CHEST_SPOTS: ChestSpotDef[] = [
-  // Vila das Lanternas: behind houses, by the well, by the low wall.
-  { id: 'vila-poco', region: 'Vila das Lanternas', lat: 9.6, lon: 1.4, hint: 'ao lado do poço', yaw: 200 },
-  { id: 'vila-casa-norte', region: 'Vila das Lanternas', lat: 15.8, lon: -4.2, hint: 'atrás da casa do norte', yaw: 0 },
-  { id: 'vila-muro', region: 'Vila das Lanternas', lat: 18.2, lon: 3.6, hint: 'atrás do muro baixo', yaw: 0 },
-  { id: 'vila-casa-oeste', region: 'Vila das Lanternas', lat: 8.6, lon: -13.0, hint: 'atrás da casa do oeste', yaw: 270 },
-  { id: 'vila-beco', region: 'Vila das Lanternas', lat: 3.4, lon: 8.2, hint: 'entre duas casas', yaw: 120 },
-  // A Árvore Gigante: under the canopy, on the hill.
-  { id: 'arvore-raiz', region: 'A Árvore Gigante', lat: 34.6, lon: 66.2, hint: 'entre as raízes', yaw: 90 },
-  { id: 'arvore-sombra', region: 'A Árvore Gigante', lat: 30.6, lon: 59.4, hint: 'na sombra da copa', yaw: 200 },
-  { id: 'arvore-encosta', region: 'A Árvore Gigante', lat: 40.5, lon: 70.0, hint: 'na encosta, longe da trilha', yaw: 30 },
-  // Velho Observatório: on the plateau and down the hill.
-  { id: 'obs-plato', region: 'Velho Observatório', lat: -16.0, lon: 131.6, hint: 'no platô, ao pé da torre', yaw: 60 },
-  { id: 'obs-subida', region: 'Velho Observatório', lat: -29.0, lon: 119.5, hint: 'no pé do morro, lado sul', yaw: 40 },
-  { id: 'obs-base', region: 'Velho Observatório', lat: -9.5, lon: 136.0, hint: 'na base do morro', yaw: 30 },
-  // Lago Espelho: on the shore.
-  { id: 'lago-margem-norte', region: 'Lago Espelho', lat: -15.2, lon: -37.0, hint: 'na margem norte', yaw: 180 },
-  { id: 'lago-margem-leste', region: 'Lago Espelho', lat: -29.0, lon: -20.5, hint: 'na margem leste', yaw: 270 },
-  { id: 'lago-margem-oeste', region: 'Lago Espelho', lat: -34.0, lon: -56.5, hint: 'na margem oeste', yaw: 90 },
-  // Fenda de Cristal: by the crystals, on the rims of the fissure.
-  { id: 'fenda-cristal-alto', region: 'Fenda de Cristal', lat: 47.0, lon: -106.5, hint: 'junto aos cristais grandes', yaw: 160 },
-  { id: 'fenda-borda', region: 'Fenda de Cristal', lat: 36.5, lon: -103.5, hint: 'na borda da fenda', yaw: 30 },
-  { id: 'fenda-cristal-sul', region: 'Fenda de Cristal', lat: 31.0, lon: -95.0, hint: 'atrás do cristal do sul', yaw: 200 },
-  // Lasca do Céu: under the floating shard.
-  { id: 'lasca-sombra', region: 'Lasca do Céu', lat: 2.5, lon: -148.5, hint: 'debaixo da lasca flutuante', yaw: 0 },
-  { id: 'lasca-pedras', region: 'Lasca do Céu', lat: -4.5, lon: -154.0, hint: 'entre as pedras', yaw: 300 },
-  // Arcos Afundados: between and behind the arches.
-  { id: 'arcos-meio', region: 'Arcos Afundados', lat: -6.4, lon: 61.8, hint: 'entre os arcos', yaw: 30 },
-  { id: 'arcos-atras', region: 'Arcos Afundados', lat: -1.0, lon: 56.0, hint: 'atrás do arco oeste', yaw: 300 },
-  // Planalto Norte: high ground.
-  { id: 'planalto-topo', region: 'Planalto Norte', lat: 71.0, lon: -18.0, hint: 'no alto do planalto', yaw: 180 },
-  { id: 'planalto-beira', region: 'Planalto Norte', lat: 62.0, lon: -2.0, hint: 'na beira do planalto', yaw: 200 },
-  { id: 'planalto-oeste', region: 'Planalto Norte', lat: 70.0, lon: -60.0, hint: 'no planalto, lado oeste', yaw: 120 },
-  // Trilhas: wilderness between the landmarks (near rocks and trees, along the way from one place to the next).
-  { id: 'trilha-leste', region: 'Trilhas', lat: 20.0, lon: 33.5, hint: 'a caminho da árvore gigante', yaw: 60 },
-  { id: 'trilha-sudeste', region: 'Trilhas', lat: -12.5, lon: 96.0, hint: 'a caminho do observatório', yaw: 100 },
-  { id: 'trilha-noroeste', region: 'Trilhas', lat: 27.5, lon: -57.5, hint: 'a caminho da fenda', yaw: 300 },
-  { id: 'trilha-sul', region: 'Trilhas', lat: -40.0, lon: 70.0, hint: 'no campo ao sul dos arcos', yaw: 180 },
-  { id: 'trilha-oeste', region: 'Trilhas', lat: -18.0, lon: -100.0, hint: 'entre o lago e a lasca', yaw: 250 },
-  { id: 'trilha-nordeste', region: 'Trilhas', lat: 50.0, lon: 125.0, hint: 'no campo do nordeste', yaw: 40 },
-  { id: 'trilha-antipoda', region: 'Trilhas', lat: 12.0, lon: 175.0, hint: 'do outro lado do planeta', yaw: 0 },
-  { id: 'trilha-sudoeste', region: 'Trilhas', lat: -45.0, lon: -125.0, hint: 'no vale do sudoeste', yaw: 150 },
-];
+export const CHEST_SPOTS: ChestSpotDef[] = GRAAO_MAP.chestSpots;

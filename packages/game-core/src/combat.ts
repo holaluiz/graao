@@ -13,15 +13,37 @@ export interface Vitals {
   shield: number;
   mana: number;
   alive: boolean;
+  /** Ability protection, separate from normal Shield; its owner expires it in the authoritative tick. */
+  temporaryShield?: number;
+  temporaryShieldUntil?: number;
 }
 
 export const newVitals = (): Vitals => ({ health: ATTRIBUTES.maxHealth, shield: ATTRIBUTES.maxShield, mana: ATTRIBUTES.maxMana, alive: true });
+
+/** Replaces/refreshes protection without converting it to normal Shield or allowing additive stacking. */
+export function applyTemporaryShield(v: Vitals, amount: number, durationSeconds: number, now: number): number {
+  if (!v.alive || !Number.isFinite(amount) || amount <= 0 || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return 0;
+  expireTemporaryShield(v, now);
+  const before = v.temporaryShield ?? 0;
+  v.temporaryShield = Math.min(ATTRIBUTES.maxShield, Math.max(before, Math.round(amount)));
+  v.temporaryShieldUntil = now + durationSeconds * 1000;
+  return v.temporaryShield - before;
+}
+
+export function expireTemporaryShield(v: Vitals, now: number): void {
+  if (!v.alive || now >= (v.temporaryShieldUntil ?? 0)) {
+    v.temporaryShield = 0;
+    v.temporaryShieldUntil = 0;
+  }
+}
 
 export interface DamageResult {
   kinds: HitKind[];
   shieldDamage: number;
   healthDamage: number;
   eliminated: boolean;
+  /** Included in shieldDamage for existing hit feedback and damage accounting. */
+  temporaryShieldDamage?: number;
 }
 
 /** Applies damage: Shield absorbs first, the rest goes to Health. Integers only (no fractional HP on the wire). */
@@ -29,11 +51,19 @@ export function applyDamage(v: Vitals, amount: number, critical: boolean): Damag
   const kinds: HitKind[] = [];
   if (!v.alive || amount <= 0) return { kinds, shieldDamage: 0, healthDamage: 0, eliminated: false };
   let dmg = Math.max(1, Math.round(amount));
-  const shieldDamage = Math.min(v.shield, dmg);
+  const temporaryShieldDamage = Math.min(v.temporaryShield ?? 0, dmg);
+  if (temporaryShieldDamage > 0) {
+    v.temporaryShield = Math.max(0, (v.temporaryShield ?? 0) - temporaryShieldDamage);
+    dmg -= temporaryShieldDamage;
+  }
+  const normalShieldDamage = Math.min(v.shield, dmg);
+  const shieldDamage = normalShieldDamage + temporaryShieldDamage;
+  if (normalShieldDamage > 0) {
+    v.shield -= normalShieldDamage;
+    dmg -= normalShieldDamage;
+  }
   if (shieldDamage > 0) {
-    v.shield -= shieldDamage;
-    dmg -= shieldDamage;
-    kinds.push(v.shield === 0 ? HitKind.SHIELD_BREAK : HitKind.SHIELD);
+    kinds.push(v.shield + (v.temporaryShield ?? 0) === 0 ? HitKind.SHIELD_BREAK : HitKind.SHIELD);
   }
   const healthDamage = Math.min(v.health, dmg);
   if (healthDamage > 0) {
@@ -43,10 +73,12 @@ export function applyDamage(v: Vitals, amount: number, critical: boolean): Damag
   let eliminated = false;
   if (v.health <= 0) {
     v.alive = false;
+    v.temporaryShield = 0;
+    v.temporaryShieldUntil = 0;
     eliminated = true;
     kinds.push(HitKind.ELIMINATION);
   }
-  return { kinds, shieldDamage, healthDamage, eliminated };
+  return { kinds, shieldDamage, healthDamage, eliminated, ...(temporaryShieldDamage > 0 ? { temporaryShieldDamage } : {}) };
 }
 
 /** Drowning (out of breath under water): Health only, a shield does not keep water out. */
@@ -59,6 +91,8 @@ export function applyDrowning(v: Vitals, amount: number): DamageResult {
   const eliminated = v.health <= 0;
   if (eliminated) {
     v.alive = false;
+    v.temporaryShield = 0;
+    v.temporaryShieldUntil = 0;
     kinds.push(HitKind.ELIMINATION);
   }
   return { kinds, shieldDamage: 0, healthDamage, eliminated };

@@ -198,12 +198,18 @@ export class GRAAudioManager {
   /** Environment and music only: ducked and filtered inside the Tormenta (the rest of the world stays clear). */
   private ambientFilter!: BiquadFilterNode;
   private ambientDuck!: GainNode;
+  /** The storm drone follows ambience volume while retaining its clear, unducked warning path. */
+  private ambientSignal!: GainNode;
+  /** Movement and water actions keep their existing acoustics but follow effects rather than the outdoor bed. */
+  private foley!: GainNode;
   private readonly buses = new Map<AudioCategory, GainNode>();
   private readonly voices = new Map<AudioCategory, Voice[]>();
   private noise: AudioBuffer | null = null;
   private readonly loops = new Map<AudioLoop, { gain: GainNode; filter: BiquadFilterNode; base: number }>();
   state: AudioState = 'NORMAL';
   volume = 0.8;
+  effectsVolume = 1;
+  ambienceVolume = 1;
   /** The camera is under the water: the world is heard muffled (on top of the state's own filter). */
   private underwater = false;
   /** Outdoor bed (wind loop and beach loop, built on first use). */
@@ -301,9 +307,15 @@ export class GRAAudioManager {
     this.ambientFilter.frequency.value = 20000;
     this.ambientFilter.Q.value = 0.4;
     this.ambientDuck.connect(this.ambientFilter).connect(this.world);
+    this.ambientSignal = ctx.createGain();
+    this.ambientSignal.gain.value = CATEGORY_GAIN.match * this.ambienceVolume;
+    this.ambientSignal.connect(this.master);
+    this.foley = ctx.createGain();
+    this.foley.gain.value = CATEGORY_GAIN.environment * this.effectsVolume;
+    this.foley.connect(this.ambientDuck);
     for (const cat of Object.keys(VOICE_LIMIT) as AudioCategory[]) {
       const g = ctx.createGain();
-      g.gain.value = CATEGORY_GAIN[cat];
+      g.gain.value = this.categoryGain(cat);
       // Threat, match and UI stay clear in every state; the rest goes through the "world" filter, and the ambience
       // (environment, music) through its own duck first.
       g.connect(cat === 'threat' || cat === 'match' || cat === 'ui' ? this.master : cat === 'environment' || cat === 'music' ? this.ambientDuck : this.world);
@@ -314,11 +326,39 @@ export class GRAAudioManager {
     this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    this.applyWorldFilter();
   }
 
   setVolume(v: number): void {
-    this.volume = v;
-    if (this.ctx) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+    if (!Number.isFinite(v)) return;
+    this.volume = Math.max(0, Math.min(1, v));
+    if (this.ctx) this.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.05);
+  }
+
+  /** Combat, movement, loot, match signals and interface sounds. */
+  setEffectsVolume(v: number): void {
+    if (!Number.isFinite(v)) return;
+    this.effectsVolume = Math.max(0, Math.min(1, v));
+    this.applyCategoryVolumes();
+  }
+
+  /** Outdoor beds, music and continuous wind/UFO/storm layers. */
+  setAmbienceVolume(v: number): void {
+    if (!Number.isFinite(v)) return;
+    this.ambienceVolume = Math.max(0, Math.min(1, v));
+    this.applyCategoryVolumes();
+  }
+
+  private categoryGain(cat: AudioCategory): number {
+    return CATEGORY_GAIN[cat] * (cat === 'environment' || cat === 'music' ? this.ambienceVolume : this.effectsVolume);
+  }
+
+  private applyCategoryVolumes(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (const [cat, bus] of this.buses) bus.gain.setTargetAtTime(this.categoryGain(cat), t, 0.05);
+    this.ambientSignal.gain.setTargetAtTime(CATEGORY_GAIN.match * this.ambienceVolume, t, 0.05);
+    this.foley.gain.setTargetAtTime(CATEGORY_GAIN.environment * this.effectsVolume, t, 0.05);
   }
 
   setState(s: AudioState): void {
@@ -374,7 +414,7 @@ export class GRAAudioManager {
       tail.connect(p);
       tail = p;
     }
-    tail.connect(this.buses.get(cat)!);
+    tail.connect(cat === 'environment' ? this.foley : this.buses.get(cat)!);
     const pitch = (o.pitch ?? 1) * (0.97 + Math.random() * 0.06);
     const dur = this.synth(cue, out, now, pitch);
     const nodes: AudioScheduledSourceNode[] = (out as unknown as { __src?: AudioScheduledSourceNode[] }).__src ?? [];
@@ -430,8 +470,8 @@ export class GRAAudioManager {
     const gain = ctx.createGain();
     gain.gain.value = 0;
     const filter = ctx.createBiquadFilter();
-    // The Tormenta's drone is a match signal (never ducked by its own state); the others are environment.
-    filter.connect(gain).connect(this.buses.get(name === 'tormenta' ? 'match' : 'environment')!);
+    // The Tormenta drone remains clear in its own state, but all continuous layers follow ambience volume.
+    filter.connect(gain).connect(name === 'tormenta' ? this.ambientSignal : this.buses.get('environment')!);
     if (name === 'tormenta') {
       // Pigment and paper going: a low breathy band of noise with a slow swell, and a faint low fifth under it.
       filter.type = 'bandpass';

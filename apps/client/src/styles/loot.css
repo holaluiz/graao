@@ -9,7 +9,7 @@
   padding: 6px 14px 6px 6px; border: 2.5px solid var(--ink); border-radius: 14px; background: rgba(255, 246, 226, .94); box-shadow: 0 3px 0 var(--ink);
   max-width: min(330px, calc(50vw - 74px)); }
 .loot-prompt.pop { animation: loot-pop-side .18s ease-out; }
-.lp-key, .loot-choice kbd, .belt-key { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 8px; background: var(--ink); color: var(--paper);
+.lp-key, .loot-choice kbd, .belt-key { display: grid; place-items: center; white-space: nowrap; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 8px; background: var(--ink); color: var(--paper);
   font: 900 14px var(--font); box-shadow: 0 2px 0 rgba(0, 0, 0, .35); }
 .lp-text { display: grid; gap: 1px; min-width: 0; }
 .lp-action { font-weight: 900; font-size: 15px; letter-spacing: .02em; white-space: nowrap; }

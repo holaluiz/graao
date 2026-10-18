@@ -1,7 +1,7 @@
 /**
  * graao body anatomy: independently authored proportions informed by the Messenger study (big head, short torso,
- * long thin limbs, small hands, ≈ 5.6 heads tall). Garments are built from the SAME ring specs with offsets, so they
- * follow the body exactly.
+ * long thin limbs, small hands, ≈ 5.6 heads tall). The rings below are the body's envelope: garments are built from
+ * them with offsets, and the sculpted body (bodySculpt.ts) is fitted into them, so clothes always cover it.
  */
 import type { RigProportions } from '../rig/GRARig';
 import type { RingSpec, V3 } from './PartBuilder';
@@ -11,6 +11,7 @@ export { makeHead, type HeadLandmarks, type HeadShape } from './head';
 
 export interface BodyShape {
   p: RigProportions;
+  sturdy: boolean;
   /** Girth multiplier for the torso and limbs. */
   girth: number;
   torso: RingSpec[];
@@ -79,12 +80,13 @@ export function makeBodyShape(p: RigProportions, sturdy: boolean): BodyShape {
     L(0.14, 0.034, 'lower_legs', -0.008),
     L(p.ankleY + 0.01, 0.029, 'lower_legs', -0.01),
   ];
-  return { p, girth: g, torso, arm, leg, head: makeHead([0, p.headY + 0.112, 0.008]) };
+  return { p, sturdy, girth: g, torso, arm, leg, head: makeHead([0, p.headY + 0.112, 0.008]) };
 }
 
 /**
- * Bare foot profile (heel → toes) at the foot's x: center height, half width and half height per station. Bottoms sit
- * on y = 0 (a flat sole, never below the ground), the instep rises toward the ankle, the ball widens, the toes flatten.
+ * Foot envelope (heel → toes) at the foot's x: center height, half width and half height per station. Bottoms sit on
+ * y = 0 (a flat sole, never below the ground), the instep rises toward the ankle, the ball widens, the toes flatten.
+ * The sculpted foot is fitted into it and shoes and sandals are built over it.
  */
 export const FOOT_STATIONS: { z: number; y: number; w: number; h: number }[] = [
   { z: -0.05, y: 0.032, w: 0.028, h: 0.031 },

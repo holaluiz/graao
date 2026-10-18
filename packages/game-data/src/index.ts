@@ -6,3 +6,5 @@ export * from './abilities';
 export * from './ufo';
 export * from './tormenta';
 export * from './loot';
+export * from './world/kit';
+export * from './world/map';

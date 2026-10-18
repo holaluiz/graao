@@ -1,0 +1,34 @@
+.settings-panel .gra-dialog { width: min(580px, 100%); padding: 22px; gap: 16px; }
+.settings-panel .gra-dialog-body { display: grid; gap: 14px; min-height: 0; }
+.settings-panel .settings-content { min-height: 210px; gap: 16px; }
+.settings-panel .settings-range { display: flex; align-items: center; gap: 12px; }
+.settings-panel .settings-slider { min-width: 0; }
+.settings-panel .settings-value { flex: 0 0 66px; font-size: 12px; font-weight: 850; text-align: right; font-variant-numeric: tabular-nums; }
+.settings-panel .settings-help { margin: 0; font-size: 11px; line-height: 1.35; font-weight: 700; opacity: .75; }
+.settings-panel .settings-bindings { display: grid; gap: 6px; }
+.settings-panel .settings-binding { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; font-size: 12px; font-weight: 800; }
+.settings-panel .settings-binding .gra-button { min-width: 116px; padding: 7px 9px; font-size: 11px; }
+.settings-panel .settings-binding [aria-pressed='true'] { --face: var(--sun); }
+.settings-panel .settings-binding-pages { display: flex; align-items: center; justify-content: center; gap: 14px; font-size: 11px; font-weight: 850; }
+.settings-panel .settings-binding-pages .gra-button { padding: 4px 12px; }
+.settings-panel .settings-binding-feedback { margin: 0; min-height: 30px; font-size: 11px; line-height: 1.35; font-weight: 750; overflow-wrap: anywhere; }
+.settings-panel[data-section='Teclas'] .settings-content { gap: 10px; }
+.settings-panel .gra-feedback:empty { display: none; }
+@media (max-width: 600px) {
+  .settings-panel { padding: 14px; }
+  .settings-panel .gra-dialog { padding: 17px; gap: 14px; }
+  .settings-panel .gra-tabs { gap: 5px; }
+  .settings-panel .gra-tabs .gra-button { padding: 9px 4px; font-size: 10px; }
+}
+@media (max-height: 640px) {
+  .settings-panel { padding: 10px; }
+  .settings-panel .gra-dialog { padding: 12px 16px; gap: 9px; }
+  .settings-panel .gra-heading h2 { font-size: 20px; }
+  .settings-panel .gra-dialog-body { gap: 9px; }
+  .settings-panel .settings-content { gap: 9px; min-height: 0; }
+  .settings-panel .gra-button { padding-block: 7px; }
+  .settings-panel .settings-bindings { gap: 4px; }
+  .settings-panel .settings-binding .gra-button { padding-block: 5px; }
+  .settings-panel .settings-binding-feedback { min-height: 27px; }
+  .settings-panel[data-section='Teclas'] .settings-content { gap: 6px; }
+}

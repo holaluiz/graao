@@ -16,6 +16,13 @@ const smoothstep = (e0: number, e1: number, x: number) => {
 /** 1 at t=0 → 0 at t≥1, smooth (cosine). */
 const bump = (t: number) => (t >= 1 ? 0 : 0.5 + 0.5 * Math.cos(Math.PI * Math.max(0, t)));
 
+interface Segment {
+  a: Vec3;
+  b: Vec3;
+  normal: Vec3;
+  arc: number;
+}
+
 interface ResolvedFeature {
   f: TerrainFeature;
   center: Vec3;
@@ -23,6 +30,8 @@ interface ResolvedFeature {
   b?: Vec3;
   normal?: Vec3;
   arc?: number;
+  /** Channels: the polyline's great-circle segments. */
+  segs?: Segment[];
   /** Cosine of the largest angle from the center at which the feature has any effect (cheap early-out). */
   cosOuter: number;
 }
@@ -45,31 +54,42 @@ export interface Terrain {
 export function createTerrain(): Terrain {
   const noise: Noise3 = createNoise3(PLANET.seed);
   const detail: Noise3 = createNoise3(PLANET.seed ^ 0x5bd1e995);
+  const crest: Noise3 = createNoise3(PLANET.seed ^ 0x27d4eb2f);
   const R = PLANET.radius;
 
+  const segment = (a: Vec3, b: Vec3): Segment => ({ a, b, normal: v3normalize(v3cross(a, b)), arc: v3angle(a, b) });
   const features: ResolvedFeature[] = TERRAIN_FEATURES.map((f) => {
-    if (f.kind === 'fissure') {
+    if (f.kind === 'fissure' || f.kind === 'ridge') {
       const a = latLonToDir(f.lat1, f.lon1);
       const b = latLonToDir(f.lat2, f.lon2);
       const normal = v3normalize(v3cross(a, b));
       const arc = v3angle(a, b);
-      return { f, center: v3normalize({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }), a, b, normal, arc, cosOuter: Math.cos(arc / 2 + f.widthDeg * DEG * 3.2) };
+      const reach = f.kind === 'fissure' ? f.widthDeg * 3.2 : f.widthDeg * 1.05;
+      return { f, center: v3normalize({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }), a, b, normal, arc, cosOuter: Math.cos(arc / 2 + reach * DEG) };
+    }
+    if (f.kind === 'channel') {
+      const pts = f.points.map(([lat, lon]) => latLonToDir(lat, lon));
+      const segs = pts.slice(1).map((b, i) => segment(pts[i]!, b));
+      const center = v3normalize(pts.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y, z: acc.z + p.z }), { x: 0, y: 0, z: 0 }));
+      const far = Math.max(...pts.map((p) => v3angle(p, center)));
+      return { f, center, segs, cosOuter: Math.cos(far + (f.widthDeg + f.bankDeg) * DEG * 1.05) };
     }
     const outer = f.kind === 'flatten' ? f.radiusDeg + f.falloffDeg : f.radiusDeg;
     return { f, center: latLonToDir(f.lat, f.lon), cosOuter: Math.cos(outer * DEG) };
   });
 
   /** Angular distance from `d` to the great-circle arc a→b. */
-  const arcDistance = (d: Vec3, rf: ResolvedFeature): number => {
-    const n = rf.normal!;
+  const segDistance = (d: Vec3, s: { a: Vec3; b: Vec3; normal: Vec3; arc: number }): number => {
+    const n = s.normal;
     const off = Math.asin(Math.max(-1, Math.min(1, v3dot(d, n))));
     // Is the projection of d inside the arc?
     const proj = v3normalize({ x: d.x - n.x * Math.sin(off), y: d.y - n.y * Math.sin(off), z: d.z - n.z * Math.sin(off) });
-    const da = v3angle(proj, rf.a!);
-    const db = v3angle(proj, rf.b!);
-    if (da <= rf.arc! + 1e-6 && db <= rf.arc! + 1e-6) return Math.abs(off);
-    return Math.min(v3angle(d, rf.a!), v3angle(d, rf.b!));
+    const da = v3angle(proj, s.a);
+    const db = v3angle(proj, s.b);
+    if (da <= s.arc + 1e-6 && db <= s.arc + 1e-6) return Math.abs(off);
+    return Math.min(v3angle(d, s.a), v3angle(d, s.b));
   };
+  const arcDistance = (d: Vec3, rf: ResolvedFeature): number => segDistance(d, { a: rf.a!, b: rf.b!, normal: rf.normal!, arc: rf.arc! });
 
   const heightAt = (d: Vec3): number => {
     const fx = d.x * PLANET.hillFrequency;
@@ -92,6 +112,13 @@ export function createTerrain(): Terrain {
         const dist = arcDistance(d, rf) / (f.widthDeg * DEG);
         if (dist < 1) h -= f.depth * (1 - dist * dist);
         else if (dist < 3) h += f.rimHeight * bump(Math.abs(dist - 2));
+      } else if (f.kind === 'ridge') {
+        // Rounded crest with a jagged top (rocky outcrops every few metres).
+        const dist = arcDistance(d, rf) / (f.widthDeg * DEG);
+        if (dist < 1) {
+          const b = bump(dist);
+          h += f.height * b * (1 + 0.16 * b * crest(d.x * 26, d.y * 26, d.z * 26));
+        }
       }
     }
     for (const rf of features) {
@@ -102,6 +129,19 @@ export function createTerrain(): Terrain {
       const a = Math.acos(Math.min(1, dc)) / DEG;
       const w = 1 - smoothstep(f.radiusDeg, f.radiusDeg + f.falloffDeg, a);
       if (w > 0) h = h + (f.height - h) * w;
+    }
+    // Channels last: they cut through the flattened squares and plateaus down to their floor.
+    for (const rf of features) {
+      const f = rf.f;
+      if (f.kind !== 'channel') continue;
+      const dc = d.x * rf.center.x + d.y * rf.center.y + d.z * rf.center.z;
+      if (dc < rf.cosOuter || h <= f.floor) continue;
+      let dist = Infinity;
+      for (const sg of rf.segs!) dist = Math.min(dist, segDistance(d, sg));
+      const t = dist / DEG;
+      if (t >= f.widthDeg + f.bankDeg) continue;
+      const k = t <= f.widthDeg ? 0 : smoothstep(f.widthDeg, f.widthDeg + f.bankDeg, t);
+      h = Math.min(h, f.floor + (h - f.floor) * k);
     }
     return h;
   };
