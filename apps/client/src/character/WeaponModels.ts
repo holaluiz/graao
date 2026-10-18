@@ -52,11 +52,11 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
  * Mount transform from the weapon frame to the canonical RightHand bone (bind: T-pose, fingers along −X, palm −Y,
  * thumb +Z). Held like a real pistol: the grip runs across the palm from the index side down past the little finger
  * (weapon −Y → hand −Z), the top of the weapon sits on the thumb side (weapon +Y → hand +Z) and the barrel continues
- * the line of the forearm (weapon +Z → hand −X). The grip's middle lands inside the closed fist (GraaoCharacter curls
- * the fingers around it).
+ * the line of the forearm (weapon +Z → hand −X). The grip runs through the middle of the closed fist (GraaoCharacter
+ * curls the fingers around it) and comes out under the little finger.
  */
 export const HAND_MOUNT = {
-  position: new THREE.Vector3(-0.074, -0.036, 0.036),
+  position: new THREE.Vector3(-0.066, -0.004, 0.036),
   rotation: new THREE.Euler().setFromRotationMatrix(
     new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0)),
   ),

@@ -5,10 +5,11 @@ import os
 import numpy as np
 from PIL import Image
 
-GLB_INPUT = r'c:\Users\vulgo\Downloads\polygon_guns.glb'
-CLIENT_PUBLIC_DIR = r'd:\meus documentos\graao\apps\client\public\assets\v1\weapons'
-CLIENT_SRC_DIR = r'd:\meus documentos\graao\apps\client\src\character'
-ASSETS_DIR = r'd:\meus documentos\graao\assets\weapons'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+GLB_INPUT = os.path.join(ROOT, 'assets', 'weapons', 'polygon_guns.glb')
+CLIENT_PUBLIC_DIR = os.path.join(ROOT, 'apps', 'client', 'public', 'assets', 'v1', 'weapons')
+CLIENT_SRC_DIR = os.path.join(ROOT, 'apps', 'client', 'src', 'character')
+ASSETS_DIR = os.path.join(ROOT, 'assets', 'weapons')
 
 os.makedirs(CLIENT_PUBLIC_DIR, exist_ok=True)
 os.makedirs(ASSETS_DIR, exist_ok=True)
@@ -48,49 +49,16 @@ def get_buffer(accessor_idx):
     else:
         raise ValueError(f"Unknown comp_type {comp_type}")
 
+# `grip`: (z, y) in metres of the top of the pistol grip (where the web of the hand sits), centred between its front
+# and back edges, measured from the rear-bottom corner of the weapon's bounding box once it is barrel +Z, top +Y.
 WEAPON_CONFIGS = [
-    {
-        'id': 'sunbeam',
-        'mesh_idx': 63,
-        'name': 'Raio de Sol (Assault Rifle M63)',
-        'target_barrel_y': 0.03,
-    },
-    {
-        'id': 'petal',
-        'mesh_idx': 61,
-        'name': 'Rajada de Pétalas (Tactical Shotgun M61)',
-        'target_barrel_y': 0.03,
-    },
-    {
-        'id': 'pistol',
-        'mesh_idx': 71,
-        'name': 'Pistola Tática (Pistol M71)',
-        'target_barrel_y': 0.03,
-    },
-    {
-        'id': 'ak47',
-        'mesh_idx': 79,
-        'name': 'Fuzil Kalash (AK-47 M79)',
-        'target_barrel_y': 0.03,
-    },
-    {
-        'id': 'sniper',
-        'mesh_idx': 60,
-        'name': 'Fuzil de Precisão (Sniper M60)',
-        'target_barrel_y': 0.03,
-    },
-    {
-        'id': 'smg',
-        'mesh_idx': 59,
-        'name': 'Submetralhadora (Bullpup SMG M59)',
-        'target_barrel_y': 0.03,
-    },
-    {
-        'id': 'launcher',
-        'mesh_idx': 80,
-        'name': 'Lança-Foguetes (Rocket Launcher M80)',
-        'target_barrel_y': 0.03,
-    },
+    {'id': 'sunbeam', 'mesh_idx': 63, 'name': 'Raio de Sol (Assault Rifle M63)', 'grip': (0.33, 0.17)},
+    {'id': 'petal', 'mesh_idx': 61, 'name': 'Rajada de Pétalas (Tactical Shotgun M61)', 'grip': (0.40, 0.115)},
+    {'id': 'pistol', 'mesh_idx': 71, 'name': 'Pistola Tática (Pistol M71)', 'grip': (0.10, 0.12)},
+    {'id': 'ak47', 'mesh_idx': 79, 'name': 'Fuzil Kalash (AK-47 M79)', 'grip': (0.31, 0.13)},
+    {'id': 'sniper', 'mesh_idx': 60, 'name': 'Fuzil de Precisão (Sniper M60)', 'grip': (0.35, 0.12)},
+    {'id': 'smg', 'mesh_idx': 59, 'name': 'Submetralhadora (Bullpup SMG M59)', 'grip': (0.195, 0.22)},
+    {'id': 'launcher', 'mesh_idx': 80, 'name': 'Lança-Foguetes (Rocket Launcher M80)', 'grip': (0.43, 0.14)},
 ]
 
 processed_weapons = {}
@@ -125,34 +93,25 @@ for cfg in WEAPON_CONFIGS:
     py = ((1.0 - v) * (h - 1)).astype(int)
     colors = (im_arr[py, px].astype(np.float32) / 255.0) # N, 3
     
-    # Transform: x_new = x, y_new = -z, z_new = y
+    # Same rotation as the Sketchfab root node (glTF Y-up: x, z, -y) without its scale: barrel +Z, top +Y, grip −Y.
     pos_t = np.zeros_like(pos)
     pos_t[:, 0] = pos[:, 0]
-    pos_t[:, 1] = -pos[:, 2]
-    pos_t[:, 2] = pos[:, 1]
+    pos_t[:, 1] = pos[:, 2]
+    pos_t[:, 2] = -pos[:, 1]
     
-    # Center X
-    min_x, max_x = np.min(pos_t[:, 0]), np.max(pos_t[:, 0])
-    center_x = (min_x + max_x) / 2
-    pos_t[:, 0] -= center_x
+    # Center X; Y and Z from the rear-bottom corner of the bounds (the frame `grip` is measured in)
+    pos_t[:, 0] -= (np.min(pos_t[:, 0]) + np.max(pos_t[:, 0])) / 2
+    pos_t[:, 1] -= np.min(pos_t[:, 1])
+    pos_t[:, 2] -= np.min(pos_t[:, 2])
     
-    # Find grip Z and barrel Y
-    min_b = np.min(pos_t, axis=0)
-    max_b = np.max(pos_t, axis=0)
+    # Bore height: the muzzle end of the weapon
+    max_z = float(np.max(pos_t[:, 2]))
+    barrel_y = float(np.mean(pos_t[pos_t[:, 2] > max_z - 0.03][:, 1]))
     
-    bottom_y_thresh = min_b[1] + 0.05
-    bottom_verts = pos_t[pos_t[:, 1] < bottom_y_thresh]
-    grip_z = float(np.mean(bottom_verts[:, 2])) if len(bottom_verts) > 0 else 0.0
-    
-    top_z_verts = pos_t[pos_t[:, 2] > max_b[2] - 0.03]
-    barrel_y = float(np.mean(top_z_verts[:, 1])) if len(top_z_verts) > 0 else 0.0
-    
-    # Apply offset so grip top is at (0, 0, 0) and barrel is at target_barrel_y
-    offset_z = -grip_z
-    offset_y = -(barrel_y - cfg['target_barrel_y'])
-    
-    pos_t[:, 1] += offset_y
-    pos_t[:, 2] += offset_z
+    # Origin at the top of the grip (where the hand holds)
+    grip_z, grip_y = cfg['grip']
+    pos_t[:, 1] -= grip_y
+    pos_t[:, 2] -= grip_z
     
     # Compute normals from triangles
     # Unroll triangles if indexed or compute smooth face-weighted normals
@@ -177,8 +136,7 @@ for cfg in WEAPON_CONFIGS:
         flat_col[k::3] = colors[tris[:, k]]
         
     # Muzzle position
-    max_z = float(np.max(flat_pos[:, 2]))
-    muzzle = [0.0, float(cfg['target_barrel_y']), round(max_z + 0.02, 3)]
+    muzzle = [0.0, round(barrel_y - grip_y, 3), round(max_z - grip_z + 0.02, 3)]
     
     # Ink geometry: inflate each triangle outwards by 0.005
     flat_ink_pos = flat_pos + flat_norm * 0.005
@@ -324,6 +282,6 @@ export function decodeBakedWeapons(): Record<WeaponId, BakedWeapon> {{
 }}
 """
 
-with open(ts_path, 'w', encoding='utf-8') as f:
+with open(ts_path, 'w', encoding='utf-8', newline='\n') as f:
     f.write(ts_code)
 print(f"Wrote {ts_path} ({os.path.getsize(ts_path) // 1024} KB)")
