@@ -58,6 +58,8 @@ const AUTHORED_FALLBACK: Record<string, string> = {
 };
 
 export class CharacterPartLibrary {
+  /** Invalidates rendered catalog images when the authored asset set changes. */
+  revision = 0;
   /** Pieces modeled in Blender; when one exists for (body, piece) it replaces the code-built version. */
   private authored: AuthoredParts | null = null;
   private readonly rigs = new Map<string, GRARig>();
@@ -87,6 +89,56 @@ export class CharacterPartLibrary {
   useAuthored(parts: AuthoredParts): void {
     this.authored = parts;
     this.parts.clear();
+    this.revision++;
+  }
+
+  /**
+   * Exact catalog geometry for an isolated product photograph. The returned geometry is owned by the caller;
+   * disposing it never disposes the shared part cache. Faces and beards retain the real head as their context.
+   */
+  previewGeometry(a: CharacterAppearance, key: keyof CharacterAppearance): BuiltCharacter {
+    const start = performance.now();
+    const kinds: Partial<Record<keyof CharacterAppearance, PartKind>> = {
+      faceId: 'face', beardId: 'beard', hairId: 'hair', topId: 'top', bottomId: 'bottom',
+      shoesId: 'shoes', hatId: 'hat', accessoryId: 'accessory', extraId: 'extra',
+    };
+    let geometry: THREE.BufferGeometry;
+    if (key === 'bodyId' || key === 'faceId' || key === 'beardId') {
+      const body = this.body(a.bodyId, new Set()).g;
+      const context = body.clone();
+      if (key !== 'bodyId') {
+        const regions = body.getAttribute('aRegion');
+        const index = body.getIndex()!;
+        const kept: number[] = [];
+        const head = new Set([REGION_IDS.head, REGION_IDS.ears, REGION_IDS.neck]);
+        for (let t = 0; t < index.count; t += 3) {
+          const triangle = [index.getX(t), index.getX(t + 1), index.getX(t + 2)];
+          if (triangle.every((i) => head.has(regions.getX(i)))) kept.push(...triangle);
+        }
+        context.setIndex(kept);
+      }
+      const pieces = [context, this.part(a, 'face', a.faceId).g];
+      if (key === 'beardId') pieces.push(this.part(a, 'beard', a.beardId).g);
+      // Compact away unused body vertices so bounds frame only the visible head.
+      const compact = pieces.filter((g) => (g.getIndex()?.count ?? 0) > 0).map((g) => g.toNonIndexed());
+      geometry = mergeGeometries(compact, false)!;
+      context.dispose();
+      for (const g of compact) g.dispose();
+    } else {
+      const kind = kinds[key];
+      if (!kind) throw new Error(`No catalog geometry for ${key}`);
+      geometry = this.part(a, kind, a[key]).g.clone();
+    }
+    return {
+      geometry,
+      rig: this.rig(a.bodyId),
+      stats: {
+        vertices: geometry.getAttribute('position').count,
+        triangles: (geometry.getIndex()?.count ?? geometry.getAttribute('position').count) / 3,
+        buildMs: performance.now() - start,
+        cacheHits: 0,
+      },
+    };
   }
 
   private part(a: CharacterAppearance, kind: PartKind, pieceId: string): { g: THREE.BufferGeometry; hit: boolean } {

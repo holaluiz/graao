@@ -33,3 +33,11 @@ As métricas reproduzíveis e suas limitações estão em [PERFORMANCE.md](PERFO
 ## Correção da prévia de calçados e da câmera
 
 Os controles de visualização passaram para uma faixa separada, fora da área usada para enquadrar o avatar. A câmera consulta colisões sem dissolver objetos e desloca a lente em vez de mover sua posição física para dentro do cenário. Em 390 × 844, 1366 × 768, 1440 × 820 e 1920 × 1080 foram verificados zero fades ativos, câmera a aproximadamente 1 m acima da base do avatar, pés acima dos controles e ausência de botões fora da tela. Dados em [shoe-preview-checks.json](shoe-preview-checks.json); capturas [desktop](screenshots/customization-shoes-clear-1440.png) e [celular](screenshots/customization-shoes-clear-mobile.png).
+
+## Miniaturas reais do catálogo
+
+As ilustrações das peças foram substituídas por fotografias 3D da biblioteca usada pelo avatar. A validação visual local conferiu roupas e estampas, calçados com meias, chapéus largos, rostos, mochilas e bandeiras pelo lado de trás. Trocar Creme por Céu mudou o PNG da camisa; retornar a Creme recuperou o mesmo PNG do cache. A opção Careca mostrou o estado sem peça. O console permaneceu sem erros ou avisos durante essa verificação.
+
+Em 1366 × 768 foram exibidas seis opções e 18 cores; em 390 × 844 e 390 × 667, três opções por página. Nenhum botão saiu da tela ou dos limites do painel de opções, e a página não excedeu o viewport. Medidas em [catalog-3d-checks.json](catalog-3d-checks.json); capturas de [roupas](screenshots/catalog-3d-tops-1366.png), [calçados](screenshots/catalog-3d-shoes-1366.png) e [celular](screenshots/catalog-3d-mobile-390.png).
+
+Os oito testes de `CreatorThumbnails.test.ts` passaram, cobrindo todas as peças nos dois corpos, geometria independente do cache do avatar, peças autoradas e revisão da biblioteca, cores e enquadramento, cancelamento e fechamento do editor. Typecheck do cliente, ESLint dos arquivos alterados e build de cliente/servidor passaram. O aviso preexistente de chunks grandes permanece.

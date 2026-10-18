@@ -126,13 +126,15 @@ O guia lembra WASD, salto, corrida/mergulho, mira/disparo, troca e recarga de ar
 
 ## Personalização
 
-Fontes: `apps/client/src/ui/Creator.ts`, `creatorPreviews.ts` e `creator.css`.
+Fontes: `apps/client/src/ui/Creator.ts`, `CreatorThumbnails.ts`, `creatorPreviews.ts` e `creator.css`.
 
 O editor tem três regiões no desktop:
 
 1. **Categorias à esquerda**: Corpo, Rosto, Cabelo, Parte superior, Parte inferior, Calçados, Chapéus e Acessórios. Cada categoria combina ícone e nome. Azul indica a categoria atual.
 2. **Prévia central**: maior região da tela, reservada ao personagem 3D já existente. A área fornece `previewBounds()` para a câmera de apresentação. Arrastar gira; a roda aproxima; **Visão frontal** restaura o enquadramento.
-3. **Opções à direita**: cards com ilustrações do catálogo, nome e seleção visível; amostras para pele, cabelo e tecido. As miniaturas são ilustrações SVG autoradas, enquanto a aparência real é avaliada na prévia 3D central.
+3. **Opções à direita**: cards com miniaturas 3D das próprias peças, nome e seleção visível; amostras para pele, cabelo e tecido. Cada miniatura usa a geometria, a paleta e os shaders do personagem, incluindo as peças Blender carregadas. O corpo e as cores escolhidas atualizam as miniaturas; a prévia central permite avaliar a combinação completa.
+
+As miniaturas são PNGs transparentes de 256 × 176 px, produzidos por um único renderizador sob demanda. Somente a página visível entra na fila, com uma imagem por quadro; trocar de página ou fechar o editor cancela pedidos pendentes. Um cache de até 128 imagens evita refazer combinações já vistas e é invalidado pela revisão da biblioteca de peças. Chapéus largos, meias e outros volumes têm enquadramento próprio; mochilas e bandeiras são vistas por trás. Opções sem peça mostram um rótulo explícito. Em falha de renderização, o card informa que a prévia está indisponível.
 
 As opções de rosto alternam Expressão e Barba/bigode. Acessórios alternam Rosto/cabeça e Corpo. A cor do chapéu só aparece quando um chapéu está selecionado; notas explicam materiais cuja cor modifica fitas e enfeites.
 

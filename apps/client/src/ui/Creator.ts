@@ -1,7 +1,7 @@
 /** Appearance workshop. Edits stay in a local draft until the player chooses Save. */
 import { APPEARANCE_OPTIONS, DEFAULT_APPEARANCE, FABRIC_COLORS, HAIR_COLORS, SKIN_TONES, randomAppearance, type ColorEntry } from '@graao/game-data';
 import type { CharacterAppearance } from '@graao/shared';
-import { appearancePreview, categoryIcon } from './creatorPreviews';
+import { categoryIcon } from './creatorPreviews';
 import './creator.css';
 
 interface Section { key: keyof CharacterAppearance; label: string; colors?: ColorEntry[]; note?: string; when?: (a: CharacterAppearance) => boolean }
@@ -27,6 +27,11 @@ export interface CreatorActions {
   sound?: (cue: 'ui.click' | 'ui.swap') => void;
 }
 
+export interface CreatorThumbnailSource {
+  request(key: keyof CharacterAppearance, id: string, appearance: CharacterAppearance, signal?: AbortSignal): Promise<string>;
+  setActive(on: boolean): void;
+}
+
 export class Creator {
   readonly el = document.createElement('section');
   /** Kept as a separate, transparent layer for the application's existing mount point. */
@@ -43,8 +48,9 @@ export class Creator {
   private readonly status = document.createElement('p');
   private readonly media = window.matchMedia('(max-width: 760px), (max-height: 640px)');
   private readonly mobile = window.matchMedia('(max-width: 760px)');
+  private thumbnailRequest: AbortController | null = null;
 
-  constructor(appearance: CharacterAppearance, private readonly actions: CreatorActions) {
+  constructor(appearance: CharacterAppearance, private readonly actions: CreatorActions, private readonly thumbnails: CreatorThumbnailSource) {
     this.baseline = { ...appearance };
     this.appearance = { ...appearance };
     this.el.className = 'creator-workshop';
@@ -171,6 +177,9 @@ export class Creator {
     }));
   }
   private renderOptions(): void {
+    this.thumbnailRequest?.abort();
+    this.thumbnailRequest = this.visible ? new AbortController() : null;
+    const signal = this.thumbnailRequest?.signal;
     const focused = document.activeElement instanceof HTMLElement && this.opts.contains(document.activeElement) ? document.activeElement.dataset.option : undefined;
     this.opts.setAttribute('aria-labelledby', `creator-category-${this.cat.id}`);
     const heading = document.createElement('div');
@@ -178,7 +187,7 @@ export class Creator {
     const title = document.createElement('h3');
     title.textContent = this.cat.label;
     const instruction = document.createElement('p');
-    instruction.textContent = 'Escolha seu estilo';
+    instruction.textContent = 'As peças reais, nas suas cores';
     heading.append(title, instruction);
     const pieces = this.cat.sections.filter((s) => !s.colors);
     const section = pieces.find((s) => s.key === this.sectionKey) ?? pieces[0]!;
@@ -202,11 +211,38 @@ export class Creator {
       button.type = 'button';
       button.className = 'creator-piece';
       button.title = option.name;
+      button.setAttribute('aria-label', option.name);
       button.dataset.option = option.id;
       button.setAttribute('aria-pressed', String(this.appearance[section.key] === option.id));
       const image = document.createElement('span');
       image.className = 'creator-piece-art';
-      image.innerHTML = appearancePreview(section.key, option.id, this.appearance);
+      image.setAttribute('aria-hidden', 'true');
+      image.dataset.model = option.id;
+      const empty = option.id.endsWith('.none') || option.id === 'hair.careca';
+      const placeholder = document.createElement('span');
+      placeholder.className = 'creator-thumbnail-placeholder';
+      placeholder.textContent = empty ? 'Sem peça' : '3D';
+      image.append(placeholder);
+      image.dataset.state = empty ? 'empty' : 'loading';
+      if (signal && !empty) {
+        button.setAttribute('aria-busy', 'true');
+        void this.thumbnails.request(section.key, option.id, { ...this.appearance }, signal).then((url) => {
+          if (signal.aborted || !image.isConnected) return;
+          const rendered = document.createElement('img');
+          rendered.src = url;
+          rendered.alt = '';
+          rendered.decoding = 'async';
+          rendered.draggable = false;
+          image.replaceChildren(rendered);
+          image.dataset.state = 'ready';
+          button.setAttribute('aria-busy', 'false');
+        }).catch(() => {
+          if (signal.aborted || !image.isConnected) return;
+          placeholder.textContent = 'Prévia indisponível';
+          image.dataset.state = 'error';
+          button.setAttribute('aria-busy', 'false');
+        });
+      }
       const label = document.createElement('span');
       label.className = 'creator-piece-name';
       label.textContent = option.name;
@@ -273,9 +309,11 @@ export class Creator {
   get visible(): boolean { return !this.el.hidden; }
   show(visible: boolean): void {
     const entering = visible && this.el.hidden;
-    if (entering) { this.appearance = { ...this.baseline }; this.revealSelectedPage(); this.renderOptions(); }
     this.el.hidden = !visible;
     this.stage.hidden = !visible;
+    this.thumbnails.setActive(visible);
+    if (!visible) { this.thumbnailRequest?.abort(); this.thumbnailRequest = null; }
+    if (entering) { this.appearance = { ...this.baseline }; this.revealSelectedPage(); this.renderOptions(); }
     if (entering) requestAnimationFrame(() => {
       if (!this.visible) return;
       const control = this.tabs.querySelector<HTMLButtonElement>('[aria-selected="true"]')

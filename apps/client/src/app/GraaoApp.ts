@@ -30,6 +30,7 @@ import { WaterDirector } from '../game/WaterDirector';
 import { GRARenderer, type Quality } from '../render/GRARenderer';
 import { GRAVFXSystem, Shape } from '../render/vfx/GRAVFXSystem';
 import { Creator } from '../ui/Creator';
+import { CreatorThumbnails } from '../ui/CreatorThumbnails';
 import { DevOverlay } from '../ui/DevOverlay';
 import { HistoryPanel } from '../ui/HistoryPanel';
 import { Hud } from '../ui/Hud';
@@ -318,7 +319,7 @@ export class GraaoApp {
       discard: (a) => { this.character.setAppearance(a); this.setPhase(this.creatorReturn); },
       resetView: () => { this.creatorYaw = 0; this.creatorZoom = 3.1; },
       sound: (cue) => this.audio.play(cue),
-    });
+    }, new CreatorThumbnails(this.parts, this.anims));
     this.draftUi = new DraftScreen({ pick: (round, id) => this.net?.sendDraftPick(round, id), sound: (cue) => this.audio.play(cue) });
     this.results = new ResultsScreen({ lobby: () => this.net?.sendReturnLobby(), leave: () => this.leaveRoom(), click: () => this.audio.play('ui.click') });
     this.lobby = new LobbyPanel({
