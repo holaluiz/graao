@@ -114,6 +114,9 @@ import {
   ROOM_CODE_LENGTH,
   ROOM_CODE_PREFIX,
   S2C,
+  isRoomCode,
+  roomStatusOf,
+  type HostRoomReport,
   SERVER_TICK_HZ,
   SERVER_TICK_MS,
   SIM_DT,
@@ -159,6 +162,7 @@ import {
   type WelcomeMsg,
 } from '@graao/shared';
 import { authVerifier } from '../auth/SupabaseAuth';
+import { hostPolicy } from '../hostPolicy';
 import { serverConfig } from '../config';
 import { matchStore } from '../persistence/MatchStore';
 import { ServerPlayer, type PlayerConnection } from '../sim/ServerPlayer';
@@ -169,6 +173,8 @@ import { log } from '../log';
 /** What `onAuth` hands to `onJoin` (as `client.auth`). */
 interface PlayerAuth {
   profileId: string | null;
+  /** Graao Host: the joiner proved the room's owner key (null: this process has no owner keys). */
+  owner: boolean | null;
 }
 
 const activeCodes = new Set<string>();
@@ -230,6 +236,14 @@ export interface RoomCreateOptions {
   lootSeed?: number;
   lootSpots?: string[];
   chestCount?: number;
+  /**
+   * Graao Host only (honoured only in a process whose host policy admitted the create, i.e. the app's own command):
+   * the code the central service allocated, the owner's display name, and the SHA-256 of the owner key that makes a
+   * joiner the room's host.
+   */
+  presetCode?: string;
+  hostName?: string;
+  ownerKeyHash?: string;
 }
 
 /** Dev/tests may pick a loadout on join (JoinOptions.loadout); production always uses the server's (draft) loadout. */
@@ -276,6 +290,9 @@ export class GraaoMatchRoom extends Room {
   private phase: MatchPhase = MatchPhase.LOBBY;
   private legacyWarmup = false;
   private hostSessionId = '';
+  /** Graao Host: who the room belongs to (display name) and the SHA-256 of their owner key. */
+  private ownerName = '';
+  private ownerKeyHash = '';
   private lobbyName = '';
   private visibility: 'public' | 'private' = 'public';
   private lastMetadata = '';
@@ -324,6 +341,8 @@ export class GraaoMatchRoom extends Room {
   private chestCount: number = LOOT_RULES.chestsPerMatch;
 
   override async onCreate(options: RoomCreateOptions = {}): Promise<void> {
+    await hostPolicy.admitCreate(options as Record<string, unknown>);
+    const desktop = hostPolicy.mode === 'DESKTOP';
     const botCount = (v: unknown, what: string): number => {
       if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new ServerError(4004, `invalid ${what} count`);
       return v ? Math.max(1, Math.min(MAX_SOLO_BOTS, Math.floor(v))) : 0;
@@ -331,8 +350,13 @@ export class GraaoMatchRoom extends Room {
     const soloBots = botCount(options.soloBots, 'solo bot');
     const bots = botCount(options.bots, 'bot');
     this.solo = soloBots > 0;
-    this.roomId = newCode();
+    this.roomId = desktop && isRoomCode(options.presetCode) && !activeCodes.has(options.presetCode) ? options.presetCode : newCode();
     activeCodes.add(this.roomId);
+    this.autoDispose = hostPolicy.autoDispose;
+    if (desktop) {
+      this.ownerName = sanitizeName(options.hostName) ?? '';
+      this.ownerKeyHash = typeof options.ownerKeyHash === 'string' ? options.ownerKeyHash : '';
+    }
     const requestedPlayers = typeof options.maxPlayers === 'number' && Number.isFinite(options.maxPlayers) ? options.maxPlayers : MAX_PLAYERS;
     this.maxClients = this.solo ? 1 : Math.max(1, Math.min(MAX_PLAYERS, Math.floor(requestedPlayers)));
     this.seats = this.solo ? MAX_PLAYERS : this.maxClients;
@@ -340,6 +364,7 @@ export class GraaoMatchRoom extends Room {
     this.legacyWarmup = DEV && options.legacyWarmup === true;
     this.phase = this.legacyWarmup ? MatchPhase.FREE_ROAM : MatchPhase.LOBBY;
     this.lobbyName = typeof options.roomName === 'string' ? options.roomName.replace(/\p{Cc}/gu, '').trim().slice(0, 56) : '';
+    if (!this.lobbyName && this.ownerName) this.lobbyName = `Sala de ${this.ownerName}`;
     this.visibility = this.solo || options.visibility === 'private' ? 'private' : 'public';
     await this.setPrivate(this.visibility === 'private');
     if (DEV && typeof options.preparationTimeoutMs === 'number' && Number.isFinite(options.preparationTimeoutMs)) this.preparationTimeoutMs = Math.max(100, Math.min(90000, options.preparationTimeoutMs));
@@ -405,7 +430,7 @@ export class GraaoMatchRoom extends Room {
     const user = token && verifier ? await verifier.verify(token) : null;
     if (!user && serverConfig().requireAuth) throw new ServerError(4004, `${JoinError.AUTH_FAILED}: sign in to play on this server`);
     if (token && verifier && !user) log('auth: token refused, joining as guest', { code: this.roomId });
-    return { profileId: user?.id ?? null };
+    return { profileId: user?.id ?? null, owner: await hostPolicy.ownerJoin(options, this.ownerKeyHash) };
   }
 
   override onJoin(client: Client, options?: JoinOptions): void {
@@ -430,7 +455,9 @@ export class GraaoMatchRoom extends Room {
     p.profileId = (client.auth as PlayerAuth | undefined)?.profileId ?? null;
     resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
     this.players.set(client.sessionId, p);
-    if (!this.hostSessionId) {
+    // Dedicated: the first person in hosts. Graao Host: whoever proves the owner key (again after a reload).
+    const owner = (client.auth as PlayerAuth | undefined)?.owner ?? null;
+    if (owner === true || (owner === null && !this.hostSessionId)) {
       this.hostSessionId = client.sessionId;
       if (!this.lobbyName) this.lobbyName = `Sala de ${name}`;
     }
@@ -458,7 +485,10 @@ export class GraaoMatchRoom extends Room {
   override onLeave(client: Client): void {
     const p = this.players.get(client.sessionId);
     if (!p) return;
-    if (!this.legacyWarmup && client.sessionId === this.hostSessionId && this.phase !== MatchPhase.CLOSED) {
+    const wasHost = client.sessionId === this.hostSessionId;
+    // Graao Host: the room belongs to the app, not to the host's browser tab; they may come back with their key.
+    if (wasHost && !hostPolicy.closesWithHost) this.hostSessionId = '';
+    if (!this.legacyWarmup && wasHost && hostPolicy.closesWithHost && this.phase !== MatchPhase.CLOSED) {
       this.phase = MatchPhase.CLOSED;
       this.abilities.clear();
       this.tormenta.stop();
@@ -481,6 +511,8 @@ export class GraaoMatchRoom extends Room {
       this.abilities.clear();
       this.ledger = null;
       this.tormenta.stop();
+      // A room that outlives its players (Graao Host) waits in the lobby for the next ones.
+      if (!this.autoDispose) this.returnToWarmup();
       return;
     }
     this.syncBots();
@@ -539,6 +571,45 @@ export class GraaoMatchRoom extends Room {
     this.bots.clear();
     activeCodes.delete(this.roomId);
     log('room disposed', { code: this.roomId });
+  }
+
+  /** Graao Host: what the app shows and forwards to the public list (the room's own counts, never a client's). */
+  hostReport(): HostRoomReport {
+    const meta = this.roomMetadata();
+    const humans = [...this.players.values()].filter((p) => !p.bot);
+    return {
+      code: this.roomId,
+      name: meta.name,
+      visibility: meta.visibility === 'private' ? 'PRIVATE' : 'PUBLIC',
+      status: roomStatusOf(this.phase),
+      humanCount: humans.length,
+      desiredBotCount: this.botTarget,
+      effectiveBotCount: meta.botsPlanned,
+      maxParticipants: this.seats,
+      available: meta.available,
+      hostPresent: !!this.hostSessionId && this.players.has(this.hostSessionId),
+      players: [...this.players.values()].map((p) => ({ name: p.name, bot: p.bot, connected: p.connected, host: p.client.sessionId === this.hostSessionId })),
+    };
+  }
+
+  /** Average simulation tick cost (ms). */
+  get tickCostMs(): number {
+    return this.tickCost;
+  }
+
+  /** The app stopped hosting: everyone is told why, then disconnected (the room disposes right after). */
+  closeByHost(text: string): Promise<unknown> {
+    if (this.phase !== MatchPhase.CLOSED) {
+      this.phase = MatchPhase.CLOSED;
+      this.abilities.clear();
+      this.tormenta.stop();
+      this.preparation = null;
+      this.ledger = null;
+      this.broadcast(S2C.NOTICE, { kind: 'error', code: NoticeCode.ROOM_CLOSED, text } satisfies NoticeMsg);
+      this.broadcastRoomState();
+    }
+    log('room closed by host app', { code: this.roomId });
+    return this.disconnect();
   }
 
   /** Warmup only: bots fill the seats people leave free, up to the room's bot count. */
@@ -696,7 +767,7 @@ export class GraaoMatchRoom extends Room {
     const startReason = this.phase !== MatchPhase.LOBBY ? 'A partida já começou.' : humans.length + botsPlanned < MATCH_RULES.minPlayers ? 'São necessários pelo menos dois participantes.' : unready.length ? `Aguardando ${unready.map((p) => p.name).join(', ')} confirmar.` : '';
     return {
       name: this.lobbyName || 'Sala de graao', visibility: this.visibility,
-      hostSessionId: this.hostSessionId, hostName: this.players.get(this.hostSessionId)?.name ?? '',
+      hostSessionId: this.hostSessionId, hostName: this.players.get(this.hostSessionId)?.name ?? this.ownerName,
       humans: humans.length, botsDesired: this.botTarget, botsPlanned, capacity: this.seats, protocol: PROTOCOL_VERSION,
       available: this.phase === MatchPhase.LOBBY && !this.solo && humans.length < this.maxClients,
       canStart: !startReason, startReason,

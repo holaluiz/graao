@@ -1,0 +1,77 @@
+/* Graao Host: hosting dialog, room badge and the "host ended the match" card. */
+.host-setup {
+  max-width: 560px;
+}
+.host-setup h3 {
+  margin: 4px 0 8px;
+  font-size: 20px;
+  font-weight: 950;
+}
+.host-setup p {
+  margin: 6px 0;
+  line-height: 1.4;
+  font-weight: 700;
+}
+.host-explain {
+  margin: 8px 0 4px;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.host-steps {
+  list-style: none;
+  margin: 12px 0 4px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  font-weight: 850;
+}
+.host-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.host-steps li::before {
+  content: '';
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border: 3px solid var(--ink);
+  border-radius: 50%;
+  background: #fffaf0;
+}
+.host-steps li[data-s='done']::before {
+  background: var(--leaf);
+}
+.host-steps li[data-s='now']::before {
+  background: var(--sun);
+  animation: host-pulse 0.9s ease-in-out infinite alternate;
+}
+.host-steps li[data-s='next'] {
+  opacity: 0.55;
+}
+@keyframes host-pulse {
+  to {
+    transform: scale(0.7);
+  }
+}
+.host-actions {
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.room-row .host-tag {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.host-closed p {
+  font-weight: 800;
+  line-height: 1.4;
+}
+@media (prefers-reduced-motion: reduce) {
+  .host-steps li[data-s='now']::before {
+    animation: none;
+  }
+}

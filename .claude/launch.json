@@ -177,6 +177,31 @@
         "$env:SUPABASE_URL='http://127.0.0.1:9'; pnpm --filter @graao/server exec tsx src/index.ts --port 2573"
       ],
       "port": 2573
+    },
+    {
+      "name": "graao-client-hosting",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@graao/client",
+        "exec",
+        "vite",
+        "--config",
+        "../../tools/hosting/vite.hosting.config.mjs"
+      ],
+      "port": 5180
+    },
+    {
+      "name": "graao-host-central",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "exec",
+        "tsx",
+        "tools/hosting/central-dev.ts",
+        "--port",
+        "54330"
+      ],
+      "port": 54330
     }
   ]
 }

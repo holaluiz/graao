@@ -1,5 +1,36 @@
 # graao MVP status
 
+## 2026-10-18 (noite) — Graao Host: hospedagem comunitária no PC do jogador
+
+Quem hospeda instala o **Graao Host** uma vez; o PC dessa pessoa roda o **mesmo** servidor Colyseus/`GraaoMatchRoom`
+(bots, armas, magias, baús, OVNI, Tormenta) e os amigos entram pelo navegador por HTTPS/WSS (Cloudflare Tunnel). O
+Supabase só autoriza, lista e resolve salas.
+
+**Funciona e foi testado (um PC, uma rede):**
+
+- Servidor em `HOST_MODE=DESKTOP` (política única em `apps/server/src/hostPolicy.ts`; o modo dedicado e as salas no
+  navegador continuam iguais), empacotado num `.mjs` autocontido que roda sem `node_modules`.
+- App Electron 43 (`apps/host`): janela com a identidade do graao, bandeja, protocolo `graao-host://`, vínculo com
+  confirmação, ciclo de vida com erros explicados, métricas (CPU, memória, tick, bytes), painel técnico opcional.
+- Instalador NSIS por usuário (`GraaoHost-Setup-0.1.0.exe`, ≈ 122 MB): instalar, protocolo, reinstalar, atualizar,
+  desinstalar limpo.
+- Central: migration `0003_graao_host.sql` (tickets de uso único, instalações, sessões, salas, grants/RLS) validada
+  num Postgres embutido; Edge Function de túneis gerenciados escrita.
+- Site: **Criar e hospedar**, painel "instale o Graao Host", lista com selo GRAAO HOST, entrar pelo endpoint sem
+  token Supabase, `?sala=` do app, aviso **O HOST ENCERROU A PARTIDA**.
+- Três hosts simultâneos por túneis reais da Cloudflare (Quick Tunnel), partidas completas 1+9, 2+8, 3+7, 5+5, 10+0,
+  ping 23–31 ms; queda do host detectada e sala removida da lista em 30 s.
+
+**Falta (bloqueios do dono do projeto):** aplicar a migration no Supabase (CLI sem login aqui), conta/zona Cloudflare
+para túneis gerenciados (hoje só túnel de teste), local para publicar o instalador, assinatura de código, e o teste
+com **outro computador em outra rede** e três PCs reais.
+
+Detalhes: [arquitetura](hosting/GRAAO_HOST_ARCHITECTURE.md), [instalador](hosting/GRAAO_HOST_INSTALLER.md),
+[vínculo](hosting/GRAAO_HOST_PAIRING.md), [ciclo de vida](hosting/GRAAO_HOST_LIFECYCLE.md),
+[segurança](hosting/GRAAO_HOST_SECURITY.md), [túneis](hosting/GRAAO_HOST_TUNNELS.md),
+[release](hosting/GRAAO_HOST_RELEASE.md), [relatório de testes](hosting/GRAAO_HOST_TEST_REPORT.md),
+[descoberta de salas](networking/ROOM_DISCOVERY.md), [auditoria](networking/GRAAO_HOST_AUDIT.md).
+
 ## 2026-10-18 (afternoon) — Public rooms in the published build, and a background-tab fix
 
 The published build has no dedicated server: whoever creates a room hosts it in their browser. Until now its room

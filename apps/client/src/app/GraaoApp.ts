@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { createGameWorld, latLonToDir, mulberry32, waterDepth, type GameWorld } from '@graao/game-core';
 import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance, validateAppearance } from '@graao/game-data';
-import { ActionState, MatchPhase, MovementState, v3angle, type CharacterAppearance, type DraftStateMsg, type NoticeMsg, type RoomStateMsg, type Vec3 } from '@graao/shared';
+import { ActionState, MatchPhase, MovementState, isRoomCode, sanitizeHostSettings, v3angle, type CharacterAppearance, type DraftStateMsg, type NoticeMsg, type RoomListing, type RoomStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
 import { GRAAnimationLibrary } from '../character/animation/GRAAnimationLibrary';
@@ -48,6 +48,8 @@ import { AmbientLife } from '../world/AmbientLife';
 import { autoInk } from '../ui/ink';
 import { AuthoredParts } from '../character/build/AuthoredParts';
 import { NetSession, type RoomConnectOptions } from '../net/NetSession';
+import { HostLaunch, hostApiConfigured, hostDownloadUrl, resolveHostRoom } from '../net/graaoHost/hostSite';
+import { HostSetupDialog } from '../ui/HostSetupDialog';
 import { ProfileService, type CloudProfile } from '../net/ProfileService';
 import { signalingConfigured } from '../net/host/signaling';
 import { dedicatedServer } from '../net/serverTarget';
@@ -118,6 +120,11 @@ export class GraaoApp {
   private readonly pauseNote = node('p', 'gra-fine pause-note');
   private readonly pauseLeave = button('Sair da sala', () => { this.pause.hide(); this.leaveRoom(); });
   private training: Modal | null = null;
+  private roomSource: RoomSource = 'none';
+  /** The current "Criar e hospedar" request (kept for the dev console and to cancel it). */
+  hostLaunch: HostLaunch | null = null;
+  /** Graao Host: while the connection to a host's PC is down, ask the central service whether the room still exists. */
+  private hostGoneCheck: ReturnType<typeof setInterval> | undefined;
   private readonly preparation = new PreparationScreen();
   private readonly toast = new Toast();
   private roomState: RoomStateMsg | null = null;
@@ -286,6 +293,7 @@ export class GraaoApp {
 
   start(): void {
     this.setPhase('MENU');
+    void this.openSharedRoom();
     // The cloud profile loads behind the menu; it never delays the first frame.
     this.profile.onStatus = () => this.showProfileStatus();
     void this.profile.start().then((row) => this.applyCloudProfile(row));
@@ -309,10 +317,11 @@ export class GraaoApp {
     // A dedicated server lists and runs the rooms when the build (or ?server=) names one; otherwise whoever creates a
     // room hosts it in their browser and public rooms are announced in the live list.
     const source: RoomSource = dedicatedServer() ? 'server' : signalingConfigured() ? 'hosted' : 'none';
+    this.roomSource = source;
     this.browser = new RoomBrowser({
       back: () => this.setPhase('MENU'),
       create: (settings) => void this.createRoom(settings),
-      join: (code, typed) => void this.online('join', code, this.name, 0, source === 'server' ? { forceDedicated: true, fallbackHosted: typed } : { hosted: true }),
+      join: (code, typed, via) => void this.joinRoom(code, typed, via),
       click: () => this.audio.play('ui.click'),
     }, source);
     this.browser.playerName = this.name;
@@ -637,10 +646,91 @@ export class GraaoApp {
   }
 
   private async createRoom(settings: CreateRoomSettings): Promise<void> {
+    if (settings.via === 'graao-host') return this.hostWithApp(settings);
     await this.online('create', '', this.name, settings.bots, {
       roomName: settings.roomName, visibility: settings.visibility,
       forceDedicated: !settings.hosted, hosted: settings.hosted,
     });
+  }
+
+  /** A room from the list or a typed code: Graao Host rooms connect to their host's PC; the others as before. */
+  private async joinRoom(code: string, typed: boolean, via?: RoomListing['via']): Promise<void> {
+    if (via === 'graao-host' || (typed && hostApiConfigured())) {
+      const ep = await resolveHostRoom(code);
+      if (ep) return this.online('join', code, this.name, 0, { endpoint: ep.endpointUrl, hostKey: this.hostKey(code) });
+      if (via === 'graao-host') {
+        this.browser.message('Essa sala não está mais disponível: o host encerrou a hospedagem.', true);
+        return;
+      }
+    }
+    await this.online('join', code, this.name, 0, this.roomSource === 'server' ? { forceDedicated: true, fallbackHosted: typed } : { hosted: true });
+  }
+
+  /** "Criar e hospedar": the player's Graao Host app runs the room; they join it like everyone else, with the owner key. */
+  private hostWithApp(settings: CreateRoomSettings): void {
+    this.browser.closeModal();
+    const launch = new HostLaunch(
+      sanitizeHostSettings({ roomName: settings.roomName, visibility: settings.visibility === 'private' ? 'PRIVATE' : 'PUBLIC', bots: settings.bots, hostName: this.name || 'Jogador' }),
+      () => this.profile.accessToken(),
+    );
+    const dialog = new HostSetupDialog(launch, hostDownloadUrl, (r) => {
+      this.rememberHostKey(r.code, r.hostKey);
+      void this.online('join', r.code, this.name, 0, { endpoint: r.endpoint, hostKey: r.hostKey });
+    }, () => this.audio.play('ui.click'));
+    this.hostLaunch?.cancel();
+    this.hostLaunch = launch;
+    this.ui.append(dialog.modal.el);
+    dialog.modal.show();
+    void launch.start();
+  }
+
+  /** The owner key of a room this tab created (or received from the Graao Host app's "Abrir sala no navegador"). */
+  private hostKey(code: string): string | undefined {
+    try {
+      return sessionStorage.getItem(`graao.hostKey.${code}`) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private rememberHostKey(code: string, key: string): void {
+    try {
+      sessionStorage.setItem(`graao.hostKey.${code}`, key);
+    } catch {
+      /* private mode: the host joins as a guest after a reload */
+    }
+  }
+
+  /** `?sala=GR-XXXX` (the Graao Host app's "Abrir sala no navegador", or a shared link); `#host=` carries the owner key. */
+  private async openSharedRoom(): Promise<void> {
+    const code = new URLSearchParams(location.search).get('sala')?.toUpperCase() ?? '';
+    if (!isRoomCode(code) || !hostApiConfigured()) return;
+    const key = new URLSearchParams(location.hash.slice(1)).get('host');
+    if (key) this.rememberHostKey(code, key);
+    // The key never stays in the address bar (or in the history).
+    history.replaceState(null, '', location.pathname);
+    this.setPhase('ROOM_BROWSER');
+    await this.joinRoom(code, true, 'graao-host');
+  }
+
+  /** The host's PC ended the room (closed the app, stopped hosting, or vanished): say so and offer the way back. */
+  private showHostClosed(text: string): void {
+    const modal = new Modal('O HOST ENCERROU A PARTIDA', () => modal.el.remove());
+    modal.card.classList.add('host-closed');
+    const row = node('div', 'gra-toolbar');
+    row.append(
+      button('Voltar às salas', () => {
+        modal.hide();
+        this.setPhase('ROOM_BROWSER');
+      }, true),
+      button('Menu principal', () => {
+        modal.hide();
+        this.setPhase('MENU');
+      }),
+    );
+    modal.body.append(node('p', '', text && !/HOST ENCERROU/i.test(text) ? text : 'Quem hospedava a sala encerrou a hospedagem ou perdeu a conexão. A partida terminou.'), row);
+    this.ui.append(modal.el);
+    modal.show();
   }
 
   private playSolo(): void {
@@ -689,12 +779,26 @@ export class GraaoApp {
   }
 
   onConnectionDrop(dropped: boolean): void {
+    clearInterval(this.hostGoneCheck);
+    const net = this.net;
+    if (dropped && net?.graaoHostEndpoint) {
+      // A host's PC that went away for good leaves the list within 30 s: stop waiting for it then.
+      this.hostGoneCheck = setInterval(() => {
+        void resolveHostRoom(net.code).then((ep) => {
+          if (ep || this.net !== net) return;
+          clearInterval(this.hostGoneCheck);
+          this.onDisconnected('O HOST ENCERROU A PARTIDA');
+        });
+      }, 5000);
+    }
     this.combat.connectionLost = dropped;
     this.lobby.setConnection(dropped);
     this.toast.show(dropped ? 'Conexão interrompida. Tentando reconectar…' : 'Conexão restabelecida.', dropped);
   }
 
   onDisconnected(msg: string): void {
+    clearInterval(this.hostGoneCheck);
+    const hostRoom = !!this.net?.graaoHostEndpoint;
     this.combat.connectionLost = false;
     this.net?.leave();
     this.net = null;
@@ -705,7 +809,8 @@ export class GraaoApp {
     this.hud.setRoom(null);
     this.setPhase('ROOM_BROWSER');
     this.browser.message(msg, true);
-    this.toast.show(msg, true);
+    if (hostRoom || /HOST ENCERROU/i.test(msg)) this.showHostClosed(msg);
+    else this.toast.show(msg, true);
   }
 
   // ------------------------------------------------------------------------------------------------ frame

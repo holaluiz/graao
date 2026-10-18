@@ -8,14 +8,18 @@ import {
   parseRoomListing,
   type RoomListing,
 } from '@graao/shared';
+import { graaoHostRooms, hostApiConfigured } from '../net/graaoHost/hostSite';
 import { roomDirectory, type DirectoryStatus } from '../net/host/roomDirectory';
 import { httpBase, serverTarget } from '../net/serverTarget';
 import { badge, button, field, focusScreen, Modal, node } from './components';
+import '../styles/graao-host.css';
 export interface CreateRoomSettings {
   roomName: string;
   visibility: 'public' | 'private';
   bots: number;
   hosted?: boolean;
+  /** Hosted by the player's Graao Host app (their PC runs the room). */
+  via?: 'graao-host';
 }
 /**
  * Where the rooms are: a dedicated server's registry (`GET /rooms`), the live list of rooms hosted in players'
@@ -26,7 +30,7 @@ export interface RoomBrowserActions {
   back(): void;
   create(settings: CreateRoomSettings): void;
   /** `typed`: the player entered the code by hand (it may name a room outside this list). */
-  join(code: string, typed: boolean): void;
+  join(code: string, typed: boolean, via?: RoomListing['via']): void;
   click(): void;
 }
 const phaseLabel = (room: RoomListing): string => {
@@ -63,6 +67,9 @@ export class RoomBrowser {
     this.render();
   });
   private rooms: RoomListing[] = [];
+  /** Rooms running on players' Graao Host apps (listed by the central service; merged with the other source). */
+  private hostRooms: RoomListing[] = [];
+  private hostTimer: ReturnType<typeof setInterval> | undefined;
   private page = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private request: AbortController | null = null;
@@ -107,7 +114,7 @@ export class RoomBrowser {
       foot,
     );
     this.el.append(panel);
-    if (source === 'none') {
+    if (source === 'none' && !hostApiConfigured()) {
       this.createButton.disabled = true;
       this.codeButton.disabled = true;
     }
@@ -137,12 +144,20 @@ export class RoomBrowser {
         this.timer = setInterval(() => void this.refresh(), 5000);
       } else if (this.source === 'hosted') {
         this.unwatch = roomDirectory.watch((rooms, status) => this.onDirectory(rooms, status));
+      } else if (hostApiConfigured()) {
+        this.setStatus('Buscando salas…', '');
+        this.empty('Carregando salas…', 'Procurando salas hospedadas com o Graao Host.', 'loading');
       } else {
         this.setStatus('Online indisponível', 'bad');
         this.empty('Jogar online não está disponível neste build', 'Falta configurar o serviço que conecta os jogadores. Treinar sozinho continua disponível no menu.');
       }
+      if (hostApiConfigured()) {
+        void this.pollHostRooms();
+        this.hostTimer = setInterval(() => void this.pollHostRooms(), 5000);
+      }
       focusScreen(this.el);
     } else {
+      clearInterval(this.hostTimer);
       clearInterval(this.timer);
       this.request?.abort();
       this.unwatch?.();
@@ -150,8 +165,27 @@ export class RoomBrowser {
       this.dialog?.hide();
     }
   }
+  /** The Graao Host list (the central service): merged into whatever the primary source shows. */
+  private async pollHostRooms(): Promise<void> {
+    try {
+      this.hostRooms = await graaoHostRooms();
+    } catch {
+      return;
+    }
+    if (!this.visible) return;
+    if (this.source === 'none' || this.hostRooms.length) {
+      this.online = true;
+      if (this.source === 'none') this.setStatus('● Lista ao vivo', 'good');
+      this.render();
+    }
+  }
+  private get allRooms(): RoomListing[] {
+    const seen = new Set<string>();
+    return [...this.hostRooms, ...this.rooms].filter((r) => !seen.has(r.code) && !!seen.add(r.code));
+  }
   private manualRefresh(): void {
     this.actions.click();
+    if (hostApiConfigured()) void this.pollHostRooms();
     if (this.source === 'server') void this.refresh(true);
     else if (this.source === 'hosted') roomDirectory.refresh();
   }
@@ -177,7 +211,8 @@ export class RoomBrowser {
       this.rooms = [];
       this.setStatus('Lista indisponível', 'bad');
       this.count.textContent = '';
-      this.empty('Não foi possível carregar as salas', 'Confira sua internet; tentamos de novo sozinhos. Você ainda pode entrar por código.', 'error');
+      if (this.hostRooms.length) this.render();
+      else this.empty('Não foi possível carregar as salas', 'Confira sua internet; tentamos de novo sozinhos. Você ainda pode entrar por código.', 'error');
     }
   }
   async refresh(force = false): Promise<void> {
@@ -210,6 +245,7 @@ export class RoomBrowser {
         this.setStatus('Servidor indisponível', 'bad');
         this.rooms = [];
         this.count.textContent = '';
+        if (this.hostRooms.length) return this.render();
         this.empty('O servidor de salas não respondeu', this.hostedAvailable ? 'Tente atualizar. Você também pode criar uma sala neste navegador e chamar a turma pelo código.' : 'Tente atualizar. Treinar sozinho continua disponível no menu.', 'error');
       }
     } finally {
@@ -241,19 +277,20 @@ export class RoomBrowser {
     return Math.max(3, Math.min(6, Math.floor((window.innerHeight - 450) / 72)));
   }
   private render(): void {
-    const open = this.rooms.filter((r) => r.available).length;
-    this.count.textContent = this.online ? `${this.rooms.length} ${this.rooms.length === 1 ? 'sala' : 'salas'} · ${open} ${open === 1 ? 'aberta' : 'abertas'}` : '';
-    this.count.hidden = !this.rooms.length;
-    if (!this.rooms.length) {
+    const all = this.allRooms;
+    const open = all.filter((r) => r.available).length;
+    this.count.textContent = this.online ? `${all.length} ${all.length === 1 ? 'sala' : 'salas'} · ${open} ${open === 1 ? 'aberta' : 'abertas'}` : '';
+    this.count.hidden = !all.length;
+    if (!all.length) {
       this.empty('Nenhuma sala esperando jogadores', 'Que tal criar a primeira? Quem cria é o host: chama a turma, escolhe os bots e começa o Draft.');
       return;
     }
     this.list.setAttribute('aria-busy', 'false');
     this.columns.hidden = false;
     const size = this.pageSize,
-      pages = Math.ceil(this.rooms.length / size);
+      pages = Math.ceil(all.length / size);
     this.page = Math.max(0, Math.min(this.page, pages - 1));
-    const rows = this.rooms.slice(this.page * size, (this.page + 1) * size);
+    const rows = all.slice(this.page * size, (this.page + 1) * size);
     const key = JSON.stringify(rows) + this.page + this.busy;
     if (key === this.renderKey) return;
     this.renderKey = key;
@@ -269,6 +306,12 @@ export class RoomBrowser {
     const info = node('div', 'room-row-info');
     const title = node('h2', '', room.name);
     title.title = room.name;
+    if (room.via === 'graao-host') {
+      const tag = badge('GRAAO HOST', 'blue');
+      tag.classList.add('host-tag');
+      tag.title = 'Partida executada no PC do host pelo aplicativo Graao Host';
+      title.append(tag);
+    }
     info.append(title, node('p', '', `Host: ${room.hostName}${room.region ? ` · ${room.region}` : ''}`));
     const seats = node('div', 'room-row-seats');
     const pips = node('div', 'seat-pips');
@@ -284,7 +327,7 @@ export class RoomBrowser {
     ping.title = 'Ping ainda não medido';
     const enter = button(room.available ? 'Entrar →' : 'Indisponível', () => {
       this.actions.click();
-      this.actions.join(room.code, false);
+      this.actions.join(room.code, false, room.via);
     }, room.available);
     enter.disabled = !room.available || this.busy;
     enter.title = room.available ? `Entrar em ${room.name}` : unavailableReason(room);
@@ -298,7 +341,8 @@ export class RoomBrowser {
     dialog.show();
   }
   openCreate(): void {
-    if (this.source === 'none') return;
+    const hostApp = hostApiConfigured();
+    if (this.source === 'none' && !hostApp) return;
     const dialog = new Modal('Criar sala'),
       form = node('form', 'gra-form'),
       name = node('input', 'field'),
@@ -328,21 +372,31 @@ export class RoomBrowser {
     };
     bots.addEventListener('change', updateSeats);
     updateSeats();
-    const submit = button('Criar sala', () => {}, true);
+    const submit = button(hostApp ? 'Criar e hospedar' : 'Criar sala', () => {}, true);
     submit.type = 'submit';
     const map = node('div', 'gra-map-note');
     map.append(badge('MAPA · PLANETA GRAAO', 'blue'), node('p', '', 'Último de pé vence: armas, magia e a Tormenta fechando o planeta.'));
     form.append(field('Nome da sala', name), field('Visibilidade', visibility), field('Bots desejados', bots), seats, map);
-    if (this.source === 'hosted')
+    if (hostApp)
+      form.append(node('p', 'gra-fine', 'A partida roda no seu PC com o aplicativo Graao Host (instalação única, só para quem hospeda). Seus amigos entram pelo navegador.'));
+    else if (this.source === 'hosted')
       form.append(node('p', 'gra-fine', 'Você hospeda a sala neste navegador. Mantenha esta aba aberta: se o host sair, a sala fecha para todos.'));
     form.append(submit);
+    if (hostApp && this.source === 'hosted') {
+      form.append(
+        button('Ou hospedar nesta aba do navegador (sem instalar)', () =>
+          this.actions.create({ roomName: name.value.trim(), visibility: visibility.value as 'public' | 'private', bots: Number(bots.value), hosted: true }),
+        ),
+      );
+    }
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       this.actions.create({
         roomName: name.value.trim(),
         visibility: visibility.value as 'public' | 'private',
         bots: Number(bots.value),
-        hosted: this.source === 'hosted',
+        hosted: !hostApp && this.source === 'hosted',
+        ...(hostApp ? { via: 'graao-host' as const } : {}),
       });
     });
     if (this.source === 'server' && !this.online && this.hostedAvailable) {
@@ -362,7 +416,7 @@ export class RoomBrowser {
     this.mountDialog(dialog);
   }
   openCode(): void {
-    if (this.source === 'none') return;
+    if (this.source === 'none' && !hostApiConfigured()) return;
     const dialog = new Modal('Entrar por código'),
       form = node('form', 'gra-form'),
       code = node('input', 'field');
@@ -388,7 +442,7 @@ export class RoomBrowser {
     this.busy = busy;
     for (const e of this.el.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button,input,select')) e.disabled = busy;
     if (!busy) {
-      if (this.source === 'none') {
+      if (this.source === 'none' && !hostApiConfigured()) {
         this.createButton.disabled = true;
         this.codeButton.disabled = true;
       }

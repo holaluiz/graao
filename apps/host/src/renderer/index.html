@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Graao Host</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main id="app" aria-live="polite">
+      <header class="top">
+        <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+          <circle cx="32" cy="32" r="28" fill="#7fae55" />
+          <path d="M8 34c10-6 20 4 30-2s14-8 18-4c-2 14-12 24-24 24C18 52 9 44 8 34z" fill="#4f86c9" />
+          <circle cx="32" cy="32" r="28" fill="none" stroke="#2a2130" stroke-width="4" />
+          <circle cx="50" cy="14" r="8" fill="#ffd36e" stroke="#2a2130" stroke-width="3" />
+        </svg>
+        <div class="brand">
+          <h1>GRAAO HOST</h1>
+          <p>Seu PC, sua partida.</p>
+        </div>
+        <span id="status" class="pill" data-tone="off">OFFLINE</span>
+      </header>
+      <p id="notice" class="notice" hidden></p>
+      <section id="card" class="card"></section>
+      <nav class="actions">
+        <button id="open-room" class="btn btn-sun" type="button">ABRIR SALA NO NAVEGADOR</button>
+        <button id="stop" class="btn btn-danger" type="button">ENCERRAR HOSPEDAGEM</button>
+        <button id="settings" class="btn" type="button">CONFIGURAÇÕES</button>
+      </nav>
+      <footer id="foot" class="foot"></footer>
+    </main>
+    <dialog id="settings-dialog" class="card dialog">
+      <form method="dialog" id="settings-form">
+        <h2>Configurações</h2>
+        <label class="row"><input type="checkbox" name="minimizeToTray" /> <span>Ao fechar a janela durante uma partida, continuar hospedando pela bandeja</span></label>
+        <label class="row"><input type="checkbox" name="launchAtLogin" /> <span>Iniciar o Graao Host com o Windows (na bandeja)</span></label>
+        <label class="row"><input type="checkbox" name="devPanel" /> <span>Mostrar painel técnico (desenvolvedores)</span></label>
+        <div class="split">
+          <button type="button" id="check-updates" class="btn btn-small">Procurar atualização</button>
+          <button type="button" id="unlink" class="btn btn-small btn-danger">Desvincular este PC</button>
+        </div>
+        <p id="settings-info" class="fine"></p>
+        <button class="btn btn-sun" value="save">SALVAR</button>
+      </form>
+    </dialog>
+    <section id="tech" class="tech" hidden>
+      <h2>Painel técnico</h2>
+      <dl id="tech-facts"></dl>
+      <pre id="tech-log"></pre>
+    </section>
+    <script src="renderer.js"></script>
+  </body>
+</html>

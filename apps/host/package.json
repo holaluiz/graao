@@ -1,0 +1,107 @@
+{
+  "name": "@graao/host",
+  "productName": "Graao Host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Graao Host: hospede partidas do graao no seu próprio PC.",
+  "author": "graao",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node build.mjs && electron .",
+    "fetch:cloudflared": "node ../../tools/hosting/fetch-cloudflared.mjs",
+    "dist": "node build.mjs --production && electron-builder --win nsis --x64 --publish never",
+    "headless": "tsx src/main/headless.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@graao/server": "workspace:*",
+    "@graao/shared": "workspace:*",
+    "electron": "43.7.7",
+    "electron-builder": "26.17.0",
+    "esbuild": "0.28.2"
+  },
+  "build": {
+    "appId": "com.graao.host",
+    "productName": "Graao Host",
+    "copyright": "graao",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.map",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "dist/server/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin",
+        "filter": [
+          "cloudflared.exe"
+        ]
+      },
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "resources/licenses",
+        "to": "licenses"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Graao Host",
+        "schemes": [
+          "graao-host"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico",
+      "artifactName": "GraaoHost-Setup-${version}.${ext}",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Graao Host",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "pt_BR"
+      ],
+      "language": "1046",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "uninstallDisplayName": "Graao Host",
+      "include": "resources/installer.nsh"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    }
+  }
+}

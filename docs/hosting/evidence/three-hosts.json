@@ -1,0 +1,167 @@
+{
+  "when": "2026-10-18T17:33:22.614Z",
+  "tunnel": "quick-test",
+  "machine": "one Windows PC, one network (not separate computers)",
+  "durationS": 46,
+  "rooms": [
+    {
+      "owner": "Luiz",
+      "code": "GR-4Z49",
+      "endpoint": "wss://vanilla-zope-friday-theoretical.trycloudflare.com",
+      "readyMs": 8277,
+      "pingMs": [
+        31,
+        24,
+        25,
+        25,
+        27,
+        24,
+        25,
+        24,
+        25,
+        25
+      ],
+      "gameplay": {
+        "ok": true,
+        "phases": [
+          "LOBBY",
+          "ABILITY_DRAFT",
+          "PREPARATION",
+          "UFO",
+          "MATCH"
+        ],
+        "draftRounds": 4,
+        "loadout": [
+          "sun_orb",
+          "pollen_burst",
+          "thorn_seed",
+          "sun_meteor"
+        ],
+        "chests": 14,
+        "shots": 45,
+        "damage": 37,
+        "eliminations": 1,
+        "tormenta": true,
+        "participants": 10,
+        "bots": 7,
+        "matchMs": 8798,
+        "totalMs": 27103
+      },
+      "peak": {
+        "cpuPercent": 82.5,
+        "rssMB": 267,
+        "tickMs": 4.64,
+        "loopLagMs": 51.3,
+        "bytesOut": 1564593
+      }
+    },
+    {
+      "owner": "Pedro",
+      "code": "GR-J985",
+      "endpoint": "wss://corporation-aviation-soonest-televisions.trycloudflare.com",
+      "readyMs": 8105,
+      "pingMs": [
+        28,
+        25,
+        24,
+        24,
+        23,
+        23,
+        23,
+        25,
+        23,
+        24
+      ],
+      "gameplay": {
+        "ok": true,
+        "phases": [
+          "LOBBY",
+          "ABILITY_DRAFT",
+          "PREPARATION",
+          "UFO",
+          "MATCH"
+        ],
+        "draftRounds": 4,
+        "loadout": [
+          "sun_orb",
+          "pollen_burst",
+          "thorn_seed",
+          "sun_meteor"
+        ],
+        "chests": 14,
+        "shots": 52,
+        "damage": 43,
+        "eliminations": 1,
+        "tormenta": true,
+        "participants": 10,
+        "bots": 5,
+        "matchMs": 9852,
+        "totalMs": 28923
+      },
+      "peak": {
+        "cpuPercent": 86.8,
+        "rssMB": 240,
+        "tickMs": 3.75,
+        "loopLagMs": 75,
+        "bytesOut": 2863342
+      }
+    },
+    {
+      "owner": "Ana",
+      "code": "GR-5BDQ",
+      "endpoint": "wss://humor-activists-mountain-appointed.trycloudflare.com",
+      "readyMs": 8472,
+      "pingMs": [
+        30,
+        27,
+        28,
+        26,
+        25,
+        25,
+        26,
+        25,
+        24,
+        24
+      ],
+      "gameplay": {
+        "ok": true,
+        "phases": [
+          "LOBBY",
+          "ABILITY_DRAFT",
+          "PREPARATION",
+          "UFO",
+          "MATCH"
+        ],
+        "draftRounds": 4,
+        "loadout": [
+          "sun_orb",
+          "pollen_burst",
+          "thorn_seed",
+          "sun_meteor"
+        ],
+        "chests": 14,
+        "shots": 0,
+        "damage": 0,
+        "eliminations": 0,
+        "tormenta": true,
+        "participants": 10,
+        "bots": 0,
+        "matchMs": 12105,
+        "totalMs": 32333
+      },
+      "peak": {
+        "cpuPercent": 76,
+        "rssMB": 155,
+        "tickMs": 2.52,
+        "loopLagMs": 48,
+        "bytesOut": 4887565
+      }
+    }
+  ],
+  "listedBefore": 3,
+  "listedAfterStop": [
+    "Sala de Luiz",
+    "Sala de Ana"
+  ],
+  "ok": true
+}

@@ -1,15 +1,18 @@
-/** Server definition (rooms + HTTP routes), shared by the entry point and the integration tests. */
+/** Server definition (rooms + HTTP routes), shared by the entry points (dedicated, Graao Host) and the integration tests. */
+import type { Server as HttpServer } from 'node:http';
 import { createEndpoint, createRouter, defineRoom, defineServer, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { ASSET_VERSION, CLIENT_VERSION, PROTOCOL_VERSION, ROOM_NAME, parseRoomListing, type RoomListing } from '@graao/shared';
+import { hostPolicy } from './hostPolicy';
 import { GraaoMatchRoom } from './rooms/GraaoMatchRoom';
 
 const startedAt = Date.now();
 
-export function createGraaoServer() {
+/** `httpServer`: an HTTP server the caller owns (the Graao Host counts its socket bytes). */
+export function createGraaoServer(opts: { httpServer?: HttpServer } = {}) {
   return defineServer({
     greet: false,
-    transport: new WebSocketTransport({ pingInterval: 4000, pingMaxRetries: 3 }),
+    transport: new WebSocketTransport({ pingInterval: 4000, pingMaxRetries: 3, ...(opts.httpServer ? { server: opts.httpServer } : {}) }),
     rooms: {
       [ROOM_NAME]: defineRoom(GraaoMatchRoom),
     },
@@ -27,6 +30,7 @@ export function createGraaoServer() {
         const rooms = await matchMaker.query({ name: ROOM_NAME });
         return Response.json({
           ok: true,
+          mode: hostPolicy.mode,
           version: CLIENT_VERSION,
           protocol: PROTOCOL_VERSION,
           assets: ASSET_VERSION,
