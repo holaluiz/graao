@@ -25,6 +25,7 @@ import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
 import { LocalPlayer } from '../game/LocalPlayer';
 import { Obstruction } from '../game/Obstruction';
+import { SpectatorDirector } from '../game/SpectatorDirector';
 import { TormentaDirector } from '../game/TormentaDirector';
 import { WaterDirector } from '../game/WaterDirector';
 import { GRARenderer, type Quality } from '../render/GRARenderer';
@@ -87,6 +88,7 @@ export class GraaoApp {
   readonly audio = new GRAAudioManager();
   readonly hud = new Hud();
   readonly scoreboard = new Scoreboard();
+  private spectator!: SpectatorDirector;
   /** Cloud profile (Supabase): identity for the match server, name/look/settings, match history. */
   readonly profile = new ProfileService();
   /** After a match: the server's summary and the way back to the lobby. */
@@ -253,6 +255,7 @@ export class GraaoApp {
     this.deploy = new DeployDirector(this);
     this.water = new WaterDirector(this);
     this.tormenta = new TormentaDirector(this);
+    this.spectator = new SpectatorDirector(this);
     this.camera.waterRadius = this.world.terrain.seaRadius;
     if (new URLSearchParams(location.search).has('lineup')) this.spawnLineup(dir);
     this.buildUi();
@@ -369,7 +372,7 @@ export class GraaoApp {
     this.history = new HistoryPanel(() => this.history.show(false));
     this.hud.show(false);
     this.ui.append(this.menu.el, this.browser.el, this.history.el, this.creator.stage, this.creator.el, this.hud.el,
-      this.lobby.el, this.draftUi.el, this.preparation.el, this.results.el, this.scoreboard.el, this.pause.el, this.settings.el, this.toast.el);
+      this.lobby.el, this.draftUi.el, this.preparation.el, this.results.el, this.spectator.ui.el, this.scoreboard.el, this.pause.el, this.settings.el, this.toast.el);
     autoInk(this.ui);
     this.dev = new DevOverlay({ renderer: this.r.renderer, extra: () => this.devStats() });
     window.addEventListener('keydown', (e) => {
@@ -430,7 +433,7 @@ export class GraaoApp {
   /** Only the "click to play" prompt while the pointer is free; nothing over the game while playing. */
   private updateHint(): void {
     if (this.phase !== 'MATCH') return;
-    const quiet = this.input.locked || this.results.visible;
+    const quiet = this.input.locked || this.results.visible || this.spectator.following;
     this.hud.setHint(quiet ? '' : this.net ? 'Clique no mundo para jogar · ESC abre opções' : 'Clique para jogar · ESC abre opções');
   }
 
@@ -605,6 +608,7 @@ export class GraaoApp {
     this.history.show(false);
     this.input.enabled = p === 'MATCH';
     if (p !== 'MATCH') {
+      this.spectator.reset();
       this.scoreboard.hide();
       this.input.scoreboardEnabled = false;
       this.input.exitLock();
@@ -825,6 +829,7 @@ export class GraaoApp {
 
 
     const feet = this.tmpPos;
+    let viewFocus = feet;
     let facing = this.tmpFacing;
     let anim: AnimInput = { moveState: MovementState.IDLE as MovementState, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE as ActionState };
 
@@ -837,19 +842,22 @@ export class GraaoApp {
         this.net?.update(dt);
         feet.copy(this.deploy.focus);
       } else {
-        this.camera.look(look.yaw, look.pitch);
+        if (!this.spectator.following) this.camera.look(look.yaw, look.pitch);
         this.camera.aim = this.input.isDown('aim') && this.combat.alive && !this.deploy.diving && !this.local.state.swimming;
         const frame = this.camera.frame;
         const alpha = this.local.update(dt, this.input, frame, !!this.net, this.combat.frozen);
         this.net?.update(dt);
         this.local.renderPosition(alpha, feet);
         facing = this.local.renderFacing(alpha, facing);
-        this.camera.update(dt, feet, this.world.physics);
+        if (!this.spectator.following) this.camera.update(dt, feet, this.world.physics);
       }
       // Loot first: its weapon replacement card may own E and Q this frame.
       this.loot.update(dt, this.time);
       this.combat.update(dt);
       this.deploy.update(dt);
+      this.spectator.update(dt, look);
+      this.hud.show(!this.spectator.following);
+      if (this.spectator.following) viewFocus = this.spectator.focus;
       const s = this.local.state;
       const up = this.tmpUp.copy(feet).normalize();
       anim = {
@@ -864,8 +872,8 @@ export class GraaoApp {
         groundDist: this.deploy.groundDist,
         waterDepth: waterDepth(feet),
       };
-      if (!riding) this.obstruction.update(dt, this.r.camera.position, feet, up);
-      this.updatePlace(feet);
+      if (!riding) this.obstruction.update(dt, this.r.camera.position, viewFocus, this.spectator.following ? viewFocus.clone().normalize() : up);
+      this.updatePlace(viewFocus);
       this.updateLobby();
     } else {
       feet.copy(this.spawn);
@@ -890,11 +898,11 @@ export class GraaoApp {
     this.vfx.update(dt);
     this.draftUi.update(this.net ? this.net.serverNow() : Date.now());
     this.updateScoreboard();
-    this.r.updateSun(this.phase === 'MATCH' ? feet : this.spawn, this.time);
-    this.planet.update(this.time, feet, this.r.sunDir);
+    this.r.updateSun(this.phase === 'MATCH' ? viewFocus : this.spawn, this.time);
+    this.planet.update(this.time, viewFocus, this.r.sunDir);
     const orbit = this.r.setAltitude(PLANET.radius);
     this.planet.setOrbit(orbit, this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
-    this.ambient.update(dt, this.time, this.phase === 'MATCH' ? feet : this.spawn);
+    this.ambient.update(dt, this.time, this.phase === 'MATCH' ? viewFocus : this.spawn);
     const envLevel = (1 - orbit) * this.tormenta.ambience;
     this.audio.setAmbience(envLevel, envLevel * this.water.beachProximity, this.time);
     // The draft and the loading card cover the world (opaque, blurred): it is redrawn a few times a second there.

@@ -439,6 +439,8 @@ export class NetSession {
         moveState: move as MovementState,
         action: action as ActionState,
         flags,
+        health,
+        shield,
       }, this.serverNow());
     }
   }
