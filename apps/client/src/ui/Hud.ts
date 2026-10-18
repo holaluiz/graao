@@ -9,6 +9,10 @@
  *   overlays      countdown / banners, elimination screen (the results card is its own screen: ResultsScreen)
  *   deploy        UFO / drop panel (bottom-centre): what to do, the jump key, the window bar, the altitude; combat
  *                 widgets hide while aboard and falling (`setMode`)
+ *   tormenta      top-left card (phase pips, what it does now, the clock, the damage outside) over the planet map
+ *                 (TormentaMap: safe region, Tormenta, next region around the player); under the status chip the way
+ *                 back (arrow + metres) when outside the safe region or the region it closes onto; the screen edges
+ *                 lose their pigment the deeper the player is in it (`setTormenta`, `tormentaHurt`)
  *
  * Attention: QUIET (static), RELEVANT (brief motion), URGENT (pulse once), CRITICAL (low health, persistent).
  * Every hit kind has its own shape, not only a color.
@@ -16,6 +20,8 @@
 import type { AbilityIcon } from '@graao/game-data';
 import { HitKind } from '@graao/shared';
 import { ABILITY_ICONS } from './abilityIcons';
+import { TormentaMap, type TormentaMapView } from './TormentaMap';
+import '../styles/tormenta.css';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -77,6 +83,49 @@ export interface DeployView {
   altitude?: number;
   tone: 'quiet' | 'relevant' | 'urgent';
 }
+
+/** The Tormenta as the HUD shows it (the TormentaDirector mirrors the server's phase; the HUD never decides). */
+export interface TormentaView {
+  stage: 'hold' | 'shrink' | 'final';
+  /** Phase 1..n; n + 1 = the final region. */
+  phase: number;
+  phases: number;
+  /** Seconds until it starts moving (hold) or stops (shrink); -1 in the final region. */
+  seconds: number;
+  /** 0..1 of the current hold or reduction done. */
+  progress: number;
+  /** Health per second outside the safe region now. */
+  dps: number;
+  /** Show the way back (alive and taking part). */
+  guide: boolean;
+  /** The local player is outside the safe region now. */
+  outside: boolean;
+  /** Metres to the safe region (outside) and to the region it closes onto (> 0 = outside it). */
+  edge: number;
+  nextEdge: number;
+  /** Screen angle (rad) toward the region to reach: 0 straight ahead, + to the right. */
+  arrow: number;
+  /** 0..1: how deep in the Tormenta (screen edges lose their pigment). */
+  depth: number;
+  /** The planet map around the player (shown with the way back: alive and taking part). */
+  map: TormentaMapView | null;
+}
+
+/** A ring torn on its outer edge: the Tormenta's glyph (shape, not colour). */
+function tornRing(): string {
+  let d = '';
+  for (let i = 0; i < 22; i++) {
+    const a = (i / 22) * Math.PI * 2;
+    const r = i % 2 ? 13.5 : 10.5 + (i % 3) * 0.6;
+    d += `${i ? 'L' : 'M'}${(Math.cos(a) * r).toFixed(1)} ${(Math.sin(a) * r).toFixed(1)} `;
+  }
+  return `${d}Z`;
+}
+
+const clock = (s: number) => {
+  const t = Math.max(0, Math.ceil(s));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+};
 
 export class Hud {
   readonly el = el('div', 'hud');
@@ -153,6 +202,28 @@ export class Hud {
   private readonly altFill = el('i', '', this.altimeter);
   private lastDeploy = '';
 
+  // Tormenta.
+  private readonly tormEdge = el('div', 'torm-edge', this.el);
+  // The way back comes before the column in the DOM: narrow screens hide the map while it shows (tormenta.css).
+  private readonly outEl = el('div', 'torm-out', this.el);
+  private readonly tormCol = el('div', 'torm-col', this.el);
+  private readonly tormEl = el('div', 'tormenta', this.tormCol);
+  private readonly tormMap = new TormentaMap();
+  private readonly tormHead = el('div', 'torm-head', this.tormEl);
+  private readonly tormPips = el('div', 'torm-pips');
+  private readonly tormState = el('div', 'torm-state', this.tormEl);
+  private readonly tormTime = el('div', 'torm-time', this.tormEl);
+  private readonly tormBar = el('div', 'torm-bar', this.tormEl);
+  private readonly tormFill = el('i', '', this.tormBar);
+  private readonly tormRate = el('div', 'torm-rate', this.tormEl);
+  private readonly outArrow = svg('torm-arrow', '-20 -20 40 40', '<path d="M0 -16 L12 4 L4 1.5 L4 15 L-4 15 L-4 1.5 L-12 4 Z"/>');
+  private readonly outText = el('div', 'torm-out-text');
+  private readonly outTitle = el('div', 'torm-out-title', this.outText);
+  private readonly outLine = el('div', 'torm-out-line', this.outText);
+  private lastTorm = '';
+  private lastTormTime = '';
+  private lastOut = '';
+
   private placeTimer = 0;
   private noticeTimer = 0;
   private bannerTimer = 0;
@@ -170,6 +241,12 @@ export class Hud {
     this.slowChip.hidden = true;
     this.deployEl.hidden = true;
     this.altimeter.hidden = true;
+    this.tormHead.append(svg('torm-icon', '-16 -16 32 32', `<path class="torn" d="${tornRing()}"/><circle class="safe" r="5.5"/>`), el('span', 'torm-title', undefined, 'TORMENTA'), this.tormPips);
+    this.outEl.append(this.outArrow, this.outText);
+    this.tormCol.append(this.tormMap.el);
+    this.tormEl.hidden = true;
+    this.tormMap.el.hidden = true;
+    this.outEl.hidden = true;
     this.el.dataset.mode = 'combat';
     el('div', 'vbar-label', this.breathEl, 'Fôlego');
     const bubbles = el('div', 'breath-bubbles', this.breathEl);
@@ -230,6 +307,75 @@ export class Hud {
     if (v.progress !== undefined) this.deployFill.style.width = `${Math.max(0, Math.min(1, v.progress)) * 100}%`;
     // Altimeter: a vertical gauge on the right, 100 m full scale.
     if (v.altitude !== undefined) this.altFill.style.height = `${Math.max(0, Math.min(1, v.altitude / 100)) * 100}%`;
+  }
+
+  // ------------------------------------------------------------------------------------------------ tormenta
+
+  /**
+   * The Tormenta card, the way back and the pigment-loss edge; null hides all of it. Attention: the card is QUIET while
+   * it holds, RELEVANT while it closes (striped bar) and in the last seconds of a hold; being outside is URGENT (the
+   * strip pulses once) and CRITICAL when deep inside (the edge). Every state has its own words and shapes.
+   */
+  setTormenta(v: TormentaView | null): void {
+    this.tormEl.hidden = !v;
+    this.tormMap.el.hidden = !v?.map;
+    if (v?.map) this.tormMap.update(v.map);
+    if (!v) {
+      this.outEl.hidden = true;
+      this.tormEdge.style.opacity = '0';
+      this.lastTorm = this.lastTormTime = this.lastOut = '';
+      return;
+    }
+    const key = `${v.phase}|${v.phases}|${v.stage}`;
+    if (key !== this.lastTorm) {
+      const first = this.lastTorm === '';
+      this.lastTorm = key;
+      this.tormEl.dataset.stage = v.stage;
+      this.tormState.textContent = v.stage === 'final' ? 'ÁREA FINAL · não recua mais' : v.stage === 'shrink' ? `FASE ${v.phase} DE ${v.phases} · AVANÇANDO` : `FASE ${v.phase} DE ${v.phases} · avança em`;
+      // Pips: done (filled), this phase (outlined, pulsing while it closes), still to come (small).
+      this.tormPips.replaceChildren(
+        ...Array.from({ length: v.phases }, (_, i) => el('i', i + 1 < v.phase || v.stage === 'final' ? 'done' : i + 1 === v.phase ? 'now' : '')),
+      );
+      if (!first) replay(this.tormEl, 'torm-pop');
+    }
+    const time = v.seconds >= 0 ? clock(v.seconds) : '—';
+    if (time !== this.lastTormTime) {
+      this.lastTormTime = time;
+      this.tormTime.textContent = time;
+    }
+    const soon = v.stage === 'hold' && v.seconds <= 10;
+    this.tormEl.dataset.tone = v.outside ? 'urgent' : v.stage === 'shrink' || soon ? 'relevant' : 'quiet';
+    this.tormBar.hidden = v.stage === 'final';
+    this.tormFill.style.width = `${(Math.max(0, Math.min(1, v.progress)) * 100).toFixed(1)}%`;
+    this.tormRate.textContent = v.dps > 0 ? `Fora da área: −${v.dps} Vida/s` : 'Fora da área: sem dano ainda';
+
+    // The way back: outside now (URGENT), or outside the region it is about to close onto (RELEVANT).
+    const mode = !v.guide ? '' : v.outside ? 'out' : v.nextEdge > 0 && v.stage !== 'final' ? 'next' : '';
+    this.outEl.hidden = !mode;
+    if (mode) {
+      const metres = Math.max(1, Math.ceil(mode === 'out' ? v.edge : v.nextEdge));
+      const title = mode === 'out' ? 'FORA DA ÁREA SEGURA' : 'FORA DA PRÓXIMA ÁREA';
+      const line = mode === 'out' ? `${metres} m até a área · −${v.dps} Vida/s` : `${metres} m · siga a seta antes que feche`;
+      if (this.outTitle.textContent !== title) this.outTitle.textContent = title;
+      if (this.outLine.textContent !== line) this.outLine.textContent = line;
+      if (mode !== this.lastOut) {
+        this.outEl.dataset.tone = mode === 'out' ? 'urgent' : 'relevant';
+        replay(this.outEl, 'pop');
+      }
+      this.outArrow.style.transform = `rotate(${v.arrow.toFixed(3)}rad)`;
+    }
+    this.lastOut = mode;
+    this.tormEdge.style.opacity = (Math.max(0, Math.min(1, v.depth)) * 0.9).toFixed(3);
+    this.tormEdge.classList.toggle('deep', v.depth > 0.7);
+  }
+
+  /** The Tormenta took Health from the local player: the strip and the edge flinch, a "−N" floats off. */
+  tormentaHurt(amount: number): void {
+    replay(this.tormEdge, 'hurt');
+    if (this.outEl.hidden) return;
+    replay(this.outEl, 'hurt');
+    const n = el('div', 'torm-hit', this.outEl, `−${amount}`);
+    setTimeout(() => n.remove(), 800);
   }
 
   // ------------------------------------------------------------------------------------------------ top

@@ -86,6 +86,13 @@ body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-u
 .menu .row { gap: 8px; }
 .menu .note { min-height: 0; font-size: clamp(11px, 1.6dvh, 13px); line-height: 1.25; }
 .menu .note:empty { display: none; }
+.server-status { display: flex; align-items: center; gap: 7px; margin: 1px 0 5px; font-size: clamp(10px, 1.5dvh, 12px); font-weight: 800; letter-spacing: .04em; line-height: 1.2; }
+.server-status:empty { display: none; }
+/* The dot carries the state by shape as well as color: filled = online, ring = checking, square = problem. */
+.server-status::before { content: ''; flex: none; width: 9px; height: 9px; border: 2px solid var(--ink); border-radius: 50%; background: transparent; }
+.server-status[data-state='online']::before { background: var(--leaf); }
+.server-status[data-state='version']::before, .server-status[data-state='offline']::before { border-radius: 2px; background: var(--danger); }
+.server-status[data-state='offline'], .server-status[data-state='version'] { color: #8f2a20; }
 .chip { display: inline-block; font-size: 12px; font-weight: 800; letter-spacing: .08em; padding: 4px 10px; border: 2px solid var(--ink); border-radius: 999px; background: var(--paper); }
 
 /* ------------------------------------------------------------------------------------------- creator */
@@ -471,13 +478,10 @@ body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-u
   background: rgba(243, 233, 216, .88); border: 2px solid var(--ink); white-space: nowrap; will-change: transform; }
 
 /* ------------------------------------------------------------------------------------------- creator stage */
-/* Arrows beside the character, one pair per clothing row (positions follow the body every frame). */
+/* Close (X) and dice beside the character's head (positions follow the body every frame). */
 .creator-stage { position: absolute; inset: 0; pointer-events: none !important; }
-.creator-stage .ink-btn { position: absolute; left: 0; top: 0; pointer-events: auto; width: var(--arrow, 56px); height: var(--arrow, 56px); border: 0; padding: 0;
+.creator-stage .ink-btn { position: absolute; left: 0; top: 0; pointer-events: auto; width: var(--ink-btn, 56px); height: var(--ink-btn, 56px); border: 0; padding: 0;
   background: transparent; cursor: pointer; display: grid; place-items: center; transition: transform .14s steps(2, end); }
 .creator-stage .ink-btn svg { width: 46%; height: 46%; fill: var(--card-ink); }
 .creator-stage .ink-btn.close svg { fill: #d85656; }
 .creator-stage .ink-btn.dice svg { width: 56%; height: 56%; }
-.creator-stage .tag { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%) rotate(var(--tilt, 0deg)); font-weight: 900; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--card-ink);
-  padding: 6px 10px; white-space: nowrap; pointer-events: none; --drop: 3px; animation: tag-pop 1.2s steps(4, end) forwards; }
-@keyframes tag-pop { 0% { opacity: 0; } 12% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }

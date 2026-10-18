@@ -7,10 +7,13 @@
  * conflict with a human); --idle-draft never picks (the server chooses for it when time runs out).
  * UFO: --jump 2 leaves the ship 2 s after the hatch opens (without it the bot rides until it is dropped at the close).
  * Results: --lobby 3 asks to go back to the lobby 3 s after a match ends (without it the room waits for its timer).
+ * Tormenta: --pattern tormenta walks to the region the Tormenta closes onto (and circles inside it).
+ * Dev rooms: --create --opts '{"skipUfo":true,"tormentaPhases":[...]}' passes room options (a dev server honors the
+ *   dev-only ones, see RoomCreateOptions).
  */
 import { Client } from '@colyseus/sdk';
 import { randomAppearance } from '@graao/game-data';
-import { northTangent } from '@graao/game-core';
+import { northTangent, tormentaEdgeMeters, tormentaTarget } from '@graao/game-core';
 import {
   AIM_SCALE,
   C2S,
@@ -30,6 +33,7 @@ import {
   type InputCmd,
   type MatchSummaryMsg,
   type RoomStateMsg,
+  type TormentaMsg,
   type UfoRouteMsg,
   type SnapshotMsg,
   type WelcomeMsg,
@@ -47,7 +51,13 @@ const seconds = Number(arg('seconds', '120'));
 
 const client = new Client(url);
 const options = { protocol: PROTOCOL_VERSION, client: `bot/${CLIENT_VERSION}`, name, appearance: randomAppearance() };
-const room = args.includes('--create') ? await client.create(ROOM_NAME, { ...options, maxPlayers: Number(arg('max', '4')) }) : await client.joinById(arg('code', ''), options);
+let roomOptions: Record<string, unknown> = {};
+try {
+  roomOptions = JSON.parse(arg('opts', '{}')) as Record<string, unknown>;
+} catch {
+  console.warn('[bot] --opts is not JSON, ignored');
+}
+const room = args.includes('--create') ? await client.create(ROOM_NAME, { maxPlayers: Number(arg('max', '4')), ...roomOptions, ...options }) : await client.joinById(arg('code', ''), options);
 
 let index = -1;
 let pos = { x: 0, y: 100, z: 0 };
@@ -67,8 +77,11 @@ const jumpAfter = args.includes('--jump') ? Number(arg('jump', '2')) : -1;
 let jumpRoute: UfoRouteMsg | null = null;
 const lobbyAfter = args.includes('--lobby') ? Number(arg('lobby', '3')) : -1;
 let lastPhase = -1;
+let tormenta: TormentaMsg | null = null;
 room.onMessage(S2C.ROOM_STATE, (m: RoomStateMsg) => {
   const me = m.players.find((p) => p.index === index);
+  if (m.tormenta && m.tormenta.k !== tormenta?.k) console.log(`[bot] tormenta phase ${m.tormenta.k}/${m.tormenta.n}`);
+  tormenta = m.tormenta ?? null;
   if (m.phase !== lastPhase && m.phase === MatchPhase.RESULTS && lobbyAfter >= 0) {
     setTimeout(() => {
       room.send(C2S.RETURN_LOBBY, {});
@@ -129,6 +142,16 @@ const timer = setInterval(() => {
     let wish = northTangent(up);
     let buttons = 0;
     if (pattern === 'circle') wish = v3rotateAxis(wish, up, t * 0.7);
+    else if (pattern === 'tormenta') {
+      // Toward the centre of the region the Tormenta closes onto; once well inside, slow circles.
+      const goal = tormenta ? tormentaTarget(tormenta) : null;
+      if (goal && tormentaEdgeMeters(goal, pos) > -6) {
+        const c = goal.center;
+        const d = c.x * up.x + c.y * up.y + c.z * up.z;
+        const flat = { x: c.x - up.x * d, y: c.y - up.y * d, z: c.z - up.z * d };
+        if (Math.hypot(flat.x, flat.y, flat.z) > 1e-6) wish = v3normalize(flat);
+      } else wish = v3rotateAxis(wish, up, t * 0.7);
+    }
     else if (pattern === 'zigzag') wish = v3rotateAxis(wish, up, Math.sign(Math.sin(t * 1.3)) * 0.9);
     else if (pattern === 'jumpy') {
       wish = v3rotateAxis(wish, up, t * 0.5);

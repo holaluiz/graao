@@ -34,6 +34,83 @@ float graHash2(vec2 p) {
 }
 `;
 
+/**
+ * The Tormenta as one world state every world material reads (shared uniform objects, like an engine's material
+ * parameter collection): the safe region (centre direction + angular radius), the region it closes onto, and a
+ * global switch. The TormentaDirector writes them once per frame; nothing is set per material or per object.
+ */
+export const TORMENTA_UNIFORMS = {
+  /** xyz: centre (unit direction from the planet centre); w: angular radius (rad). */
+  uTorm: { value: new THREE.Vector4(0, 1, 0, Math.PI) },
+  /** The region the current phase closes onto (w ≤ 0: not shown). */
+  uTormNext: { value: new THREE.Vector4(0, 1, 0, -1) },
+  /** x: 0..1 the Tormenta is live; y: time (s); z: planet radius (m). */
+  uTormOn: { value: new THREE.Vector3(0, 0, 100) },
+};
+
+/** GLSL for the Tormenta (needs GLSL_NOISE): distance to the boundary and the loss of pigment. */
+export const GLSL_TORMENTA = /* glsl */ `
+uniform vec4 uTorm;
+uniform vec4 uTormNext;
+uniform vec3 uTormOn;
+
+// Metres outside the safe region along the surface (negative inside): the geodesic angle, never a flat distance.
+float graTormentaMetres(vec3 wp, vec4 region) {
+  return (acos(clamp(dot(normalize(wp), region.xyz), -1.0, 1.0)) - region.w) * uTormOn.z;
+}
+
+// The same with a torn-paper edge that slowly crawls (±1.2 m of world-space noise). Past the band where ±1.2 m can
+// still change the bleach (it starts at −0.6 m and saturates at 7 m), the noise is skipped: deep inside and deep
+// outside cost no noise here, with no seam.
+float graTormentaEdge(vec3 wp, float m) {
+  if (m < -1.9 || m > 8.4) return m;
+  return m + (graNoise3(wp * 0.42 + vec3(0.0, uTormOn.y * 0.15, 0.0)) - 0.5) * 2.4;
+}
+
+// The world losing its pigment. Inside: untouched. Over a ~7 m band the colour drains, blobs of bare paper letting go
+// ahead of the rest (fragments). Outside: a pale, low-contrast wash of the same values (shapes still read, the hue is
+// gone) with faint pencil hatching where it was dark: the painting turned back into its sketch.
+vec3 graTormentaBleach(vec3 col, vec3 wp, float e) {
+  float k = smoothstep(-0.6, 7.0, e);
+  float erased = step(graNoise3(wp * 1.9 + 3.7), k * 1.35 - 0.3);
+  float l = dot(col, vec3(0.299, 0.587, 0.114));
+  vec3 paper = vec3(0.93, 0.915, 0.875);
+  vec3 washed = mix(vec3(l * 0.9 + 0.08), paper, 0.5);
+  washed = mix(washed, col, 0.1);
+  float hatchLine = step(fract((gl_FragCoord.x + gl_FragCoord.y) * 0.125), 0.16);
+  washed = mix(washed, vec3(0.42, 0.4, 0.44), hatchLine * smoothstep(0.55, 0.25, l) * 0.35 * k);
+  float f = clamp(k * 0.88 + erased * 0.4, 0.0, 1.0);
+  col = mix(col, washed, f);
+  // The tear itself: a ragged graphite line on the boundary and a lighter paper lip just outside it.
+  float tear = 1.0 - smoothstep(0.1, 0.38, abs(e));
+  float lip = smoothstep(0.3, 0.6, e) * (1.0 - smoothstep(0.6, 1.6, e));
+  col = mix(col, vec3(0.3, 0.28, 0.32), tear * 0.8);
+  col = mix(col, paper, lip * 0.45);
+  return col;
+}
+
+// Chalk dashes on the ground where the region being closed onto ends (the "next circle").
+vec3 graTormentaNextLine(vec3 col, vec3 wp) {
+  if (uTormNext.w <= 0.0) return col;
+  float m = graTormentaMetres(wp, uTormNext);
+  float line = 1.0 - smoothstep(0.1, 0.24, abs(m));
+  if (line <= 0.0) return col;
+  vec3 c = uTormNext.xyz;
+  vec3 t1 = normalize(cross(c, abs(c.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+  vec3 t2 = cross(c, t1);
+  vec3 d = normalize(wp);
+  float bearing = atan(dot(d, t2), dot(d, t1));
+  float dashes = max(8.0, floor(6.2832 * uTormOn.z * sin(uTormNext.w) / 1.6));
+  float dash = step(0.45, fract(bearing / 6.2832 * dashes));
+  return mix(col, vec3(1.0, 0.98, 0.93), line * dash * 0.9);
+}
+`;
+
+/** Shares the Tormenta uniforms into a material's uniform table (by reference: one write reaches every material). */
+export function useTormenta(uniforms: Record<string, THREE.IUniform>): void {
+  Object.assign(uniforms, TORMENTA_UNIFORMS);
+}
+
 const vertex = /* glsl */ `
 #include <common>
 #include <color_pars_vertex>
@@ -114,6 +191,9 @@ const fragment = /* glsl */ `
 #include <shadowmap_pars_fragment>
 
 ${GLSL_NOISE}
+#ifdef USE_TORMENTA
+${GLSL_TORMENTA}
+#endif
 
 vec3 graRgb2Hsv(vec3 c) {
   vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
@@ -256,6 +336,18 @@ void main() {
 
   col = mix(col, base, vUnlit);
 
+  // The Tormenta takes the pigment (world materials only; characters and telegraphs stay crisp). Deep inside the
+  // safe region it costs one acos.
+  #ifdef USE_TORMENTA
+    if (uTormOn.x > 0.001) {
+      float tm = graTormentaMetres(vWorldPos, uTorm);
+      if (tm > -4.0) col = mix(col, graTormentaBleach(col, vWorldPos, graTormentaEdge(vWorldPos, tm)), uTormOn.x);
+      #ifdef USE_TERRAIN
+        col = mix(col, graTormentaNextLine(col, vWorldPos), uTormOn.x);
+      #endif
+    }
+  #endif
+
   // Paper dissolve for obstruction (instance fade or material fade).
   float fade = max(vFade, uFade);
   if (fade > 0.001) {
@@ -278,6 +370,8 @@ export interface GRAStylizedOptions {
   pigment?: number;
   edgePooling?: number;
   side?: THREE.Side;
+  /** Reads the Tormenta (default: every non-character variant). Held weapons opt out, like characters. */
+  tormenta?: boolean;
 }
 
 /** Look constants shared by every GRAStylizedMaterial (golden hour). */
@@ -296,6 +390,8 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
   if (o.variant === 'world' || o.variant === 'terrain' || o.variant === 'foliage') defines.USE_PIGMENT = '';
   if (o.variant === 'terrain') defines.USE_TERRAIN = '';
   if (o.instanceFade) defines.USE_INSTANCE_FADE = '';
+  const tormenta = o.tormenta ?? o.variant !== 'character';
+  if (tormenta) defines.USE_TORMENTA = '';
 
   const uniforms = THREE.UniformsUtils.merge([
     THREE.UniformsLib.lights,
@@ -331,6 +427,7 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
       uCliffColor: { value: new THREE.Color('#8c8a86') },
     },
   ]);
+  if (tormenta) useTormenta(uniforms);
 
   const m = new THREE.ShaderMaterial({
     name: `GRAStylized/${o.variant}`,

@@ -109,6 +109,48 @@
         "2570"
       ],
       "port": 2570
+    },
+    {
+      "name": "graao-client-torm",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@graao/client",
+        "exec",
+        "vite",
+        "--config",
+        "../../tools/profiling/vite.bench.config.mjs",
+        "--port",
+        "5178",
+        "--strictPort"
+      ],
+      "port": 5178
+    },
+    {
+      "name": "graao-server-torm",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:SUPABASE_URL='http://127.0.0.1:9'; pnpm --filter @graao/server exec tsx src/index.ts --port 2571"
+      ],
+      "port": 2571
+    },
+    {
+      "name": "graao-client-head",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@graao/client",
+        "exec",
+        "vite",
+        "--config",
+        "../../tools/profiling/vite.bench.config.mjs",
+        "--port",
+        "5179",
+        "--strictPort"
+      ],
+      "port": 5179
     }
   ]
 }

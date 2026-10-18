@@ -146,7 +146,7 @@ export class UfoModel {
     const domeInk = new THREE.SphereGeometry(2.05, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.62, 0);
     const rimInk = new THREE.TorusGeometry(RIM_RADIUS - 0.05, 0.3, 8, 48).rotateX(Math.PI / 2);
     const ink = mergeGeometries([clean(hull.shell), clean(domeInk), clean(rimInk)], false)!;
-    const mat = createStylizedMaterial({ variant: 'world', vertexColors: true, pigment: 0.06, edgePooling: 0.05 });
+    const mat = createStylizedMaterial({ variant: 'world', vertexColors: true, pigment: 0.06, edgePooling: 0.05, tormenta: false });
     const inkMat = new THREE.MeshBasicMaterial({ color: INK, side: THREE.BackSide, fog: true });
     const bodyMesh = new THREE.Mesh(body, mat);
     bodyMesh.castShadow = true;

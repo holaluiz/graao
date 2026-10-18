@@ -1,0 +1,14 @@
+{
+  "name": "graao-server-runtime",
+  "private": true,
+  "type": "module",
+  "description": "What dist/server.mjs needs at runtime: the dependencies esbuild leaves external (WASM, Colyseus). Versions pinned to the workspace lockfile.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@colyseus/core": "0.18.19",
+    "@colyseus/ws-transport": "0.18.4",
+    "@dimforge/rapier3d-compat": "0.21.0"
+  }
+}

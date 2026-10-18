@@ -41,6 +41,8 @@ export class RemotePlayer {
   diving = false;
   /** In deep water (from the latest snapshot's movement state). */
   swimming = false;
+  /** Outside the Tormenta's safe region, by the server's verdict (latest snapshot). */
+  inTormenta = false;
 
   constructor(
     readonly index: number,
@@ -103,6 +105,7 @@ export class RemotePlayer {
     const v = b.vel.clone();
     const speed = v.addScaledVector(up, -v.dot(up)).length();
     this.alive = (b.flags & SnapFlag.ALIVE) !== 0;
+    this.inTormenta = (b.flags & SnapFlag.IN_TORMENTA) !== 0;
     this.label.classList.toggle('down', !this.alive);
     let groundDist: number | undefined;
     if (this.diving) {

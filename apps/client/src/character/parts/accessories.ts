@@ -17,32 +17,46 @@ export const ACCESSORY_COLORS: Record<string, { acc: string; accent: string }> =
 };
 
 const BONES = ['Head' as const];
+const DEG = Math.PI / 180;
 
-/** Frame bridge and temple arms shared by both glasses. */
+/** Frame bridge and temple arms shared by both glasses: the arms run back over the temples to rest on the ears. */
 function glassesFrame(b: PartBuilder, h: HeadShape, lens: V3[], halfW: number): void {
   const c = h.center;
+  const top = h.lm.earTop;
   lens.forEach((p, i) => {
     const sx = i === 0 ? 1 : -1;
+    const temple = h.surface(dirOf(sx * 72 * DEG, 95 * DEG), 1.08);
+    const rest = h.surface(new THREE.Vector3(sx * top[0], top[1] + 0.012, top[2] + 0.012), 1.03);
     b.tube(
       [
         { p: [p[0] + sx * halfW, p[1] + 0.004, p[2] - 0.004], ra: 0.003, rb: 0.003 },
-        { p: [sx * (h.a + 0.01), c[1] + 0.0, c[2] + 0.03], ra: 0.003, rb: 0.003 },
-        { p: [sx * (h.a + 0.006), c[1] - 0.008, c[2] - 0.03], ra: 0.003, rb: 0.003 },
+        { p: [temple[0], temple[1] + 0.004, temple[2]], ra: 0.003, rb: 0.003 },
+        { p: rest, ra: 0.003, rb: 0.003 },
+        { p: [rest[0] - sx * 0.002, rest[1] - 0.01, rest[2] - 0.012], ra: 0.003, rb: 0.003 },
       ],
       { slot: Slot.ACC, bones: BONES, ref: [0, 1, 0], segments: 6, outline: 0.5 },
     );
   });
   if (lens.length === 2) {
     const [l, r] = lens as [V3, V3];
+    // Over the nose, from the upper third of each rim.
+    const rise = halfW * 0.32;
+    const reach = Math.sqrt(halfW * halfW - rise * rise);
+    const bridge = h.frontPoint(0, (l[1] + r[1]) / 2 - c[1] + rise + 0.004, 0.011);
     b.tube(
       [
-        { p: [l[0] - halfW, l[1] + 0.003, l[2]], ra: 0.003, rb: 0.003 },
-        { p: [0, (l[1] + r[1]) / 2 + 0.008, (l[2] + r[2]) / 2 + 0.004], ra: 0.003, rb: 0.003 },
-        { p: [r[0] + halfW, r[1] + 0.003, r[2]], ra: 0.003, rb: 0.003 },
+        { p: [l[0] - reach, l[1] + rise, l[2]], ra: 0.003, rb: 0.003 },
+        { p: bridge ? bridge.p : [0, (l[1] + r[1]) / 2 + rise + 0.004, (l[2] + r[2]) / 2 + 0.004], ra: 0.003, rb: 0.003 },
+        { p: [r[0] + reach, r[1] + rise, r[2]], ra: 0.003, rb: 0.003 },
       ],
       { slot: Slot.ACC, bones: BONES, ref: [0, 1, 0], segments: 6, outline: 0.5 },
     );
   }
+}
+
+/** Center of the eye opening (face coordinates, side `sx`): where lenses sit. */
+function eyeCenter(h: HeadShape, sx: number): [number, number] {
+  return [sx * (h.lm.eye[0] - 0.003), h.lm.eye[1] - 0.0012];
 }
 
 export function buildAccessory(b: PartBuilder, s: BodyShape, accId: string, hairId: string): void {
@@ -52,19 +66,19 @@ export function buildAccessory(b: PartBuilder, s: BodyShape, accId: string, hair
     case 'acc.glasses': {
       const lens: V3[] = [];
       for (const sx of [1, -1]) {
-        const f = h.frontPoint(sx * 0.044, -0.006, 0.016);
+        const f = h.frontPoint(...eyeCenter(h, sx), 0.017);
         if (!f) continue;
         lens.push(f.p);
-        b.torus(f.p, f.n, 0.025, 0.0034, { slot: Slot.ACC, bones: BONES, outline: 0.6 }, 18, 6);
+        b.torus(f.p, f.n, 0.03, 0.0034, { slot: Slot.ACC, bones: BONES, outline: 0.6 }, 20, 6);
       }
-      glassesFrame(b, h, lens, 0.024);
+      glassesFrame(b, h, lens, 0.029);
       break;
     }
     case 'acc.shades': {
       // Mirrored sunglasses: wide oval lenses filled with the mirror color, thick frame.
       const lens: V3[] = [];
       for (const sx of [1, -1]) {
-        const f = h.frontPoint(sx * 0.046, -0.004, 0.016);
+        const f = h.frontPoint(...eyeCenter(h, sx), 0.017);
         if (!f) continue;
         lens.push(f.p);
         const { e1, e2 } = frame(f.n);
@@ -73,23 +87,24 @@ export function buildAccessory(b: PartBuilder, s: BodyShape, accId: string, hair
           const a = (i / 20) * Math.PI * 2;
           // Slightly cat-eye: higher on the outer side.
           const lift = 0.004 * Math.max(0, Math.cos(a) * sx) * Math.max(0, Math.sin(a));
-          const x = Math.cos(a) * 0.029;
-          const y = Math.sin(a) * 0.02 + lift;
+          const x = Math.cos(a) * 0.033;
+          const y = Math.sin(a) * 0.022 + lift;
           rim.push([f.p[0] + e1.x * x + e2.x * y, f.p[1] + e1.y * x + e2.y * y, f.p[2] + e1.z * x + e2.z * y]);
         }
         b.loop(rim, 0.004, 0.004, { slot: Slot.ACC, bones: BONES, outline: 0.6 }, 6);
-        b.ellipsoid(f.p, [0.028, 0.019, 0.004], { slot: Slot.ACC_ACCENT, bones: BONES, outline: 0 }, 14, 6, facing(f.n));
+        b.ellipsoid(f.p, [0.032, 0.021, 0.004], { slot: Slot.ACC_ACCENT, bones: BONES, outline: 0 }, 14, 6, facing(f.n));
       }
-      glassesFrame(b, h, lens, 0.029);
+      glassesFrame(b, h, lens, 0.033);
       break;
     }
     case 'acc.headphones': {
       // Cups clear the hair at ear height; the band clears the top of the hair.
-      const cy = c[1] - 0.006;
-      const cz = c[2] - 0.01;
-      const side = hairOuter(h, hairId, dirOf(Math.PI / 2, Math.PI / 2));
+      const ear = h.lm;
+      const cy = c[1] + (ear.earTop[1] + ear.earLobe[1]) / 2;
+      const cz = c[2] + (ear.earTop[2] + ear.earLobe[2]) / 2;
+      const side = hairOuter(h, hairId, new THREE.Vector3(1, cy - c[1], cz - c[2]).normalize());
       const top = hairOuter(h, hairId, dirOf(0, 0));
-      const cupX = Math.max(h.a * 1.24 + 0.012, side[0] - c[0] + 0.018);
+      const cupX = Math.max(ear.earOut + 0.026, side[0] - c[0] + 0.018);
       const rise = Math.max(h.b * 1.26 - 0.01, top[1] - cy - 0.03 + 0.012);
       const band: { p: V3; ra: number; rb: number }[] = [];
       for (let i = 0; i <= 8; i++) {
@@ -105,9 +120,10 @@ export function buildAccessory(b: PartBuilder, s: BodyShape, accId: string, hair
       break;
     }
     case 'acc.hoops': {
-      // Big gold hoops hanging from the earlobes (ears in body.ts: center x = ±0.93 a, 1.2 cm below the head center).
+      // Big gold hoops hanging from the earlobes of the sculpt.
+      const lobe = h.lm.earLobe;
       for (const sx of [1, -1]) {
-        const ear: V3 = [c[0] + sx * (h.a * 0.93 + 0.006), c[1] - 0.042, c[2] - 0.006];
+        const ear: V3 = [c[0] + sx * (lobe[0] + 0.002), c[1] + lobe[1], c[2] + lobe[2] + 0.004];
         b.torus([ear[0], ear[1] - 0.02, ear[2]], [1, 0, 0], 0.022, 0.0028, { slot: Slot.ACC, bones: BONES, outline: 0.5 }, 22, 6);
       }
       break;

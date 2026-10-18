@@ -11,11 +11,14 @@ procedural pieces bend alike.
     blender --background --factory-startup --python tools/blender/build_hero.py -- \
         tools/character/body-ref.json apps/client/public/assets/v1/characters/hero-parts.glb [preview_dir]
 """
+import base64
 import bpy
 import bmesh
 import json
 import math
+import os
 import random
+import struct
 import sys
 from mathutils import Matrix, Vector
 
@@ -23,6 +26,7 @@ argv = sys.argv[sys.argv.index('--') + 1:]
 REF = json.load(open(argv[0], encoding='utf-8'))
 OUT = argv[1]
 PREVIEW = argv[2] if len(argv) > 2 else None
+HEAD_DATA = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../apps/client/src/character/build/head-data.json'), encoding='utf-8'))
 
 # Preview colors only (the game colors every slot from the character's palette).
 PREVIEW_COLORS = {
@@ -252,28 +256,69 @@ def emit(piece, subdivide=0, bevel_slots=()):
 # --------------------------------------------------------------------------------------------- head surface
 
 class Head:
+    """The sculpted head's skull (ears and nose filled in) as the client builds it: a radial table around the head center
+    (apps/client/src/character/build/head-data.json, made by tools/blender/build_head.py)."""
+
     def __init__(self, h):
         self.c = Vector(h['center'])
-        self.a, self.b, self.cz = h['a'], h['b'], h['c']
+        sk = HEAD_DATA['skull']
+        self.nt, self.np = sk['nt'], sk['np']
+        self.skull = self._table(sk)
+        self.ears = self._table(HEAD_DATA['ears'])
+
+    @staticmethod
+    def _table(t):
+        raw = base64.b64decode(t['r'])
+        return (t['nt'], t['np'], [v / t['quant'] for v in struct.unpack('<%dH' % (len(raw) // 2), raw)])
+
+    @staticmethod
+    def _lookup(table, theta, phi):
+        """Bilinear lookup in a radial table (same as the client's)."""
+        nt, np_, r = table
+        x = (theta + math.pi) / (2 * math.pi) * nt
+        y = max(0.0, min(np_, phi / math.pi * np_))
+        i0 = math.floor(x)
+        tx = x - i0
+        j0 = min(np_ - 1, math.floor(y))
+        ty = y - j0
+        at = lambda j, i: r[j * nt + i % nt]
+        a = at(j0, i0) * (1 - tx) + at(j0, i0 + 1) * tx
+        b = at(j0 + 1, i0) * (1 - tx) + at(j0 + 1, i0 + 1) * tx
+        return a * (1 - ty) + b * ty
+
+    def radius(self, theta, phi):
+        return self._lookup(self.skull, theta, phi)
 
     def surface(self, d, scale=1.0):
         d = Vector(d).normalized()
-        dy = d.y
-        sx = 1 - 0.36 * (-dy) ** 1.75 if dy < 0 else 1 - 0.05 * dy * dy
-        if d.z < 0:
-            sz = 1.07 - 0.05 * max(0.0, -dy)
-        else:
-            sz = 1 - 0.1 * (-dy) ** 2.2 if dy < 0 else 1.0
-        chin = 0.012 * max(0.0, 1 - abs(dy + 0.84) / 0.3) if dy < -0.55 else 0.0
-        x = d.x * self.a * sx * scale
-        y = d.y * self.b * scale
-        z = (d.z * self.cz * sz + (chin * d.z if d.z > 0 else 0)) * scale
-        return self.c + Vector((x, y, z))
+        r = self.radius(math.atan2(d.x, d.z), math.acos(max(-1.0, min(1.0, d.y))))
+        return self.c + d * r * scale
+
+    def clear_ears(self, p, room=0.005):
+        """Pushes `p` out from the center until it clears the ears by `room` (hair swells over them)."""
+        v = Vector(p) - self.c
+        r = v.length
+        if r < 1e-9:
+            return Vector(p)
+        d = v / r
+        reach = self._lookup(self.ears, math.atan2(d.x, d.z), math.acos(max(-1.0, min(1.0, d.y))))
+        if reach <= 0 or r >= reach + room:
+            return Vector(p)
+        return self.c + d * (reach + room)
 
     def normal(self, d):
-        p = self.surface(d)
-        q = p - self.c
-        return Vector((q.x / self.a ** 2, q.y / self.b ** 2, q.z / self.cz ** 2)).normalized()
+        d = Vector(d).normalized()
+        if abs(d.y) > 0.995:
+            return d
+        th, ph = math.atan2(d.x, d.z), math.acos(max(-1.0, min(1.0, d.y)))
+        e = 0.01
+        at = lambda t, p: self.surface(Vector((math.sin(p) * math.sin(t), math.cos(p), math.sin(p) * math.cos(t))))
+        p0 = at(th, ph)
+        n = (at(th + e, ph) - p0).cross(at(th, ph + e) - p0)
+        if n.length < 1e-12:
+            return d
+        n.normalize()
+        return n if n.dot(d) > 0 else -n
 
 
 # --------------------------------------------------------------------------------------------- hair: wavy
@@ -306,7 +351,7 @@ def build_hair(body, ref, covered):
             if cut:
                 s = 0.94
             row.append(len(verts))
-            verts.append(head.surface(d, s))
+            verts.append(head.clear_ears(head.surface(d, s)) if s > 1.0 else head.surface(d, s))
             if j == 0 or j == nv:
                 break
         grid.append(row)
@@ -344,7 +389,7 @@ def build_hair(body, ref, covered):
         width = 0.058 + rnd.random() * 0.02
         wave = (rnd.random() - 0.5) * 0.02
         steps = 6
-        p = head.surface(d, 1.08 + 0.08 * smoothstep(0.1, 0.9, d.y))
+        p = head.clear_ears(head.surface(d, 1.08 + 0.08 * smoothstep(0.1, 0.9, d.y)), 0.016)
         dirv = flow.copy()
         rings = []
         for s in range(steps + 1):
@@ -365,7 +410,7 @@ def build_hair(body, ref, covered):
             p = p + dirv * (length / steps)
             q = (p - head.c)
             dd = q.normalized()
-            surf = head.surface(dd, 1.06)
+            surf = head.clear_ears(head.surface(dd, 1.06), 0.016)
             if q.length < (surf - head.c).length:
                 p = surf
             if front and dd.y < 0.26 and dd.z > 0.3:

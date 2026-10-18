@@ -45,6 +45,8 @@ uniform vec3 uSpace;
 uniform vec3 uSpaceDeep;
 uniform float uUnder;
 uniform vec3 uUnderColor;
+uniform float uBleach;
+uniform vec3 uBleachColor;
 varying vec3 vDir;
 ${GLSL_NOISE}
 void main() {
@@ -79,6 +81,8 @@ void main() {
     orbitCol += uSunColor * (pow(sd, 8.0) * 0.22 + pow(sd, 90.0) * 0.55);
     col = mix(col, orbitCol, uOrbit);
   }
+  // Inside the Tormenta the sky loses its colour too: a pale paper wash, the clouds a faint grey.
+  col = mix(col, mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), uBleachColor, 0.55), uBleach * 0.85);
   // Under the sea surface the sky only glows through the water.
   col = mix(col, uUnderColor, uUnder * 0.8);
   gl_FragColor = vec4(col, 1.0);
@@ -99,6 +103,8 @@ export const SKY = {
   spaceDeep: new THREE.Color('#2e3a6b'),
   /** Fog and sky tint with the camera under the water. */
   underwater: new THREE.Color('#2f8197'),
+  /** Fog and sky with the camera inside the Tormenta (pigment gone: warm grey paper). */
+  tormenta: new THREE.Color('#e3dfd6'),
 };
 
 export class GRARenderer {
@@ -114,6 +120,8 @@ export class GRARenderer {
   readonly ink: InkPass;
   /** 0..1: the camera is under the sea surface (dense teal fog, the sky only glowing through). */
   underwater = 0;
+  /** 0..1: the camera is inside the Tormenta (paler, closer fog; a washed-out sky). Set by the TormentaDirector. */
+  tormenta = 0;
   private shadowExtent = 26;
   private readonly fixedTangent = new THREE.Vector3(0.62, 0.22, -0.75).normalize();
 
@@ -165,6 +173,8 @@ export class GRARenderer {
         uSpaceDeep: { value: SKY.spaceDeep },
         uUnder: { value: 0 },
         uUnderColor: { value: SKY.underwater },
+        uBleach: { value: 0 },
+        uBleachColor: { value: SKY.tormenta },
       },
       side: THREE.BackSide,
       depthWrite: false,
@@ -234,12 +244,13 @@ export class GRARenderer {
     const dist = this.camera.position.length();
     const alt = dist - planetRadius;
     const air = THREE.MathUtils.lerp(0.0085, 0.0011, THREE.MathUtils.smoothstep(alt, 14, 140));
-    this.fog.density = THREE.MathUtils.lerp(air, 0.13, this.underwater);
-    this.fog.color.copy(SKY.fog).lerp(SKY.underwater, this.underwater);
+    this.fog.density = THREE.MathUtils.lerp(air * (1 + 1.6 * this.tormenta), 0.13, this.underwater);
+    this.fog.color.copy(SKY.fog).lerp(SKY.tormenta, this.tormenta * 0.9).lerp(SKY.underwater, this.underwater);
     const orbit = THREE.MathUtils.smoothstep(alt, 30, 190);
     const u = this.sky.material.uniforms;
     u.uOrbit!.value = orbit;
     u.uUnder!.value = this.underwater;
+    u.uBleach!.value = this.tormenta;
     u.uLimb!.value = Math.asin(Math.min(1, planetRadius / Math.max(dist, planetRadius)));
     // Near plane: precise depth from afar, close-up framing on the ground.
     const near = alt > 30 ? 0.5 : 0.05;

@@ -19,6 +19,12 @@ export const MAX_PLAYERS = 10;
 /** Solo rooms reserve one human seat; the remaining seats may be bots. */
 export const MAX_SOLO_BOTS = MAX_PLAYERS - 1;
 
+/**
+ * A player whose connection drops keeps their seat (and their character, in a match) this long while the client
+ * reconnects (Wi-Fi handover, a sleeping laptop, a router hiccup). After that they have left for good.
+ */
+export const RECONNECT_SECONDS = 20;
+
 /** Inputs a client may queue ahead of the server (anti speed-hack + jitter buffer). */
 export const MAX_INPUT_BACKLOG = 12;
 /** Commands the server keeps queued per player so it can consume input at a steady rate (smooth remotes). */

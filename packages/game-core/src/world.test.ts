@@ -478,14 +478,13 @@ describe('water: wading, swimming and plunges (Lago Espelho, ≈ 3.6 m deep in t
     const { s, body } = overLake(0.5);
     for (let i = 0; i < 120; i++) motor.step(body, s, newInput(), 1 / 60);
     let deepest = 0;
-    let movedUnder = 0;
     const p0 = { ...s.pos };
     walk(s, body, 90, InputButton.SPRINT, () => (deepest = Math.max(deepest, waterDepth(s.pos))));
     expect(s.swimming).toBe(true);
     expect(headUnderWater(s.pos)).toBe(true);
     // Sinks at the dive speed: ≈ 2.6 m/s, stopped by the lake bed (≈ 3.6 m at the centre).
     expect(deepest).toBeGreaterThan(MOVEMENT.breathDepth + 1);
-    movedUnder = Math.hypot(s.pos.x - p0.x, s.pos.y - p0.y, s.pos.z - p0.z);
+    const movedUnder = Math.hypot(s.pos.x - p0.x, s.pos.y - p0.y, s.pos.z - p0.z);
     expect(movedUnder).toBeGreaterThan(2);
     // Let go: buoyancy brings the swimmer back to the float depth, head out.
     for (let i = 0; i < 240; i++) motor.step(body, s, newInput(), 1 / 60);

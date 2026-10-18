@@ -1,0 +1,93 @@
+/* ------------------------------------------------------------------------------------------- tormenta
+   The Tormenta in the HUD: a card (glyph, phase pips, what it does now, the clock, the damage outside), the way back
+   under the status chip (arrow + words + metres), and the screen edges turning to bare paper the deeper the player is.
+   Every state reads by words and shapes (filled/outlined pips, a striped bar while it closes), never by colour only. */
+.torm-col { position: absolute; left: 18px; top: 18px; display: grid; gap: 8px; justify-items: center; }
+.tormenta { position: relative; width: 200px; display: grid; gap: 3px; padding: 8px 11px 9px; border: 2.5px solid var(--ink);
+  border-radius: 14px; background: rgba(243, 233, 216, .9); box-shadow: 0 3px 0 var(--ink); }
+.torm-head { display: flex; align-items: center; gap: 7px; }
+.torm-icon { width: 22px; height: 22px; flex: none; }
+.torm-icon .torn { fill: #e9e4da; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round; }
+.torm-icon .safe { fill: var(--leaf); stroke: var(--ink); stroke-width: 1.6; }
+.torm-title { font-weight: 900; font-size: 12px; letter-spacing: .16em; }
+.torm-pips { display: flex; gap: 6px; margin-left: auto; }
+.torm-pips i { width: 9px; height: 9px; transform: rotate(45deg); border: 2px solid var(--ink); background: transparent; opacity: .55; }
+.torm-pips i.now { opacity: 1; background: var(--sun); }
+.torm-pips i.done { opacity: 1; background: var(--ink); }
+.tormenta[data-stage='shrink'] .torm-pips i.now { animation: torm-pip 0.9s ease-in-out infinite; }
+@keyframes torm-pip { 50% { transform: rotate(45deg) scale(1.35); } }
+.torm-state { font-weight: 800; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; opacity: .85; }
+.torm-time { font-weight: 900; font-size: 26px; line-height: 1; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.torm-bar { height: 7px; border: 2px solid var(--ink); border-radius: 5px; background: rgba(42, 33, 48, .12); overflow: hidden; }
+.torm-bar > i { display: block; height: 100%; width: 0; background: #b9b2a6; transition: width .25s linear; }
+/* Closing: a moving striped fill (pattern, not only colour). */
+.tormenta[data-stage='shrink'] .torm-bar > i { background: repeating-linear-gradient(-45deg, var(--ink) 0 4px, #d8d1c4 4px 8px); background-size: 11.3px 11.3px;
+  animation: torm-stripes .6s linear infinite; }
+@keyframes torm-stripes { to { background-position: 11.3px 0; } }
+.torm-rate { font-weight: 800; font-size: 11px; opacity: .75; }
+.tormenta[data-tone='relevant'] { background: #fff6e2; }
+.tormenta[data-tone='relevant'] .torm-time { color: #a8551b; }
+.tormenta[data-tone='urgent'] { background: #fff1ec; box-shadow: 0 3px 0 var(--ink), 0 0 0 3px var(--danger); }
+.tormenta[data-tone='urgent'] .torm-time { color: var(--danger); }
+.tormenta.torm-pop { animation: torm-pop .4s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes torm-pop { from { transform: scale(.9); } to { transform: scale(1); } }
+
+/* The way back: arrow toward the region to reach, what it is and how far. */
+.torm-out { position: absolute; left: 50%; top: 100px; transform: translateX(-50%); display: flex; align-items: center; gap: 9px; padding: 6px 14px 6px 8px;
+  border-radius: 14px; background: var(--ink); color: var(--paper); white-space: nowrap; }
+.torm-out[data-tone='relevant'] { background: var(--sun); color: var(--ink); border: 2.5px solid var(--ink); }
+.torm-arrow { width: 34px; height: 34px; flex: none; transition: transform .08s linear; }
+.torm-arrow path { fill: var(--paper); stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
+.torm-out[data-tone='relevant'] .torm-arrow path { fill: #fff; }
+.torm-out-title { font-weight: 900; font-size: 14px; letter-spacing: .1em; }
+.torm-out-line { font-weight: 800; font-size: 12px; opacity: .9; }
+.torm-out[data-tone='urgent'] { animation: torm-urgent 1.2s ease-in-out infinite; }
+@keyframes torm-urgent { 50% { box-shadow: 0 0 0 4px rgba(217, 73, 59, .55); } }
+.torm-out.hurt .torm-arrow { animation: torm-flinch .3s ease-out; }
+@keyframes torm-flinch { 30% { scale: 1.25; } }
+.torm-hit { position: absolute; right: -6px; top: -12px; font-weight: 900; font-size: 18px; color: #fff; -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill;
+  animation: torm-hit .8s ease-out forwards; }
+@keyframes torm-hit { 0% { opacity: 0; translate: 0 6px; } 15% { opacity: 1; translate: 0 0; } 100% { opacity: 0; translate: 0 -26px; } }
+
+/* Pigment leaving the frame: bare paper creeping in from the edges, torn into strips (opacity from the depth). */
+.torm-edge { position: absolute; inset: 0; opacity: 0; transition: opacity .35s;
+  background:
+    repeating-conic-gradient(from 3deg at 50% 50%, rgba(246, 243, 236, 0) 0deg 5deg, rgba(246, 243, 236, .55) 5deg 6.5deg, rgba(246, 243, 236, 0) 6.5deg 11deg),
+    radial-gradient(118% 92% at 50% 50%, transparent 48%, rgba(238, 233, 223, .55) 74%, rgba(244, 240, 232, .95) 100%);
+  -webkit-mask-image: radial-gradient(118% 92% at 50% 50%, transparent 40%, #000 72%); mask-image: radial-gradient(118% 92% at 50% 50%, transparent 40%, #000 72%); }
+.torm-edge.deep { animation: torm-breathe 2.4s ease-in-out infinite; }
+@keyframes torm-breathe { 50% { filter: brightness(1.06); } }
+.torm-edge.hurt { animation: torm-edge-hurt .32s ease-out; }
+@keyframes torm-edge-hurt { 0% { filter: brightness(1.25) contrast(1.2); } 100% { filter: none; } }
+
+/* The planet map: you in the middle (arrow = where the camera looks), the far side of the planet on the rim. */
+.torm-map { position: relative; display: grid; justify-items: center; gap: 3px; }
+.torm-map[hidden] { display: none; }
+.torm-map-disc { width: 116px; height: 116px; border-radius: 50%; box-shadow: 0 3px 0 var(--ink); background: #e9e4da; }
+.torm-map-me { position: absolute; left: 50%; top: 58px; width: 20px; height: 20px; transform: translate(-50%, -50%); }
+.torm-map-me path { fill: var(--sun); stroke: var(--ink); stroke-width: 1.8; stroke-linejoin: round; }
+.torm-map-legend { display: flex; gap: 8px; padding: 2px 7px; border-radius: 8px; background: rgba(243, 233, 216, .85); font-weight: 800; font-size: 10px; letter-spacing: .04em; }
+.torm-map-legend span { display: flex; align-items: center; gap: 4px; }
+.torm-map-legend .sw { width: 12px; height: 9px; border: 1.5px solid var(--ink); border-radius: 2px; }
+.torm-map-legend .sw.storm { background: repeating-linear-gradient(-45deg, #e9e4da 0 2px, #8d8780 2px 3px); }
+.torm-map-legend .sw.next { border-style: dashed; background: transparent; }
+
+.hud[data-mode='ufo'] :is(.torm-col, .torm-out, .torm-edge) { display: none !important; }
+/* Narrow screens: the way back drops below the card instead of overlapping it, and while it shows (its arrow already
+   points the way) the map steps aside. */
+@media (max-width: 860px) {
+  .torm-out { top: 150px; }
+  .torm-out:not([hidden]) ~ .torm-col .torm-map { display: none; }
+}
+@media (max-width: 640px) {
+  /* Below the status chip (top centre), which the card would otherwise cover. */
+  .torm-col { left: 10px; top: 96px; gap: 6px; }
+  .tormenta { width: 160px; padding: 6px 9px 7px; }
+  .torm-state { font-size: 10px; letter-spacing: .02em; }
+  .torm-map-disc { width: 84px; height: 84px; }
+  .torm-map-me { top: 42px; }
+  .torm-time { font-size: 21px; }
+  .torm-rate { display: none; }
+  .torm-out { top: 214px; padding: 5px 11px 5px 6px; }
+  .torm-out-title { font-size: 12px; }
+}

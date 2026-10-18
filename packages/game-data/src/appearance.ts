@@ -7,6 +7,7 @@ import { APPEARANCE_KEYS, isAppearanceShape, type CharacterAppearance } from '@g
 /** Body regions that clothing can hide to avoid clipping, z-fighting and hidden overdraw. */
 export type BodyRegion =
   | 'head'
+  | 'ears'
   | 'neck'
   | 'torso'
   | 'hips'

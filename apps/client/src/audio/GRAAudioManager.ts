@@ -7,11 +7,15 @@
  *
  * MVP sounds are synthesized (oscillators + filtered noise), so the game ships zero audio files for now and every
  * cue is tweakable in code. Recorded assets can replace any cue later behind the same names.
+ *
+ * INSIDE_TORMENTA (the local player outside the safe region): the world loses its colour and its sound. Only the
+ * environment and music are ducked and filtered (birds, wind, water); threats, weapons, abilities and match cues stay
+ * fully audible, and the Tormenta's own low paper drone rises with how deep the player is.
  */
 import { Ambience } from './Ambience';
 
 export type AudioCategory = 'threat' | 'weapons' | 'abilities' | 'match' | 'ui' | 'music' | 'environment';
-export type AudioState = 'NORMAL' | 'LOW_HEALTH' | 'UFO' | 'POST_MATCH';
+export type AudioState = 'NORMAL' | 'LOW_HEALTH' | 'UFO' | 'POST_MATCH' | 'INSIDE_TORMENTA';
 
 export type Cue =
   | 'fire.sunbeam'
@@ -71,10 +75,19 @@ export type Cue =
   // Movement: the double jump's puff of air.
   | 'jump.air'
   // Water: gasp upon surfacing from a long dive.
-  | 'gasp';
+  | 'gasp'
+  // Tormenta: the warning before a reduction, the last-seconds tick, the reduction starting, the final region,
+  // stepping into it and back out, and a damage pulse (pigment scraped off).
+  | 'tormenta.warn'
+  | 'tormenta.tick'
+  | 'tormenta.shrink'
+  | 'tormenta.final'
+  | 'tormenta.enter'
+  | 'tormenta.exit'
+  | 'tormenta.hurt';
 
-/** Continuous layers driven every frame by a level (0 = silent): the dive's wind and the UFO's hum. */
-export type AudioLoop = 'wind' | 'hum';
+/** Continuous layers driven every frame by a level (0 = silent): the dive's wind, the UFO's hum, the Tormenta's drone. */
+export type AudioLoop = 'wind' | 'hum' | 'tormenta';
 
 const VOICE_LIMIT: Record<AudioCategory, number> = { threat: 8, weapons: 10, abilities: 8, match: 4, ui: 4, music: 2, environment: 6 };
 const CATEGORY_GAIN: Record<AudioCategory, number> = { threat: 0.9, weapons: 0.75, abilities: 0.8, match: 0.9, ui: 0.55, music: 0.5, environment: 0.5 };
@@ -131,6 +144,13 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   wade: 'environment',
   'jump.air': 'environment',
   gasp: 'environment',
+  'tormenta.warn': 'match',
+  'tormenta.tick': 'match',
+  'tormenta.shrink': 'match',
+  'tormenta.final': 'match',
+  'tormenta.enter': 'match',
+  'tormenta.exit': 'ui',
+  'tormenta.hurt': 'threat',
 };
 
 export interface PlayOptions {
@@ -155,6 +175,9 @@ export class GRAAudioManager {
   private ctx: AudioContext | null = null;
   private master!: GainNode;
   private world!: BiquadFilterNode;
+  /** Environment and music only: ducked and filtered inside the Tormenta (the rest of the world stays clear). */
+  private ambientFilter!: BiquadFilterNode;
+  private ambientDuck!: GainNode;
   private readonly buses = new Map<AudioCategory, GainNode>();
   private readonly voices = new Map<AudioCategory, Voice[]>();
   private noise: AudioBuffer | null = null;
@@ -196,11 +219,18 @@ export class GRAAudioManager {
     this.world.frequency.value = 20000;
     this.world.Q.value = 0.5;
     this.world.connect(this.master);
+    this.ambientDuck = ctx.createGain();
+    this.ambientFilter = ctx.createBiquadFilter();
+    this.ambientFilter.type = 'lowpass';
+    this.ambientFilter.frequency.value = 20000;
+    this.ambientFilter.Q.value = 0.4;
+    this.ambientDuck.connect(this.ambientFilter).connect(this.world);
     for (const cat of Object.keys(VOICE_LIMIT) as AudioCategory[]) {
       const g = ctx.createGain();
       g.gain.value = CATEGORY_GAIN[cat];
-      // Threat, match and UI stay clear in every state; the rest goes through the "world" filter.
-      g.connect(cat === 'threat' || cat === 'match' || cat === 'ui' ? this.master : this.world);
+      // Threat, match and UI stay clear in every state; the rest goes through the "world" filter, and the ambience
+      // (environment, music) through its own duck first.
+      g.connect(cat === 'threat' || cat === 'match' || cat === 'ui' ? this.master : cat === 'environment' || cat === 'music' ? this.ambientDuck : this.world);
       this.buses.set(cat, g);
       this.voices.set(cat, []);
     }
@@ -236,6 +266,10 @@ export class GRAAudioManager {
     // Aboard the UFO the world is heard through the hull; under water, through the water.
     const freq = Math.min(s === 'LOW_HEALTH' ? 900 : s === 'POST_MATCH' ? 2600 : s === 'UFO' ? 5200 : 20000, this.underwater ? 650 : 20000);
     this.world.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.12);
+    // The Tormenta takes the world's sound, not the fight's: only the ambience is ducked and dulled.
+    const storm = s === 'INSIDE_TORMENTA';
+    this.ambientFilter.frequency.setTargetAtTime(storm ? 750 : 20000, this.ctx.currentTime, storm ? 0.25 : 0.4);
+    this.ambientDuck.gain.setTargetAtTime(storm ? 0.3 : 1, this.ctx.currentTime, storm ? 0.25 : 0.5);
   }
 
   play(cue: Cue, o: PlayOptions = {}): void {
@@ -312,7 +346,36 @@ export class GRAAudioManager {
     const gain = ctx.createGain();
     gain.gain.value = 0;
     const filter = ctx.createBiquadFilter();
-    filter.connect(gain).connect(this.buses.get('environment')!);
+    // The Tormenta's drone is a match signal (never ducked by its own state); the others are environment.
+    filter.connect(gain).connect(this.buses.get(name === 'tormenta' ? 'match' : 'environment')!);
+    if (name === 'tormenta') {
+      // Pigment and paper going: a low breathy band of noise with a slow swell, and a faint low fifth under it.
+      filter.type = 'bandpass';
+      filter.Q.value = 0.9;
+      filter.frequency.value = 320;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      src.loop = true;
+      src.playbackRate.value = 0.6;
+      src.connect(filter);
+      src.start();
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 0.18;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 120;
+      lfo.connect(lfoGain).connect(filter.frequency);
+      lfo.start();
+      for (const [f, g] of [[55, 0.35], [82.4, 0.16]] as const) {
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.value = f;
+        const og = ctx.createGain();
+        og.gain.value = g;
+        o.connect(og).connect(gain);
+        o.start();
+      }
+      return { gain, filter, base: 0.32 };
+    }
     if (name === 'wind') {
       // Rushing air: looping noise through a moving band-pass.
       filter.type = 'bandpass';
@@ -620,6 +683,43 @@ export class GRAAudioManager {
         this.noiseBurst(out, t, 0.35, 0.3, 'bandpass', 600 * p, 2800 * p, 0.9);
         this.osc(out, 'sine', t + 0.05, 200 * p, 380 * p, 0.15, 0.08);
         return 0.36;
+      // ------------------------------------------------------------------------------------------ tormenta
+      case 'tormenta.warn':
+        // A soft low gong and a paper swish: it will move soon (discreet, not an alarm).
+        this.osc(out, 'sine', t, 196, 190, 1.1, 0.26, 0.02);
+        this.osc(out, 'sine', t, 293.66, 288, 0.9, 0.1, 0.03);
+        this.noiseBurst(out, t + 0.05, 0.5, 0.12, 'bandpass', 900, 2600, 0.8);
+        return 1.1;
+      case 'tormenta.tick':
+        // The closing clock: a dry wooden tick whose pitch the caller raises toward the end.
+        this.osc(out, 'triangle', t, 820 * p, 760 * p, 0.05, 0.14);
+        this.noiseBurst(out, t, 0.025, 0.12, 'bandpass', 2400 * p, 2400 * p, 5);
+        return 0.06;
+      case 'tormenta.shrink':
+        // The boundary starts to move: a slow downward swell with paper tearing on top.
+        this.osc(out, 'sawtooth', t, 110, 62, 1.4, 0.07, 0.15);
+        this.osc(out, 'sine', t, 220, 124, 1.3, 0.16, 0.08);
+        this.noiseBurst(out, t + 0.1, 0.9, 0.22, 'bandpass', 3200, 700, 1.1);
+        return 1.45;
+      case 'tormenta.final':
+        [392, 311.13, 261.63].forEach((f, k) => this.osc(out, 'sine', t + k * 0.22, f, f * 0.99, 0.7, 0.16, 0.02));
+        this.noiseBurst(out, t, 1.0, 0.12, 'lowpass', 1600, 300, 0.7);
+        return 1.3;
+      case 'tormenta.enter':
+        // Stepping out of colour: a muffled rush of air and a low thump.
+        this.noiseBurst(out, t, 0.5, 0.3, 'lowpass', 2200, 260, 0.7);
+        this.osc(out, 'sine', t, 150, 70, 0.4, 0.3, 0.01);
+        return 0.5;
+      case 'tormenta.exit':
+        // Colour back: a light rising airy shimmer.
+        this.noiseBurst(out, t, 0.3, 0.12, 'bandpass', 1200, 4200, 0.9);
+        this.osc(out, 'triangle', t + 0.04, 523.25, 659.25, 0.22, 0.1, 0.01);
+        return 0.32;
+      case 'tormenta.hurt':
+        // Pigment scraped off: a short dry scratch and a dull low knock.
+        this.noiseBurst(out, t, 0.16, 0.34, 'bandpass', 2600 * p, 1100 * p, 1.6);
+        this.osc(out, 'sine', t, 140 * p, 70 * p, 0.16, 0.38);
+        return 0.17;
       case 'ult.ready':
         [659.25, 830.61, 987.77, 1318.51].forEach((f, k) => this.osc(out, 'triangle', t + k * 0.075, f, f, 0.4, 0.17, 0.01));
         this.noiseBurst(out, t + 0.2, 0.4, 0.07, 'highpass', 6500);

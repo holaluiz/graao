@@ -38,6 +38,7 @@ Measure, don't guess. Numbers below were taken on 2026-10-17 on the development 
 | Server tick cost (2 players) | 0.5 – 1.1 ms | PONG `tick` |
 | UFO deployment views (reveal / aboard / high in the dive / ground) | 79 / 72 / 61 / 87 draw calls, 313 k / 296 k / 273 k / 638 k tris, CPU 2.2 – 3.2 ms | `renderer.info` + `frameMs`; grass and flowers are skipped from high up (the reveal drew 122 calls / 1.01 M tris before) |
 | UFO model | 6.0 k tris, 4 draw calls (hull, ink, lights, beam) | `UfoModel.triangles` |
+| Tormenta (GPU, ≈ 2 MPx, RX 570) | +0.02 ms inside, +0.33 ms on the boundary, +0.01 – 0.23 ms with the whole view outside; curtain 1 draw call / 384 tris; network ≈ 84 B/s per player outside + one room state per phase | `EXT_disjoint_timer_query_webgl2`, on/off alternated per second; see `docs/gameplay/TORMENTA.md` |
 | Remote smoothness (60 Hz replay of real arrivals) | 0.5 % extrapolated frames, p95 frame-to-frame speed change 1.3 m/s while running over terrain | `tests/multiplayer.test.ts` |
 
 ## Known costs and next optimizations

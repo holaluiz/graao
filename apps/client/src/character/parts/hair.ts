@@ -46,6 +46,22 @@ export function hairline(front: (t: number) => number, side: number, back: numbe
   };
 }
 
+/** Room left between the ears and any hair (or wrapped cloth) passing over them. */
+const EAR_ROOM = 0.005;
+
+/** Pushes a point of a surface over the head out along its direction from the center until it clears the ears. */
+export function clearEars(h: HeadShape, p: V3, room = EAR_ROOM): V3 {
+  const c = h.center;
+  const v = new THREE.Vector3(p[0] - c[0], p[1] - c[1], p[2] - c[2]);
+  const reach = h.earReach(v);
+  if (reach <= 0) return p;
+  const r = v.length();
+  const need = reach + room;
+  if (r >= need) return p;
+  v.multiplyScalar(need / r);
+  return [c[0] + v.x, c[1] + v.y, c[2] + v.z];
+}
+
 /** Closed cap over the skull from the crown down to the hairline (hair, bandanas, beanies). */
 export function shell(b: PartBuilder, h: HeadShape, style: ShellStyle, nu = 36, nv = 11): void {
   b.begin({ slot: style.slot ?? Slot.HAIR, region: 'none', bones: ['Head'] });
@@ -55,7 +71,8 @@ export function shell(b: PartBuilder, h: HeadShape, style: ShellStyle, nu = 36, 
     d.set(Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta));
     return h.surface(d, scale);
   };
-  const out = (theta: number, phi: number, edge: number): V3 => (style.outerAt ? style.outerAt(theta, phi, edge) : at(theta, phi, style.outer(theta, phi, edge)));
+  // The outer surface swells over the ears instead of letting them through.
+  const out = (theta: number, phi: number, edge: number): V3 => clearEars(h, style.outerAt ? style.outerAt(theta, phi, edge) : at(theta, phi, style.outer(theta, phi, edge)));
   const topOut = b.vertex(...out(0, 0, 0));
   const topIn = b.vertex(...at(0, 0, innerScale));
   const outer: number[][] = [];
@@ -172,7 +189,7 @@ export function hairOuter(h: HeadShape, hairId: string, d: THREE.Vector3, pad = 
     const r = AFRO.r * 1.03 + pad;
     return [c[0] + AFRO.c[0] + d.x * r * AFRO.sx, c[1] + AFRO.c[1] + d.y * r * AFRO.sy, c[2] + AFRO.c[2] + d.z * r * AFRO.sz];
   }
-  const p = h.surface(d, hairFit(hairId));
+  const p = clearEars(h, h.surface(d, hairFit(hairId)));
   return [p[0] + d.x * pad, p[1] + d.y * pad, p[2] + d.z * pad];
 }
 
@@ -346,7 +363,7 @@ export function buildHair(b: PartBuilder, h: HeadShape, hairId: string, covered 
     }
     case 'hair.moicano': {
       // Shaved sides (a thin shell in the hair color) and a spiky crest along the midline.
-      shell(b, h, { phiMax: hairline(() => 54 * DEG, 88 * DEG, 104 * DEG), outer: (_t, _p, edge) => 1.024 - 0.006 * smooth(0.85, 1, edge) }, 32, 9);
+      shell(b, h, { phiMax: hairline(() => 54 * DEG, 88 * DEG, 104 * DEG), outer: (_t, _p, edge) => 1.026 - 0.006 * smooth(0.85, 1, edge) }, 48, 12);
       if (!covered) {
         const ridge: RingSpec[] = [];
         for (let i = 0; i <= 10; i++) {

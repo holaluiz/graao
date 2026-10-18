@@ -329,14 +329,23 @@ export class CombatDirector {
     hud.setReticle(w.reticleProfile, px + this.weapon.bloom * 7, this.blocked, this.alive && app.input.locked);
     this.updatePhaseUi();
     hud.update(dt);
-    // Audio state follows attention: CRITICAL low health muffles the world, results calm it down.
+    // Audio state follows attention: CRITICAL low health muffles the world, the Tormenta takes the ambience away (the
+    // fight stays clear), results calm it down.
     if (this.phase === MatchPhase.RESULTS) app.audio.setState('POST_MATCH');
-    else app.audio.setState(this.alive && this.health <= ATTRIBUTES.maxHealth * 0.3 ? 'LOW_HEALTH' : 'NORMAL');
+    else if (this.alive && this.health <= ATTRIBUTES.maxHealth * 0.3) app.audio.setState('LOW_HEALTH');
+    else app.audio.setState(app.tormenta.outside ? 'INSIDE_TORMENTA' : 'NORMAL');
   }
+
+  /** Our socket dropped and the SDK is reconnecting (the server keeps the seat meanwhile). */
+  connectionLost = false;
 
   private updatePhaseUi(): void {
     const hud = this.app.hud;
     if (!this.online) return;
+    if (this.connectionLost) {
+      hud.setStatus('CONEXÃO INSTÁVEL · reconectando…', 'urgent');
+      return;
+    }
     const now = this.serverNow();
     const connected = this.players.filter((p) => p.connected);
     if (this.phase === MatchPhase.FREE_ROAM) {
@@ -374,10 +383,11 @@ export class CombatDirector {
       }
     }
     if (!this.alive) {
+      const by = this.killerName === 'Tormenta' ? 'pela Tormenta' : `por ${this.killerName}`;
       const sub =
         this.phase === MatchPhase.MATCH || this.phase === MatchPhase.RESULTS
-          ? `por ${this.killerName} · aguarde o fim da partida`
-          : `por ${this.killerName} · voltando em ${Math.max(0, Math.ceil((this.respawnAt - now) / 1000))} s`;
+          ? `${by} · aguarde o fim da partida`
+          : `${by} · voltando em ${Math.max(0, Math.ceil((this.respawnAt - now) / 1000))} s`;
       this.app.hud.setDeath(this.phase !== MatchPhase.RESULTS, sub);
     }
   }
@@ -438,6 +448,7 @@ export class CombatDirector {
     }
     this.abilities.onRoomState(m);
     this.app.deploy.onRoomState(m);
+    this.app.tormenta.onRoomState(m);
   }
 
   onSelf(s: SelfStatusMsg): void {
@@ -481,10 +492,11 @@ export class CombatDirector {
           if (e.by !== me) this.remoteShot(e.by, e.w, e.to, e.t);
           break;
         case 'dmg':
-          this.onDamage(e.by, e.target, e.amount, e.kinds, e.health, e.shield);
+          if (e.c === 'tormenta') this.onTormentaDamage(e.target, e.amount, e.health, e.shield);
+          else this.onDamage(e.by, e.target, e.amount, e.kinds, e.health, e.shield);
           break;
         case 'elim':
-          this.onElimination(e.by, e.target);
+          this.onElimination(e.by, e.target, e.c === 'tormenta');
           break;
         case 'respawn':
           if (e.target === me) {
@@ -581,6 +593,17 @@ export class CombatDirector {
     }
   }
 
+  /**
+   * The Tormenta took Health (a pulse every second or so): lighter than a hit (no hit reaction, no direction arc),
+   * presented by the TormentaDirector for the local player; remotes only peel (TormentaDirector, from the snapshot flag).
+   */
+  private onTormentaDamage(target: number, amount: number, health: number, shield: number): void {
+    if (target !== this.myIndex) return;
+    this.health = health;
+    this.shield = shield;
+    this.app.tormenta.onHurt(amount);
+  }
+
   /** World/FX layer of a hit at a character standing at `feet`. Shape tells the kind, not only color. */
   private hitFx(feet: Vec3, kinds: HitKind[]): void {
     const vfx = this.app.vfx;
@@ -602,12 +625,12 @@ export class CombatDirector {
     }
   }
 
-  private onElimination(by: number, target: number): void {
+  private onElimination(by: number, target: number, tormenta = false): void {
     const app = this.app;
     const me = this.myIndex;
     this.eliminatedInMatch.add(target);
-    // Eliminated by yourself = drowned: the water takes the credit in the feed.
-    const killer = by === target ? 'Água' : this.nameOf(by);
+    // Eliminated by yourself = drowned or taken by the Tormenta: the hazard takes the credit in the feed.
+    const killer = tormenta ? 'Tormenta' : by === target ? 'Água' : this.nameOf(by);
     const victim = this.nameOf(target);
     app.hud.feed(killer, victim, by === me && target !== me ? 'killer' : target === me ? 'victim' : null);
     const pos = target === me ? app.local.state.pos : app.net?.remote(target)?.pos;

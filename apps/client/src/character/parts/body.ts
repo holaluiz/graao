@@ -1,46 +1,38 @@
-/** Base body: torso, neck, head (nose, ears), arms, small mitten hands, legs and bare feet. */
+/** Base body: torso, the sculpted head with its neck, arms, small mitten hands, legs and bare feet. */
 import * as THREE from 'three';
 import type { BoneName } from '../rig/GRARig';
 import { ARM_Z, FOOT_STATIONS, mirrorRings, type BodyShape } from '../build/anatomy';
-import { PartBuilder, Slot, type RingSpec, type V3 } from '../build/PartBuilder';
+import { PartBuilder, Slot, type PrimitiveOpts, type V3 } from '../build/PartBuilder';
+import { HEAD_FLAG } from '../build/head';
 
 const TORSO_BONES: BoneName[] = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'LeftShoulder', 'RightShoulder', 'LeftUpLeg', 'RightUpLeg'];
+
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
 
 export function buildBody(b: PartBuilder, s: BodyShape): void {
   // Torso: superellipse sweep from crotch to neck base, axis along +Y, `ra` across the shoulders (X).
   b.tube(s.torso, { slot: Slot.SKIN, bones: TORSO_BONES, ref: [1, 0, 0], segments: 18, capStart: 'round', capEnd: 'round', capScale: 0.4 });
 
-  // Neck.
+  // Head and neck: the sculpted head (build/head.ts). The head is rigid on the Head bone; the neck stub under the jaw
+  // blends down into Neck and Spine2 (explicit weights, continuous with the rigid head at the jaw seam); the ears are
+  // their own region so long hair can hide them.
   const p = s.p;
-  b.tube(
-    [
-      { p: [0, 1.255, -0.016], ra: 0.042, rb: 0.04, region: 'neck' },
-      { p: [0, 1.33, -0.012], ra: 0.037, rb: 0.035, region: 'neck' },
-      { p: [0, 1.395, -0.004], ra: 0.036, rb: 0.034, region: 'neck' },
-    ],
-    { slot: Slot.SKIN, bones: ['Spine2', 'Neck', 'Head'], ref: [1, 0, 0], segments: 10, capStart: 'flat', capEnd: 'flat' },
-  );
-
-  // Head.
-  const h = s.head;
-  b.starSurface((d) => h.surface(d), 40, 28, { slot: Slot.SKIN, region: 'head', bones: ['Head'] });
-  // Ears (mostly hidden by hair; they keep the side silhouette human).
-  for (const sx of [1, -1]) {
-    b.ellipsoid([sx * (h.a * 0.93), h.center[1] - 0.012, h.center[2] - 0.008], [0.018, 0.03, 0.022], { slot: Slot.SKIN, region: 'head', bones: ['Head'] }, 8, 6);
+  const m = s.head.mesh;
+  const head: PrimitiveOpts = { slot: Slot.SKIN, region: 'head', bones: ['Head'] };
+  const ears: PrimitiveOpts = { slot: Slot.SKIN, region: 'ears', bones: ['Head'] };
+  const neck: PrimitiveOpts = { slot: Slot.SKIN, region: 'neck', bones: ['Spine2', 'Neck', 'Head'] };
+  const base = b.pos.length / 3;
+  b.mesh(m.positions, m.normals, m.index, head, (i) => (m.flags[i]! & HEAD_FLAG.NECK ? neck : m.flags[i]! & HEAD_FLAG.EAR ? ears : head));
+  for (let i = 0; i < m.flags.length; i++) {
+    if (!(m.flags[i]! & HEAD_FLAG.NECK)) continue;
+    const y = m.positions[i * 3 + 1]!;
+    const wHead = smooth(p.neckY + 0.01, p.headY - 0.002, y);
+    const wSpine = (1 - smooth(p.neckY - 0.045, p.neckY + 0.005, y)) * (1 - wHead);
+    b.setWeights(base + i, [['Head', wHead], ['Neck', 1 - wHead - wSpine], ['Spine2', wSpine]]);
   }
-  // Nose, sculpted: a narrow bridge rising from between the eyes to a small rounded tip (a real bridge
-  // keeps the face from reading flat; the ink pass draws its side and the shadow sits under it).
-  const bridge: RingSpec[] = [];
-  for (let i = 0; i <= 5; i++) {
-    const t = i / 5;
-    const v = -0.006 - 0.028 * t;
-    const prot = 0.0018 + 0.0088 * Math.pow(t, 1.25);
-    const q = h.frontPoint(0, v, prot * 0.45);
-    if (q) bridge.push({ p: q.p, ra: 0.0044 + 0.0034 * t, rb: prot * 0.6 + 0.0028, region: 'head' });
-  }
-  if (bridge.length >= 3) b.tube(bridge, { slot: Slot.SKIN, region: 'head', bones: ['Head'], ref: [1, 0, 0], segments: 10, capStart: 'round', capEnd: 'flat' });
-  const tip = h.frontPoint(0, -0.0345, 0.007);
-  if (tip) b.ellipsoid(tip.p, [0.0082, 0.0074, 0.0068], { slot: Slot.SKIN, region: 'head', bones: ['Head'] }, 12, 8);
 
   // Arms and hands.
   for (const side of ['Left', 'Right'] as const) {

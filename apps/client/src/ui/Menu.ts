@@ -1,7 +1,6 @@
-/** Main menu (DOM): name, create/join by room code, free roam, customize, profile and history, quality, frame-rate cap. */
+/** Main menu (DOM): name, create/join by room code, free roam, customize, profile and history, frame-rate cap. */
 import { MAX_SOLO_BOTS, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '@graao/shared';
 import { FPS_CAPS, type FpsCap } from '../app/FrameLimiter';
-import type { Quality } from '../render/GRARenderer';
 
 export interface MenuActions {
   solo(bots: number): void;
@@ -9,23 +8,23 @@ export interface MenuActions {
   join(code: string, name: string): void;
   customize(): void;
   history?(): void;
-  quality(q: Quality): void;
   fpsCap(c: FpsCap): void;
   click(): void;
 }
 
-const QUALITY_LABEL: Record<Quality, string> = { LOW: 'Baixa', MEDIUM: 'Média', HIGH: 'Alta' };
 const FPS_LABEL: Record<FpsCap, string> = { 30: '30', 60: '60', 120: '120', 0: 'Máximo' };
 
 export class Menu {
   readonly el = document.createElement('div');
   private readonly note = document.createElement('div');
+  /** Match server reachability, checked before the player clicks (online buttons need it; exploring does not). */
+  private readonly server = document.createElement('div');
   private readonly nameInput = document.createElement('input');
   private readonly codeInput = document.createElement('input');
   private readonly botSelect = document.createElement('select');
   private readonly buttons: HTMLButtonElement[] = [];
 
-  constructor(private readonly actions: MenuActions, name: string, quality: Quality, fps: FpsCap) {
+  constructor(private readonly actions: MenuActions, name: string, fps: FpsCap) {
     this.el.className = 'menu';
     const h = document.createElement('h1');
     h.textContent = 'graao';
@@ -82,18 +81,19 @@ export class Menu {
     const row = document.createElement('div');
     row.className = 'row';
     row.append(solo, custom);
-    const q = this.choiceRow('Qualidade', ['LOW', 'MEDIUM', 'HIGH'] as Quality[], quality, QUALITY_LABEL, (v) => this.actions.quality(v));
     const fpsRow = this.choiceRow('Limite de FPS', [...FPS_CAPS], fps, FPS_LABEL, (v) => this.actions.fpsCap(v));
     this.note.className = 'note';
+    this.server.className = 'server-status';
+    this.server.setAttribute('role', 'status');
     const heading = document.createElement('div');
     heading.className = 'menu-heading';
     heading.append(h, tag);
     const play = document.createElement('div');
     play.className = 'menu-play';
-    play.append(this.nameInput, create, joinRow, soloOptions, row);
+    play.append(this.nameInput, create, joinRow, this.server, soloOptions, row);
     const settings = document.createElement('div');
     settings.className = 'menu-settings';
-    settings.append(q, fpsRow);
+    settings.append(fpsRow);
     this.el.append(heading, play, settings, this.note);
   }
 
@@ -146,6 +146,12 @@ export class Menu {
   setNote(text: string, error = false): void {
     this.note.textContent = text;
     this.note.classList.toggle('err', error);
+  }
+
+  /** Server line under the online buttons: checking, online, other version, or unreachable. */
+  setServer(state: 'checking' | 'online' | 'version' | 'offline', text: string): void {
+    this.server.dataset.state = state;
+    this.server.textContent = text;
   }
 
   setBusy(busy: boolean): void {

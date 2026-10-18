@@ -24,6 +24,8 @@ export class ServerPlayer implements AbilityActor {
   simTime = 0;
   ready = false;
   connected = true;
+  /** Connection lost, seat kept while the client reconnects (still counts as present for the match rules). */
+  dropped = false;
   /** Takes part in the running match (set at match start; late joiners watch). */
   inMatch = false;
   vitals: Vitals = newVitals();
@@ -70,7 +72,7 @@ export class ServerPlayer implements AbilityActor {
   private lastStatusKey = '';
 
   constructor(
-    readonly client: PlayerConnection,
+    public client: PlayerConnection,
     readonly index: number,
     public name: string,
     public appearance: CharacterAppearance,

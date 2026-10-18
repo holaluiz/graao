@@ -3,9 +3,11 @@
  * long thin limbs, small hands, ≈ 5.6 heads tall). Garments are built from the SAME ring specs with offsets, so they
  * follow the body exactly.
  */
-import * as THREE from 'three';
 import type { RigProportions } from '../rig/GRARig';
 import type { RingSpec, V3 } from './PartBuilder';
+import { makeHead, type HeadShape } from './head';
+
+export { makeHead, type HeadLandmarks, type HeadShape } from './head';
 
 export interface BodyShape {
   p: RigProportions;
@@ -17,49 +19,6 @@ export interface BodyShape {
   /** Left leg rings (mirror for right) along -Y. */
   leg: RingSpec[];
   head: HeadShape;
-}
-
-export interface HeadShape {
-  center: V3;
-  /** Half extents of the skull ellipsoid. */
-  a: number;
-  b: number;
-  c: number;
-  /** Surface point for a unit direction (head-local frame = rig frame). */
-  surface(dir: THREE.Vector3, scale?: number): V3;
-  /** Point on the face surface seen from the front at head-local (u, v) relative to the center; null off the face. */
-  frontPoint(u: number, v: number, lift?: number): { p: V3; n: V3 } | null;
-}
-
-export function makeHead(center: V3): HeadShape {
-  const a = 0.119;
-  const b = 0.149;
-  const c = 0.13;
-  // A round cranium over a softer, narrower face: cheeks taper into a small rounded chin (an egg, not a box); the back
-  // of the skull is fuller and the forehead a touch wider than the jaw.
-  const sx = (dy: number) => (dy < 0 ? 1 - 0.36 * Math.pow(-dy, 1.75) : 1 - 0.05 * dy * dy);
-  const sz = (dy: number, dz: number) => (dz < 0 ? 1.07 - 0.05 * Math.max(0, -dy) : dy < 0 ? 1 - 0.1 * Math.pow(-dy, 2.2) : 1);
-  const chin = (dy: number) => (dy < -0.55 ? 0.012 * Math.max(0, 1 - Math.abs(dy + 0.84) / 0.3) : 0);
-  const surface = (dir: THREE.Vector3, scale = 1): V3 => {
-    const x = dir.x * a * sx(dir.y) * scale;
-    const y = dir.y * b * scale;
-    const z = (dir.z * c * sz(dir.y, dir.z) + (dir.z > 0 ? Math.max(0, chin(dir.y)) * dir.z : 0)) * scale;
-    return [center[0] + x, center[1] + y, center[2] + z];
-  };
-  const frontPoint = (u: number, v: number, lift = 0.0018) => {
-    const dy = v / b;
-    if (Math.abs(dy) >= 1) return null;
-    const dx = u / (a * sx(dy));
-    const rem = 1 - dx * dx - dy * dy;
-    if (rem <= 0.02) return null;
-    const dz = Math.sqrt(rem);
-    const dir = new THREE.Vector3(dx, dy, dz);
-    const p = surface(dir);
-    // Normal from the ellipsoid gradient (good enough for a 2 mm lift).
-    const n = new THREE.Vector3((p[0] - center[0]) / (a * a), (p[1] - center[1]) / (b * b), (p[2] - center[2]) / (c * c)).normalize();
-    return { p: [p[0] + n.x * lift, p[1] + n.y * lift, p[2] + n.z * lift] as V3, n: [n.x, n.y, n.z] as V3 };
-  };
-  return { center, a, b, c, surface, frontPoint };
 }
 
 /** Arms hang on the side line of the chest (not behind it): shared by the rig, the arm rings and the hands. */

@@ -5,9 +5,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, type Room } from '@colyseus/sdk';
 import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, PLANET, UFO, WEAPONS, randomAppearance } from '@graao/game-data';
-import { castOrigin, chestOf, diveStart, ufoPosition, ufoSpeed } from '@graao/game-core';
+import { castOrigin, chestOf, diveStart, tormentaCircleAt, tormentaEdgeMeters, tormentaInside, ufoPosition, ufoSpeed } from '@graao/game-core';
 import { SnapshotInterpolator } from '../apps/client/src/net/SnapshotInterpolator';
-import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MAX_PLAYERS, MAX_SOLO_BOTS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
+import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MAX_PLAYERS, MAX_SOLO_BOTS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, v3angle, v3normalize, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
 import type { RecordMatchPayload } from '@graao/database';
 import { createGraaoServer } from '../apps/server/src/app';
 import { setAuthVerifier } from '../apps/server/src/auth/SupabaseAuth';
@@ -1147,6 +1147,203 @@ describe('solo matches with server-controlled bots', () => {
       await a?.leave(true);
       setAuthVerifier(null);
       setMatchStore({ name: 'none', record: async () => null });
+    }
+  }, 25000);
+});
+
+describe('dropped connections (internet play: a blip does not end the match)', () => {
+  /** The first message matching `pred` that arrives after this call. */
+  function next<T>(box: ReturnType<typeof inbox<T>>, pred: (m: T) => boolean, ms = 8000): Promise<T> {
+    const start = box.all.length;
+    const t0 = Date.now();
+    return new Promise((resolve, reject) => {
+      const iv = setInterval(() => {
+        for (let i = start; i < box.all.length; i++) {
+          if (pred(box.all[i]!)) {
+            clearInterval(iv);
+            return resolve(box.all[i]!);
+          }
+        }
+        if (Date.now() - t0 > ms) {
+          clearInterval(iv);
+          reject(new Error('timeout waiting for a new message'));
+        }
+      }, 20);
+    });
+  }
+  /** Kills the socket without a goodbye, like a Wi-Fi drop (the server sees a non-consented close). */
+  const cut = (room: Room) => (room.connection as unknown as { transport: { ws: WebSocket } }).transport.ws.close();
+
+  async function fightingPair(reconnectSeconds: number) {
+    const a = await new Client(url).create(ROOM_NAME, { ...opts('A'), countdownMs: 0, resultsMs: 900, closeSpawns: true, skipDraft: true, skipUfo: true, reconnectSeconds });
+    const ra = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+    const ev = inbox<EventsMsg>(a, S2C.EVENTS);
+    const ia = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+    const b = await new Client(url).joinById((await ra.until((m) => m.players.length === 1)).code, opts('B'));
+    const ib = (await waitFor<WelcomeMsg>(b, S2C.WELCOME)).index;
+    b.reconnection.minUptime = 0;
+    await ra.until((m) => m.players.length === 2);
+    a.send(C2S.READY, { r: 1 });
+    b.send(C2S.READY, { r: 1 });
+    await ra.until((m) => m.phase === MatchPhase.MATCH);
+    return { a, b, ra, ev, ia, ib };
+  }
+
+  it('keeps the seat while B reconnects: no win handed out, B is back in the same match and can still be hit', async () => {
+    const { a, b, ra, ev, ia, ib } = await fightingPair(10);
+    try {
+      const reconnected = new Promise<void>((resolve) => b.onReconnect(() => resolve()));
+      const selfB = inbox<SelfStatusMsg>(b, S2C.SELF);
+      cut(b);
+      const dropped = await next(ra, (m) => !!m.players.find((p) => p.index === ib)?.dropped);
+      expect(dropped.phase).toBe(MatchPhase.MATCH);
+      expect(dropped.winner).toBe(-1);
+      await reconnected;
+      const back = await next(ra, (m) => m.players.some((p) => p.index === ib) && !m.players.find((p) => p.index === ib)!.dropped);
+      expect(back.phase).toBe(MatchPhase.MATCH);
+      expect(back.players.map((p) => p.index).sort()).toEqual([ia, ib].sort());
+      // Everything the client may have missed is sent again (its status, the room).
+      await selfB.until((m) => m.alive);
+      // Still a fighter: A's shot lands on B after the reconnection.
+      const shoot = shooter(a, () => ia, () => ib);
+      await sleep(200);
+      await shoot(1);
+      const hit = await next(ev, (m) => m.ev.some((e) => e.e === 'dmg' && e.target === ib), 3000);
+      expect(hit).toBeTruthy();
+    } finally {
+      await a.leave(true);
+      await b.leave(true).catch(() => {});
+    }
+  }, 20000);
+
+  it('gives up after the grace period: the one still there wins', async () => {
+    const { a, b, ra, ia } = await fightingPair(1);
+    b.reconnection.enabled = false;
+    try {
+      cut(b);
+      await next(ra, (m) => m.players.some((p) => p.dropped));
+      const end = await next(ra, (m) => m.phase === MatchPhase.RESULTS, 6000);
+      expect(end.winner).toBe(ia);
+    } finally {
+      await a.leave(true);
+    }
+  }, 15000);
+});
+
+describe('the Tormenta through the authoritative server (two players on opposite sides of the planet)', () => {
+  it('closes in on schedule, hurts only the one outside, once per pulse, and the Tormenta elimination hands the win', async () => {
+    const PULSE = 250;
+    const a = await new Client(url).create(ROOM_NAME, {
+      ...opts('A'),
+      maxPlayers: 2,
+      countdownMs: 300,
+      resultsMs: 1500,
+      skipDraft: true,
+      skipUfo: true,
+      // A near the final centre, B almost at its antipode (≈ 178° of arc away, the far side of the planet).
+      matchSpawns: [{ lat: 7, lon: -2 }, { lat: -8, lon: 180 }],
+      tormentaFinal: { lat: 8, lon: 0 },
+      tormentaPhases: [{ waitMs: 900, shrinkMs: 900, radiusDeg: 40, damage: 9 }],
+      tormentaPulseMs: PULSE,
+      tormentaFinalDamage: 30,
+    });
+    const rooms = inbox<RoomStateMsg>(a, S2C.ROOM_STATE);
+    const events = inbox<EventsMsg>(a, S2C.EVENTS);
+    const snaps = inbox<SnapshotMsg>(a, S2C.SNAPSHOT);
+    const summary = inbox<MatchSummaryMsg>(a, S2C.MATCH_SUMMARY);
+    const ia = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+    const b = await new Client(url).joinById((await rooms.until((m) => m.players.length === 1)).code, opts('B'));
+    const ib = (await waitFor<WelcomeMsg>(b, S2C.WELCOME)).index;
+    try {
+      await rooms.until((m) => m.players.length === 2);
+      a.send(C2S.READY, { r: 1 });
+      b.send(C2S.READY, { r: 1 });
+      const start = await rooms.until((m) => m.phase === MatchPhase.MATCH);
+      // The first phase is announced with the match: the whole planet still safe, the region it closes onto, timings.
+      const t1 = start.tormenta!;
+      expect(t1).toBeTruthy();
+      expect([t1.k, t1.n]).toEqual([1, 1]);
+      expect(t1.r / 1e6).toBeGreaterThanOrEqual(Math.PI);
+      expect(t1.tr / 1e6).toBeCloseTo((40 * Math.PI) / 180, 5);
+      expect(t1.t0).toBe(start.startsAt);
+      expect(t1.a - t1.t0).toBe(900);
+      expect(t1.b - t1.a).toBe(900);
+      // Small on the wire: integers only.
+      expect(JSON.stringify(t1).length).toBeLessThan(200);
+
+      const end = await rooms.until((m) => m.phase === MatchPhase.RESULTS, 12000);
+      const fin = rooms.all.find((m) => m.tormenta?.k === 2)?.tormenta;
+      expect(fin, 'the final region is published when the reduction ends').toBeTruthy();
+      expect(fin!.c).toEqual(fin!.tc);
+      expect(fin!.dmg).toBe(30);
+      expect(end.tormenta).toBeNull();
+
+      // Opposite sides of the planet, for real.
+      const first = snaps.all.find((s) => s.t >= start.startsAt && s.p.length === 2)!;
+      const pos = (s: SnapshotMsg, i: number) => {
+        const p = s.p.find((q) => q[0] === i)!;
+        return { x: p[1]! / 1000, y: p[2]! / 1000, z: p[3]! / 1000 };
+      };
+      const pa = pos(first, ia);
+      const pb = pos(first, ib);
+      expect((v3angle(v3normalize(pa), v3normalize(pb)) * 180) / Math.PI).toBeGreaterThan(170);
+
+      // Only B is ever outside (server flag), never before the reduction starts; A never.
+      const during = snaps.all.filter((s) => s.t >= start.startsAt && s.p.length === 2);
+      const flagged = (s: SnapshotMsg, i: number) => (s.p.find((q) => q[0] === i)![13]! & SnapFlag.IN_TORMENTA) !== 0;
+      expect(during.filter((s) => s.t < t1.a - 60).some((s) => flagged(s, ia) || flagged(s, ib))).toBe(false);
+      expect(during.some((s) => flagged(s, ia))).toBe(false);
+      expect(during.filter((s) => s.t > t1.a + 100 && (s.p.find((q) => q[0] === ib)![13]! & SnapFlag.ALIVE) !== 0).every((s) => flagged(s, ib))).toBe(true);
+
+      // What a client draws (the boundary from the published phase at the snapshot's server time) agrees with the
+      // server's verdict for both players, away from the very edge.
+      let compared = 0;
+      for (const s of during) {
+        const m = fin && s.t >= t1.b ? fin : t1;
+        const circle = tormentaCircleAt(m, s.t);
+        for (const i of [ia, ib]) {
+          const q = s.p.find((x) => x[0] === i)!;
+          if ((q[13]! & SnapFlag.ALIVE) === 0) continue;
+          const p = pos(s, i);
+          if (Math.abs(tormentaEdgeMeters(circle, p)) < 1) continue;
+          expect(!tormentaInside(circle, p), `player ${i} at ${s.t}`).toBe(flagged(s, i));
+          compared++;
+        }
+      }
+      expect(compared).toBeGreaterThan(20);
+
+      // Damage: Health only, to B only, one pulse at a time, at the phase's rate.
+      const storm = events.all.flatMap((m) => m.ev.filter((e) => e.e === 'dmg' && e.c === 'tormenta').map((e) => ({ t: m.t, e: e as Extract<GameEvent, { e: 'dmg' }> })));
+      expect(storm.length).toBeGreaterThanOrEqual(4);
+      expect(storm.every(({ e }) => e.target === ib && e.by === ib && e.shield === 100 && !e.kinds.includes(HitKind.SHIELD))).toBe(true);
+      expect(storm.every(({ t }) => t >= t1.a)).toBe(true);
+      for (const m of events.all) expect(m.ev.filter((e) => e.e === 'dmg' && e.c === 'tormenta').length).toBeLessThanOrEqual(1);
+      // Each pulse in its own interval (events carry the tick's own clock): never two for one, whatever the tick jitter.
+      const slots = storm.map(({ t }) => Math.floor((t - t1.t0) / PULSE));
+      for (let i = 1; i < slots.length; i++) expect(slots[i]!).toBeGreaterThan(slots[i - 1]!);
+      let health = 100;
+      for (const { t, e } of storm) {
+        const rate = fin && t >= t1.b ? 30 : 9;
+        expect(e.amount).toBe(Math.min(rate, health));
+        health -= e.amount;
+        expect(e.health).toBe(health);
+      }
+      expect(health).toBe(0);
+      expect(events.all.some((m) => m.ev.some((e) => e.e === 'dmg' && e.target === ia))).toBe(false);
+
+      // The Tormenta took B: the usual elimination, no kill for A, A wins.
+      const elim = events.all.flatMap((m) => m.ev).find((e) => e.e === 'elim') as Extract<GameEvent, { e: 'elim' }>;
+      expect(elim).toMatchObject({ by: ib, target: ib, c: 'tormenta' });
+      expect(end.winner).toBe(ia);
+      const sum = await summary.until(() => true);
+      expect(sum.winner).toBe(ia);
+      const lineA = sum.players.find((p) => p.index === ia)!;
+      const lineB = sum.players.find((p) => p.index === ib)!;
+      expect([lineA.placement, lineA.won, lineA.kills, lineA.damageDealt]).toEqual([1, true, 0, 0]);
+      expect([lineB.placement, lineB.deaths, lineB.damageTaken]).toEqual([2, 1, 100]);
+    } finally {
+      await a.leave(true);
+      await b.leave(true);
     }
   }, 25000);
 });

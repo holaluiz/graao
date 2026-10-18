@@ -38,23 +38,20 @@ import {
 } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import { RemotePlayer } from './RemotePlayer';
-
-function serverUrl(): string {
-  // Dev only: ?server=ws://host:port points this tab at another match server (parallel local setups).
-  const q = import.meta.env.DEV ? new URLSearchParams(location.search).get('server') : null;
-  if (q && /^wss?:\/\/[\w.-]+(:\d+)?$/.test(q)) return q;
-  const env = import.meta.env.VITE_SERVER_URL as string | undefined;
-  if (env) return env;
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.hostname}:2567`;
-}
+import { serverTarget } from './serverTarget';
 
 function friendlyError(e: unknown): Error {
   const msg = (e as Error)?.message ?? String(e);
   if (msg.includes(JoinError.VERSION_MISMATCH)) return new Error('Este servidor roda outra versão do graao. Recarregue a página.');
   if (/not found|invalid room|roomId/i.test(msg)) return new Error('Nenhuma sala com esse código.');
   if (/full|locked/i.test(msg)) return new Error('Essa sala está cheia.');
-  if (/ECONNREFUSED|Failed to fetch|NetworkError|offline|ERR_CONNECTION/i.test(msg)) return new Error('Não foi possível falar com o servidor do graao. Ele está rodando? (pnpm dev)');
+  if (/ECONNREFUSED|Failed to fetch|NetworkError|offline|ERR_CONNECTION|ECONNRESET|timeout/i.test(msg)) {
+    return new Error(
+      import.meta.env.DEV
+        ? 'Não foi possível falar com o servidor do graao. Ele está rodando? (pnpm dev)'
+        : 'O servidor de partidas não respondeu. Tente de novo em instantes; Explorar sozinho funciona sem ele.',
+    );
+  }
   return new Error(msg);
 }
 
@@ -112,9 +109,11 @@ export class NetSession {
   }
 
   static async connect(app: GraaoApp, kind: 'create' | 'join' | 'solo', code: string, name: string, bots = 0): Promise<NetSession> {
-    const client = new Client(serverUrl());
+    const target = serverTarget();
+    const client = new Client(target.url);
     // A signed-in player proves who they are with the Supabase access token (the server verifies it); else a guest.
-    const token = await app.profile.accessToken();
+    // Only the build's own server ever receives it (a ?server= link plays as a guest).
+    const token = target.official ? await app.profile.accessToken() : null;
     const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(token ? { token } : {}), ...(kind === 'solo' ? { soloBots: bots } : {}) };
     let room: Room;
     try {
@@ -166,6 +165,13 @@ export class NetSession {
       });
       room.onMessage(S2C.MATCH_SUMMARY, (m: MatchSummaryMsg) => this.app.combat.onSummary(m));
       room.onMessage(S2C.NOTICE, (m: NoticeMsg) => this.app.combat.onNotice(m));
+      // A dropped socket is not the end: the SDK reconnects on its own and the server keeps the seat for a while.
+      room.onDrop(() => {
+        if (!this.left) this.app.onConnectionDrop(true);
+      });
+      room.onReconnect(() => {
+        if (!this.left) this.app.onConnectionDrop(false);
+      });
       room.onLeave((codeNum: number) => {
         if (!this.left) {
           console.warn('[graao] disconnected', codeNum);
@@ -224,7 +230,7 @@ export class NetSession {
         this.remotes.set(p.index, r);
       } else {
         r.character.setAppearance(p.appearance);
-        r.setName(p.name);
+        r.setName(p.dropped ? `${p.name} · reconectando…` : p.name);
       }
     }
     for (const [i, r] of this.remotes) {

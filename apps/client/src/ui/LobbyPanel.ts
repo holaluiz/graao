@@ -90,7 +90,7 @@ export class LobbyPanel {
     this.el.classList.toggle('full-roster', here.length > 5);
     const mine = here.find((p) => p.index === me);
     this.ready = !!mine?.ready;
-    const key = JSON.stringify(here.map((p) => [p.index, p.name, p.ready, p.wins])) + me;
+    const key = JSON.stringify(here.map((p) => [p.index, p.name, p.ready, p.wins, p.dropped])) + me;
     if (key === this.lastKey) return;
     this.lastKey = key;
     this.list.innerHTML = '';
@@ -102,7 +102,7 @@ export class LobbyPanel {
       if (p.index === me) el('span', 'rt-tag', identity, 'você');
       if (p.bot) el('span', 'rt-tag', identity, 'bot');
       if (p.wins > 0) el('span', 'lobby-wins', identity, `♛ ${p.wins}`);
-      el('span', `lobby-state${p.ready ? ' on' : ''}`, row, p.ready ? 'PRONTO ✓' : 'aquecendo');
+      el('span', `lobby-state${p.ready ? ' on' : ''}`, row, p.dropped ? 'reconectando…' : p.ready ? 'PRONTO ✓' : 'aquecendo');
     }
     const ready = here.filter((p) => p.ready).length;
     this.hint.textContent =

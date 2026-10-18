@@ -14,6 +14,7 @@ import { END_BONES, type BoneName, type GRARig } from '../rig/GRARig';
 export const REGION_IDS: Record<BodyRegion | 'none', number> = {
   none: 0,
   head: 1,
+  ears: 11,
   neck: 2,
   torso: 3,
   hips: 4,
@@ -243,17 +244,29 @@ export class PartBuilder {
     this.pendingNormals.clear();
   }
 
-  /** Adds a ready-made triangle mesh (a Blender-authored piece) with its own normals; weighted like everything else. */
-  mesh(positions: ArrayLike<number>, normals: ArrayLike<number>, index: ArrayLike<number>, opts: PrimitiveOpts): this {
+  /**
+   * Adds a ready-made triangle mesh (a Blender-authored piece, the sculpted head) with its own normals; weighted like
+   * everything else. `vertexOpts` picks per-vertex options (region, bones) by vertex number.
+   */
+  mesh(positions: ArrayLike<number>, normals: ArrayLike<number>, index: ArrayLike<number>, opts: PrimitiveOpts, vertexOpts?: (i: number) => PrimitiveOpts): this {
     this.begin(opts);
+    let cur = opts;
     const base = this.pos.length / 3;
     for (let i = 0; i < positions.length; i += 3) {
+      const o = vertexOpts?.(i / 3) ?? opts;
+      if (o !== cur) this.begin((cur = o));
       this.vertex(positions[i]!, positions[i + 1]!, positions[i + 2]!);
       this.normals.push(normals[i]!, normals[i + 1]!, normals[i + 2]!);
     }
     for (let i = 0; i < index.length; i++) this.index.push(base + index[i]!);
     this.current = null;
     return this;
+  }
+
+  private readonly fixedWeights = new Map<number, [BoneName, number][]>();
+  /** Explicit skin weights for vertex `v` (instead of the distance-based ones). */
+  setWeights(v: number, w: [BoneName, number][]): void {
+    this.fixedWeights.set(v, w);
   }
 
   // -------------------------------------------------------------------------------------------- primitives
@@ -613,7 +626,10 @@ export class PartBuilder {
     const tmp = new THREE.Vector3();
     for (let v = 0; v < n; v++) {
       tmp.set(this.pos[v * 3]!, this.pos[v * 3 + 1]!, this.pos[v * 3 + 2]!);
-      const w = skinWeightsAt(tmp, this.boneSets[this.boneSet[v]!]!, this.gate[v] === 1, segs, rig);
+      const fixed = this.fixedWeights.get(v);
+      const w = fixed
+        ? fixed.filter(([, x]) => x > 1e-4).map(([name, x]) => [rig.index.get(name)!, x] as [number, number])
+        : skinWeightsAt(tmp, this.boneSets[this.boneSet[v]!]!, this.gate[v] === 1, segs, rig);
       for (let k = 0; k < 4; k++) {
         skinIndex[v * 4 + k] = w[k]?.[0] ?? 0;
         skinWeight[v * 4 + k] = w[k]?.[1] ?? 0;

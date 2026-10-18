@@ -26,6 +26,7 @@ import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
 import { LocalPlayer } from '../game/LocalPlayer';
 import { Obstruction } from '../game/Obstruction';
+import { TormentaDirector } from '../game/TormentaDirector';
 import { WaterDirector } from '../game/WaterDirector';
 import { GRARenderer, type Quality } from '../render/GRARenderer';
 import { GRAVFXSystem, Shape } from '../render/vfx/GRAVFXSystem';
@@ -40,16 +41,16 @@ import { ResultsScreen } from '../ui/ResultsScreen';
 import { Scoreboard } from '../ui/Scoreboard';
 import { PlanetView } from '../world/PlanetView';
 import { AmbientLife } from '../world/AmbientLife';
-import type { BoneName } from '../character/rig/GRARig';
 import { autoInk } from '../ui/ink';
 import { AuthoredParts } from '../character/build/AuthoredParts';
 import { NetSession } from '../net/NetSession';
 import { ProfileService, type CloudProfile } from '../net/ProfileService';
+import { probeServer, serverTarget } from '../net/serverTarget';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
 
 export type HudPhase = 'BOOT' | 'MENU' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
 
-const STORAGE = { appearance: 'graao.appearance', name: 'graao.name', quality: 'graao.quality', fpsCap: 'graao.fpsCap' };
+const STORAGE = { appearance: 'graao.appearance', name: 'graao.name', fpsCap: 'graao.fpsCap' };
 
 function readStorage<T>(key: string, fallback: T, valid: (v: unknown) => v is T): T {
   try {
@@ -96,6 +97,8 @@ export class GraaoApp {
   deploy!: DeployDirector;
   /** Lakes and sea around characters: splashes, swim strokes, drips, the underwater view. */
   water!: WaterDirector;
+  /** The match's shrinking safe region: world pigment, curtain, HUD, sound (mirrors the server). */
+  tormenta!: TormentaDirector;
   net: NetSession | null = null;
   phase: HudPhase = 'BOOT';
   appearance: CharacterAppearance;
@@ -124,13 +127,14 @@ export class GraaoApp {
   readonly limiter = new FrameLimiter();
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: HTMLElement) {
+    // Players always get HIGH; `?quality=` stays as a dev override for benchmarks.
     const q = new URLSearchParams(location.search).get('quality')?.toUpperCase();
-    const quality = (['LOW', 'MEDIUM', 'HIGH'].includes(q ?? '') ? q : readStorage<string>(STORAGE.quality, 'HIGH', (v): v is string => typeof v === 'string')) as Quality;
+    const quality = (['LOW', 'MEDIUM', 'HIGH'].includes(q ?? '') ? q : 'HIGH') as Quality;
     this.r = new GRARenderer(canvas, quality);
     this.input = new Input(canvas);
     this.camera = new GraaoThirdPersonCamera(this.r.camera);
     // Saves from older catalogs keep every piece that still exists; new slots start empty.
-    this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (v): v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
+    this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (_v): _v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
     this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, 0, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
     window.addEventListener('resize', () => this.r.resize());
@@ -196,6 +200,7 @@ export class GraaoApp {
     this.combat = new CombatDirector(this);
     this.deploy = new DeployDirector(this);
     this.water = new WaterDirector(this);
+    this.tormenta = new TormentaDirector(this);
     this.camera.waterRadius = this.world.terrain.seaRadius;
     if (new URLSearchParams(location.search).has('lineup')) this.spawnLineup(dir);
     this.buildUi();
@@ -258,13 +263,6 @@ export class GraaoApp {
         join: (code, name) => void this.online('join', code, name),
         customize: () => this.setPhase('CHARACTER_CREATOR'),
         history: () => void this.openHistory(),
-        quality: (q) => {
-          this.r.setQuality(q);
-          this.vfx.setQuality(q);
-          writeStorage(STORAGE.quality, q);
-          this.profile.save({ settings: { quality: q } });
-          this.menu.setNote(q === 'LOW' ? 'BAIXA mantém jogadores, tiros e avisos de combate; menos grama e sem flores após recarregar.' : `Qualidade ${q === 'HIGH' ? 'ALTA' : 'MÉDIA'}`);
-        },
         fpsCap: (c) => {
           this.limiter.cap = c;
           writeStorage(STORAGE.fpsCap, c);
@@ -281,7 +279,6 @@ export class GraaoApp {
         click: () => this.audio.play('ui.click'),
       },
       this.name,
-      this.r.quality,
       this.limiter.cap,
     );
     this.creator = new Creator(
@@ -362,7 +359,7 @@ export class GraaoApp {
     if (this.profile.status !== 'cloud') return;
     const changed = this.profile.localChanges;
     if (!row) {
-      this.profile.save({ name: this.name, appearance: this.appearance, settings: { quality: this.r.quality, fpsCap: this.limiter.cap } });
+      this.profile.save({ name: this.name, appearance: this.appearance, settings: { fpsCap: this.limiter.cap } });
       return;
     }
     // The cloud name, unless the player is typing a new one in the menu right now.
@@ -408,6 +405,7 @@ export class GraaoApp {
 
   /** Leaves the online room (lobby/results buttons, Esc twice) and goes back to the menu. */
   leaveRoom(): void {
+    this.combat.connectionLost = false;
     this.net?.leave();
     this.net = null;
     this.hud.setRoom(null);
@@ -441,6 +439,7 @@ export class GraaoApp {
       this.input.scoreboardEnabled = false;
       this.draftUi.show(false);
       this.deploy.reset();
+      this.tormenta.reset();
       this.results.hide();
       this.lobby.show(false);
     }
@@ -459,7 +458,24 @@ export class GraaoApp {
       this.updateHint();
       this.input.requestLock();
     }
-    if (p === 'MENU') this.menu.setBusy(false);
+    if (p === 'MENU') {
+      this.menu.setBusy(false);
+      void this.checkServer();
+    }
+  }
+
+  /** Is the match server up (and speaking our protocol)? Shown under the online buttons; never blocks the menu. */
+  private serverCheckedAt = -Infinity;
+  private async checkServer(force = false): Promise<void> {
+    if (!force && performance.now() - this.serverCheckedAt < 15000) return;
+    this.serverCheckedAt = performance.now();
+    const target = serverTarget();
+    this.menu.setServer('checking', 'Procurando o servidor de partidas…');
+    const st = await probeServer(target);
+    const where = target.official ? '' : ` (${new URL(target.url.replace(/^ws/, 'http')).host} · como convidado)`;
+    if (st.kind === 'online') this.menu.setServer('online', `Servidor online${where}${st.players ? ` · ${st.players} ${st.players === 1 ? 'jogador' : 'jogadores'} agora` : ''}`);
+    else if (st.kind === 'version') this.menu.setServer('version', 'O servidor roda outra versão do graao. Recarregue a página.');
+    else this.menu.setServer('offline', `Servidor de partidas fora do ar${where}. Explorar sozinho funciona normalmente.`);
   }
 
   private playSolo(): void {
@@ -487,10 +503,18 @@ export class GraaoApp {
     } catch (e) {
       this.menu.setBusy(false);
       this.menu.setNote((e as Error).message ?? String(e), true);
+      void this.checkServer(true);
     }
   }
 
+  /** The socket dropped (true) and the SDK is reconnecting, or it came back (false). The room keeps our seat meanwhile. */
+  onConnectionDrop(dropped: boolean): void {
+    this.combat.connectionLost = dropped;
+    if (!dropped) this.hud.notice('RECONECTADO', 1.2);
+  }
+
   onDisconnected(msg: string): void {
+    this.combat.connectionLost = false;
     this.net?.leave();
     this.net = null;
     this.hud.setRoom(null);
@@ -563,9 +587,10 @@ export class GraaoApp {
 
     this.character.setPose(feet, this.tmpUp.copy(feet).normalize(), facing);
     this.character.update(dt, anim);
-    if (this.phase === 'CHARACTER_CREATOR') this.layoutCreatorArrows();
+    if (this.phase === 'CHARACTER_CREATOR') this.layoutCreatorButtons();
     if (this.phase === 'MATCH') this.combat.present();
     this.water.update(dt);
+    this.tormenta.update(dt);
     this.presentAirJumps();
     for (const c of this.lineup) c.update(dt, { moveState: MovementState.IDLE, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE });
     this.vfx.update(dt);
@@ -576,7 +601,7 @@ export class GraaoApp {
     const orbit = this.r.setAltitude(PLANET.radius);
     this.planet.setOrbit(orbit, this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
     this.ambient.update(dt, this.time, this.phase === 'MATCH' ? feet : this.spawn);
-    this.audio.setAmbience(1 - orbit, this.time);
+    this.audio.setAmbience((1 - orbit) * this.tormenta.ambience, this.time);
     this.r.render();
     this.frameMs = performance.now() - t0;
     this.dev.frame();
@@ -643,8 +668,8 @@ export class GraaoApp {
     }
   }
 
-  /** Projects the clothing rows (hat, hair, top, bottom, shoes) of the character to the screen for the creator arrows. */
-  private layoutCreatorArrows(): void {
+  /** Projects the top of the character's head to the screen for the creator's close and dice buttons. */
+  private layoutCreatorButtons(): void {
     const c = this.character;
     c.root.updateMatrixWorld(true);
     const cam = this.r.camera;
@@ -654,26 +679,14 @@ export class GraaoApp {
       const v = p.clone().project(cam);
       return { x: rect.left + (v.x * 0.5 + 0.5) * rect.width, y: rect.top + (-v.y * 0.5 + 0.5) * rect.height };
     };
-    const bone = (name: BoneName, lift = 0) => {
-      const b = c.bones.get(name);
-      const p = b ? b.getWorldPosition(new THREE.Vector3()) : this.spawn.clone();
-      return screen(p.addScaledVector(up, lift));
-    };
-    const hips = bone('Hips');
-    const knee = bone('LeftLeg');
-    const anchors = {
-      hat: bone('HeadTop_End', 0.1),
-      hair: bone('Head', 0.1),
-      top: bone('Spine1'),
-      bottom: { x: hips.x, y: hips.y * 0.55 + knee.y * 0.45 },
-      shoes: bone('LeftFoot', -0.02),
-    };
-    // Arrows ~0.45 m to each side of the body (in screen px at the body's depth), clear of the arms.
+    const head = c.bones.get('HeadTop_End');
+    const headTop = screen((head ? head.getWorldPosition(new THREE.Vector3()) : this.spawn.clone()).addScaledVector(up, 0.1));
+    // Buttons ~0.45 m to each side of the body (in screen px at the body's depth), clear of the head and hat.
     const side = new THREE.Vector3().crossVectors(up, this.menuFacing).normalize();
     const pHips = c.bones.get('Hips')!.getWorldPosition(new THREE.Vector3());
     const a = screen(pHips);
     const b = screen(pHips.clone().addScaledVector(side, 0.45));
-    this.creator.layout(anchors, a.x, Math.max(60, Math.hypot(b.x - a.x, b.y - a.y)));
+    this.creator.layout(headTop.y, a.x, Math.max(60, Math.hypot(b.x - a.x, b.y - a.y)));
   }
 
   /** Creator framing: the character centered in the screen area the panel leaves free (measured, not guessed). */
@@ -733,6 +746,7 @@ export class GraaoApp {
       'props dissolvendo': this.obstruction.stats.fading,
       'VFX ativos': this.vfx.active,
       habilidades: this.combat.abilities.stats(),
+      tormenta: this.tormenta.stats(),
       fase: this.deploy && this.deploy.mode !== 'none' ? `${this.phase} / ${this.deploy.mode}` : this.phase,
       'tris OVNI': this.deploy?.ufo.triangles ?? 0,
       posição: s ? `lat ${lat.toFixed(1)} lon ${lon.toFixed(1)} r ${Math.hypot(s.pos.x, s.pos.y, s.pos.z).toFixed(2)}` : '-',

@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { PLANET } from '@graao/game-data';
 import type { GameWorld, Placement, PlacementKind } from '@graao/game-core';
-import { createStylizedMaterial, GLSL_NOISE } from '../render/materials/GRAStylizedMaterial';
+import { createStylizedMaterial, GLSL_NOISE, GLSL_TORMENTA, useTormenta } from '../render/materials/GRAStylizedMaterial';
 import type { Quality } from '../render/GRARenderer';
 import * as G from './propGeometry';
 
@@ -47,6 +47,7 @@ uniform vec3 uSunDir;
 varying vec3 vWorldPos;
 varying vec3 vNormalW;
 ${GLSL_NOISE}
+${GLSL_TORMENTA}
 void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
   vec3 N = normalize(vNormalW + (vec3(graNoise3(vWorldPos * 0.6 + uTime * 0.3), graNoise3(vWorldPos * 0.6 - uTime * 0.25 + 9.0), 0.5) - 0.5) * 0.18);
@@ -67,6 +68,11 @@ void main() {
   // Painted glints: thresholded noise lit by the sun.
   float g = smoothstep(0.78, 0.86, graNoise3(vWorldPos * 1.4 + vec3(uTime * 0.4, 0.0, uTime * 0.3)));
   col += vec3(1.0, 0.95, 0.85) * g * 0.35 * max(dot(reflect(-V, N), uSunDir), 0.0);
+  // Lakes and the sea lose their colour in the Tormenta too.
+  if (uTormOn.x > 0.001) {
+    float tm = graTormentaMetres(vWorldPos, uTorm);
+    if (tm > -4.0) col = mix(col, graTormentaBleach(col, vWorldPos, graTormentaEdge(vWorldPos, tm)), uTormOn.x);
+  }
   gl_FragColor = vec4(col, 0.82 + fres * 0.15);
   #include <colorspace_fragment>
   #include <fog_fragment>
@@ -131,6 +137,7 @@ varying vec3 vWorldPos;
 varying vec3 vNormalW;
 varying float vDistFade;
 ${GLSL_NOISE}
+${GLSL_TORMENTA}
 void main() {
   float patchN = graFbm3(vWorldPos * 0.055);
   vec3 base = mix(uRoot, uTipColor, vTip);
@@ -141,6 +148,10 @@ void main() {
   #endif
   float lit = mix(0.35, 1.0, shadow) * (0.7 + 0.3 * vTip);
   vec3 col = mix(base * uShadowTint, base * uSunColor, lit);
+  if (uTormOn.x > 0.001) {
+    float tm = graTormentaMetres(vWorldPos, uTorm);
+    if (tm > -4.0) col = mix(col, graTormentaBleach(col, vWorldPos, graTormentaEdge(vWorldPos, tm)), uTormOn.x);
+  }
   gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
   #include <fog_fragment>
@@ -283,6 +294,7 @@ export class PlanetView {
       // Both faces in one pass: the underside is the surface seen by a camera under the water.
       side: THREE.DoubleSide,
     });
+    useTormenta(mat.uniforms);
     mat.forceSinglePass = true;
     const mesh = new THREE.Mesh(g, mat);
     mesh.name = 'water';
@@ -292,7 +304,7 @@ export class PlanetView {
   }
 
   private buildGrassMaterial(): THREE.ShaderMaterial {
-    return new THREE.ShaderMaterial({
+    const m = new THREE.ShaderMaterial({
       name: 'GRAGrass',
       vertexShader: GRASS_VERTEX,
       fragmentShader: GRASS_FRAGMENT,
@@ -314,6 +326,8 @@ export class PlanetView {
       fog: true,
       side: THREE.DoubleSide,
     });
+    useTormenta(m.uniforms);
+    return m;
   }
 
   private buildProps(quality: Quality): void {
