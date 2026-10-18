@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { MATCH_SPAWNS, MOVEMENT, PLANET, SPAWNS } from '@graao/game-data';
-import { InputButton, MovementState, v3, v3angle, v3dot, v3len, v3normalize } from '@graao/shared';
+import { ATTRIBUTES, MATCH_SPAWNS, MOVEMENT, PLANET, SPAWNS } from '@graao/game-data';
+import { HitKind, InputButton, MovementState, v3, v3angle, v3dot, v3len, v3normalize } from '@graao/shared';
 import { ABILITIES } from '@graao/game-data';
 import { AbilityReject } from '@graao/shared';
 import { resolveTargetPoint, validateTargetPoint } from './abilities';
-import { CharacterMotor, cloneCharacterState, createCharacterState, newInput, startDash } from './character';
+import { CharacterMotor, cloneCharacterState, createCharacterState, headUnderWater, newInput, startDash, stepBreath, wadeFactor, waterDepth } from './character';
+import { applyDrowning, newVitals } from './combat';
+import { landedInWater } from './deploy';
 import { GROUPS_PROP_QUERY, quatFromUp } from './physics';
 import { latLonToDir, northTangent, transportTangent } from './sphere';
 import { createGameWorld } from './world';
@@ -93,6 +95,68 @@ describe('spherical character controller', () => {
     body.dispose();
     expect(peak).toBeGreaterThan(0.9);
     expect(peak).toBeLessThan(1.8);
+  });
+
+  it('double jumps once per flight, and gets it back on landing', () => {
+    const s = createCharacterState(start, northTangent(spawnDir));
+    const body = motor.createBody(s);
+    const inp = newInput();
+    for (let i = 0; i < 90; i++) motor.step(body, s, inp, 1 / 60);
+    const r0 = v3len(s.pos);
+    let peak = 0;
+    const run = (buttons: number, n: number) => {
+      inp.buttons = buttons;
+      for (let i = 0; i < n; i++) {
+        motor.step(body, s, inp, 1 / 60);
+        peak = Math.max(peak, v3len(s.pos) - r0);
+      }
+    };
+    const vUp = () => v3dot(s.vel, v3normalize(s.pos));
+    // Ground jump, released: the double jump is still there.
+    run(InputButton.JUMP, 3);
+    run(0, 18);
+    expect(s.grounded).toBe(false);
+    expect(s.airJumped).toBe(false);
+    // Pressed again near the top: a fresh hop.
+    run(InputButton.JUMP, 1);
+    expect(s.airJumped).toBe(true);
+    expect(vUp()).toBeCloseTo(MOVEMENT.airJumpSpeed - PLANET.gravity / 60, 5);
+    // A third press in the same flight does nothing.
+    run(InputButton.JUMP, 2);
+    run(0, 10);
+    const before = vUp();
+    run(InputButton.JUMP, 1);
+    expect(vUp()).toBeLessThan(before);
+    run(0, 150);
+    body.dispose();
+    expect(s.grounded).toBe(true);
+    expect(s.airJumped).toBe(false);
+    // One jump peaks at ≈ jumpSpeed²/2g (1.3 m); the double jump near its top adds ≈ airJumpSpeed²/2g on top.
+    const single = MOVEMENT.jumpSpeed ** 2 / (2 * PLANET.gravity);
+    expect(peak).toBeGreaterThan(single + 0.8);
+    expect(peak).toBeLessThan(single + MOVEMENT.airJumpSpeed ** 2 / (2 * PLANET.gravity) + 0.1);
+  });
+
+  it('a double jump in mid-fall gets the whole hop back and swings the momentum toward WASD', () => {
+    const up = spawnDir;
+    const north = northTangent(up);
+    const high = { x: ground.x + up.x * 12, y: ground.y + up.y * 12, z: ground.z + up.z * 12 };
+    const s = createCharacterState(high, north);
+    s.airTime = 1;
+    // Falling at 9 m/s while drifting north at run speed.
+    s.vel = { x: north.x * MOVEMENT.runSpeed - up.x * 9, y: north.y * MOVEMENT.runSpeed - up.y * 9, z: north.z * MOVEMENT.runSpeed - up.z * 9 };
+    const body = motor.createBody(s);
+    const inp = newInput();
+    inp.wish = { x: -north.x, y: -north.y, z: -north.z };
+    inp.buttons = InputButton.JUMP;
+    motor.step(body, s, inp, 1 / 60);
+    body.dispose();
+    const newUp = v3normalize(s.pos);
+    expect(s.airJumped).toBe(true);
+    expect(v3dot(s.vel, newUp)).toBeCloseTo(MOVEMENT.airJumpSpeed - PLANET.gravity / 60, 3);
+    // Steering south: most of the northward drift is gone, already moving the other way.
+    expect(v3dot(s.vel, north)).toBeLessThan(0);
+    expect(v3dot(s.vel, north)).toBeGreaterThan(-MOVEMENT.runSpeed);
   });
 
   it('runs a full lap around the planet without flips, NaNs or getting stuck', () => {
@@ -250,6 +314,232 @@ describe('ability primitives on the real planet', () => {
       }
     }
     expect(checked).toBe(240);
+  });
+});
+
+describe('water: wading, swimming and plunges (Lago Espelho, ≈ 3.6 m deep in the middle)', () => {
+  const motor = new CharacterMotor(world.physics);
+  const center = latLonToDir(-30, -38);
+  const north = northTangent(center);
+  /** A character `lift` m above the lake surface at its centre. */
+  const overLake = (lift: number) => {
+    const r = world.terrain.seaRadius + lift;
+    const s = createCharacterState({ x: center.x * r, y: center.y * r, z: center.z * r }, north);
+    return { s, body: motor.createBody(s) };
+  };
+  /** Steps with a constant heading transported along the way (like a held W key). */
+  const walk = (s: ReturnType<typeof overLake>['s'], body: ReturnType<typeof overLake>['body'], steps: number, buttons = 0, each?: () => void) => {
+    const inp = newInput();
+    let heading = northTangent(v3normalize(s.pos));
+    let prevUp = v3normalize(s.pos);
+    for (let i = 0; i < steps; i++) {
+      const up = v3normalize(s.pos);
+      heading = transportTangent(heading, prevUp, up);
+      prevUp = up;
+      inp.wish = { ...heading };
+      inp.aim = { ...heading };
+      inp.buttons = buttons;
+      motor.step(body, s, inp, 1 / 60);
+      each?.();
+    }
+  };
+
+  it('floats in deep water with the feet at the float depth, hands busy (no aim)', () => {
+    const { s, body } = overLake(0.5);
+    const inp = newInput();
+    inp.buttons = InputButton.AIM | InputButton.FIRE;
+    for (let i = 0; i < 240; i++) motor.step(body, s, inp, 1 / 60);
+    body.dispose();
+    expect(s.swimming).toBe(true);
+    expect(s.moveState).toBe(MovementState.SWIM);
+    expect(s.aiming).toBe(false);
+    expect(Math.abs(waterDepth(s.pos) - MOVEMENT.swimFloatDepth)).toBeLessThan(0.08);
+    expect(Math.abs(v3dot(s.vel, v3normalize(s.pos)))).toBeLessThan(0.2);
+  });
+
+  it('swims slower than running, then walks out on the shore', () => {
+    const { s, body } = overLake(0.5);
+    for (let i = 0; i < 120; i++) motor.step(body, s, newInput(), 1 / 60);
+    let maxSwim = 0;
+    let minSwim = Infinity;
+    let swimSteps = 0;
+    let leftWaterAt = -1;
+    let step = 0;
+    walk(s, body, 60 * 14, 0, () => {
+      step++;
+      const up = v3normalize(s.pos);
+      const flat = Math.hypot(s.vel.x - up.x * v3dot(s.vel, up), s.vel.y - up.y * v3dot(s.vel, up), s.vel.z - up.z * v3dot(s.vel, up));
+      if (s.swimming) {
+        swimSteps++;
+        maxSwim = Math.max(maxSwim, flat);
+        if (step > 60) minSwim = Math.min(minSwim, flat);
+      } else if (leftWaterAt < 0) leftWaterAt = step;
+    });
+    body.dispose();
+    expect(swimSteps).toBeGreaterThan(60);
+    expect(maxSwim).toBeLessThanOrEqual(MOVEMENT.swimSpeed + 1e-6);
+    expect(maxSwim).toBeGreaterThan(MOVEMENT.swimSpeed * 0.95);
+    expect(maxSwim).toBeLessThan(MOVEMENT.runSpeed);
+    // No crawl up the shore slope: the feet push off the bottom.
+    expect(minSwim).toBeGreaterThan(MOVEMENT.swimSpeed * 0.8);
+    expect(leftWaterAt).toBeGreaterThan(0);
+    // Out on dry land, walking normally again.
+    expect(s.swimming).toBe(false);
+    expect(waterDepth(s.pos)).toBeLessThan(0);
+    expect(s.grounded).toBe(true);
+  });
+
+  it('walking into the lake from the shore turns into swimming (and wading is slower than running)', () => {
+    // Start on the north shore, facing the lake centre.
+    const shore = latLonToDir(-30 + 11, -38);
+    const g = world.terrain.surfaceAt(shore);
+    const s = createCharacterState({ x: g.x + shore.x * 0.3, y: g.y + shore.y * 0.3, z: g.z + shore.z * 0.3 }, north);
+    const body = motor.createBody(s);
+    for (let i = 0; i < 30; i++) motor.step(body, s, newInput(), 1 / 60);
+    const inp = newInput();
+    let swam = false;
+    let wadeSpeed = 0;
+    for (let i = 0; i < 60 * 6 && !swam; i++) {
+      const up = v3normalize(s.pos);
+      const toCenter = { x: center.x - up.x * v3dot(center, up), y: center.y - up.y * v3dot(center, up), z: center.z - up.z * v3dot(center, up) };
+      inp.wish = v3normalize(toCenter);
+      motor.step(body, s, inp, 1 / 60);
+      const d = waterDepth(s.pos);
+      if (!s.swimming && s.grounded && d > 0.9) wadeSpeed = Math.max(wadeSpeed, Math.hypot(s.vel.x, s.vel.y, s.vel.z));
+      swam ||= s.swimming;
+    }
+    body.dispose();
+    expect(swam).toBe(true);
+    expect(wadeSpeed).toBeGreaterThan(0);
+    expect(wadeSpeed).toBeLessThan(MOVEMENT.runSpeed * 0.8);
+  });
+
+  it('a dive ends at the water surface and the plunge is braked, then the diver floats', () => {
+    const { s, body } = overLake(30);
+    s.diving = true;
+    const up0 = v3normalize(s.pos);
+    s.vel = { x: -up0.x * MOVEMENT.diveTerminalSpeed, y: -up0.y * MOVEMENT.diveTerminalSpeed, z: -up0.z * MOVEMENT.diveTerminalSpeed };
+    let endedAt: number | null = null;
+    let deepest = 0;
+    for (let i = 0; i < 60 * 6; i++) {
+      motor.step(body, s, newInput(), 1 / 60);
+      if (endedAt === null && !s.diving) {
+        endedAt = waterDepth(s.pos);
+        expect(landedInWater(world.terrain, s.pos)).toBe(true);
+      }
+      deepest = Math.max(deepest, waterDepth(s.pos));
+    }
+    body.dispose();
+    expect(endedAt).not.toBeNull();
+    expect(endedAt!).toBeGreaterThan(-0.01);
+    expect(endedAt!).toBeLessThan(0.6);
+    // Plunged under, but the water stopped the fall before the lake bed (≈ 3.6 m).
+    expect(deepest).toBeGreaterThan(MOVEMENT.swimFloatDepth + 0.5);
+    expect(deepest).toBeLessThan(3.4);
+    expect(s.swimming).toBe(true);
+    expect(Math.abs(waterDepth(s.pos) - MOVEMENT.swimFloatDepth)).toBeLessThan(0.1);
+  });
+
+  it('hops out of the water from the surface and falls back in swimming', () => {
+    const { s, body } = overLake(0.5);
+    for (let i = 0; i < 180; i++) motor.step(body, s, newInput(), 1 / 60);
+    const inp = newInput();
+    inp.buttons = InputButton.JUMP;
+    motor.step(body, s, inp, 1 / 60);
+    expect(s.swimming).toBe(false);
+    let highest = -Infinity;
+    for (let i = 0; i < 150; i++) {
+      motor.step(body, s, newInput(), 1 / 60);
+      highest = Math.max(highest, -waterDepth(s.pos));
+    }
+    body.dispose();
+    expect(highest).toBeGreaterThan(-0.3);
+    expect(s.swimming).toBe(true);
+  });
+
+  it('replays a swim identically from a cloned state (prediction contract)', () => {
+    const { s, body } = overLake(1);
+    for (let i = 0; i < 30; i++) motor.step(body, s, newInput(), 1 / 60);
+    const snap = cloneCharacterState(s);
+    const inputs = Array.from({ length: 120 }, (_, i) => ({
+      wish: v3normalize({ x: Math.sin(i * 0.05), y: 0.1, z: Math.cos(i * 0.04) }),
+      aim: { x: 0, y: 0, z: 1 },
+      buttons: i === 70 ? InputButton.JUMP : InputButton.SPRINT,
+    }));
+    for (const i of inputs) motor.step(body, s, { ...i, wish: { ...i.wish }, aim: { ...i.aim } }, 1 / 60);
+    const r = cloneCharacterState(snap);
+    for (const i of inputs) motor.step(body, r, { ...i, wish: { ...i.wish }, aim: { ...i.aim } }, 1 / 60);
+    body.dispose();
+    expect(Math.hypot(s.pos.x - r.pos.x, s.pos.y - r.pos.y, s.pos.z - r.pos.z)).toBeLessThan(1e-6);
+    expect(r.swimming).toBe(s.swimming);
+  });
+
+  it('sprint held dives under water, swims along the bottom, then floats back up when let go', () => {
+    const { s, body } = overLake(0.5);
+    for (let i = 0; i < 120; i++) motor.step(body, s, newInput(), 1 / 60);
+    let deepest = 0;
+    let movedUnder = 0;
+    const p0 = { ...s.pos };
+    walk(s, body, 90, InputButton.SPRINT, () => (deepest = Math.max(deepest, waterDepth(s.pos))));
+    expect(s.swimming).toBe(true);
+    expect(headUnderWater(s.pos)).toBe(true);
+    // Sinks at the dive speed: ≈ 2.6 m/s, stopped by the lake bed (≈ 3.6 m at the centre).
+    expect(deepest).toBeGreaterThan(MOVEMENT.breathDepth + 1);
+    movedUnder = Math.hypot(s.pos.x - p0.x, s.pos.y - p0.y, s.pos.z - p0.z);
+    expect(movedUnder).toBeGreaterThan(2);
+    // Let go: buoyancy brings the swimmer back to the float depth, head out.
+    for (let i = 0; i < 240; i++) motor.step(body, s, newInput(), 1 / 60);
+    body.dispose();
+    expect(Math.abs(waterDepth(s.pos) - MOVEMENT.swimFloatDepth)).toBeLessThan(0.1);
+    expect(headUnderWater(s.pos)).toBe(false);
+  });
+
+  it('jump held under water climbs faster than floating up', () => {
+    const rise = (buttons: number) => {
+      const { s, body } = overLake(0.5);
+      const inp = newInput();
+      for (let i = 0; i < 120; i++) motor.step(body, s, inp, 1 / 60);
+      inp.buttons = InputButton.SPRINT;
+      for (let i = 0; i < 70; i++) motor.step(body, s, inp, 1 / 60);
+      const d0 = waterDepth(s.pos);
+      inp.buttons = buttons;
+      for (let i = 0; i < 30; i++) motor.step(body, s, inp, 1 / 60);
+      body.dispose();
+      return d0 - waterDepth(s.pos);
+    };
+    expect(rise(InputButton.JUMP)).toBeGreaterThan(rise(0) + 0.2);
+  });
+
+  it('breath drains with the head under water, refills above it and never leaves its range', () => {
+    const deep = { x: 0, y: world.terrain.seaRadius - MOVEMENT.breathDepth - 0.5, z: 0 };
+    const surface = { x: 0, y: world.terrain.seaRadius - MOVEMENT.swimFloatDepth, z: 0 };
+    let b: number = MOVEMENT.breathTime;
+    for (let i = 0; i < 60 * 5; i++) b = stepBreath(b, deep, 1 / 60);
+    expect(b).toBeCloseTo(MOVEMENT.breathTime - 5, 3);
+    for (let i = 0; i < 60 * 20; i++) b = stepBreath(b, deep, 1 / 60);
+    expect(b).toBe(0);
+    for (let i = 0; i < 60; i++) b = stepBreath(b, surface, 1 / 60);
+    expect(b).toBeCloseTo(MOVEMENT.breathRefill, 3);
+    for (let i = 0; i < 60 * 10; i++) b = stepBreath(b, surface, 1 / 60);
+    expect(b).toBe(MOVEMENT.breathTime);
+  });
+
+  it('drowning takes Health only (a shield does not help) and can eliminate', () => {
+    const v = newVitals();
+    const r = applyDrowning(v, MOVEMENT.drownDamage);
+    expect(r.shieldDamage).toBe(0);
+    expect(v.shield).toBe(ATTRIBUTES.maxShield);
+    expect(v.health).toBe(ATTRIBUTES.maxHealth - MOVEMENT.drownDamage);
+    let last = r;
+    while (v.alive) last = applyDrowning(v, MOVEMENT.drownDamage);
+    expect(last.eliminated).toBe(true);
+    expect(last.kinds).toContain(HitKind.ELIMINATION);
+  });
+
+  it('wading factor: full speed on dry feet, slower toward chest depth', () => {
+    expect(wadeFactor(0)).toBe(1);
+    expect(wadeFactor(0.6)).toBeLessThan(1);
+    expect(wadeFactor(MOVEMENT.swimEnterDepth)).toBeCloseTo(MOVEMENT.wadeSlow, 5);
   });
 });
 

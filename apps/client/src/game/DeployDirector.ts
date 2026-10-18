@@ -13,7 +13,7 @@
  * CAMERA (reveal, orbit, dive pitch + FOV, landing impulse) · AUDIO (hum, hatch, wind, thud) · UI (deploy panel).
  */
 import * as THREE from 'three';
-import { diveStart, jumpOpen, latLonToDir, makeUfoRoute, routeFrame, ufoHeading, ufoPosition, type DiveStart } from '@graao/game-core';
+import { diveStart, jumpOpen, landedInWater, latLonToDir, makeUfoRoute, routeFrame, ufoHeading, ufoPosition, waterDepth, type DiveStart } from '@graao/game-core';
 import { PLANET, REGIONS } from '@graao/game-data';
 import { DeployState, MatchPhase, POS_SCALE, type GameEvent, type RoomStateMsg, type UfoRouteMsg } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
@@ -116,7 +116,7 @@ export class DeployDirector {
   /** Solo: the same ritual on a local route (shorter reveal), no server involved. */
   startOffline(): void {
     this.offline = true;
-    this.route = makeUfoRoute(Math.random, Date.now(), { revealMs: 3400, windowMs: 12000 });
+    this.route = makeUfoRoute(Math.random, Date.now(), { revealMs: 3400 });
     this.path.setRoute(this.route);
     this.board();
   }
@@ -242,10 +242,8 @@ export class DeployDirector {
     const app = this.app;
     const vfx = app.vfx;
     const up = this.tmp3.copy(at).normalize();
-    if (water) {
-      vfx.decal(at, 2.4, '#bfe6ff', 0.9, DecalMode.SPLASH);
-      vfx.burst(at, up, { color: '#d8f1ff', count: 18, speed: 5.5, size: 0.22, life: 0.8, gravity: 12, drag: 1.5, spread: 0.7, shape: Shape.DOT });
-    } else {
+    if (water) app.water.splash(at, 1);
+    else {
       vfx.ring(at.clone().addScaledVector(up, 0.15), '#f6e7c8', 3.6, 0.5);
       vfx.burst(at, up, { color: '#e8d4b0', count: 16, speed: 3.6, size: 0.42, life: 0.9, gravity: 2.5, drag: 3, spread: 1.45, shape: Shape.DOT });
     }
@@ -376,6 +374,8 @@ export class DeployDirector {
     const up = this.tmp2.copy(pos).normalize();
     const hit = app.world.physics.castRay({ x: pos.x + up.x * 0.3, y: pos.y + up.y * 0.3, z: pos.z + up.z * 0.3 }, { x: -up.x, y: -up.y, z: -up.z }, 400);
     this.groundDist = hit ? Math.max(0, hit.toi - 0.3) : Math.max(0, pos.length() - (PLANET.radius + app.world.terrain.heightAt(up)));
+    // Over a lake the dive ends at the surface, not on the bed.
+    this.groundDist = Math.min(this.groundDist, Math.max(0, -waterDepth(pos)));
     this.vel.set(s.vel.x, s.vel.y, s.vel.z);
     const speed = this.vel.length();
     const fall = Math.max(0, -this.vel.dot(up));
@@ -386,12 +386,7 @@ export class DeployDirector {
     this.speed.update(dt, app.r.camera, this.vel, THREE.MathUtils.clamp((speed - 8) / 22, 0, 1));
     app.audio.setLoop('wind', THREE.MathUtils.clamp(speed / 30, 0.15, 1), THREE.MathUtils.clamp(fall / 38, 0, 1));
     this.trail(this.myIndex, pos, dt);
-    if (!s.diving) {
-      const dir = up.clone();
-      const h = app.world.terrain.heightAt(dir);
-      const onTerrain = pos.length() - (PLANET.radius + h) < 0.6;
-      this.onLanded(pos.clone(), onTerrain && h < PLANET.seaLevel - 0.15);
-    }
+    if (!s.diving) this.onLanded(pos.clone(), landedInWater(app.world.terrain, pos));
   }
 
   /** Pigment puffs and a pale ribbon behind a diver (opponents read where someone is landing). */
@@ -477,7 +472,7 @@ export class DeployDirector {
       const asked = performance.now() - this.jumpAskedAt < 1500;
       hud.setDeploy({
         title: asked ? 'SALTANDO…' : 'SALTE QUANDO QUISER',
-        line: `Salto automático em ${Math.ceil(left / 1000)} s · siga a trilha amarela até a vila`,
+        line: `Salto automático em ${Math.ceil(left / 1000)} s · escolha onde cair no planeta`,
         key: 'ESPAÇO',
         keyLabel: 'SALTAR',
         progress: left / Math.max(1, r.close - r.open),

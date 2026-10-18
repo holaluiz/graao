@@ -59,7 +59,15 @@ export type Cue =
   | 'ufo.open'
   | 'ufo.jump'
   | 'land'
-  | 'land.water';
+  | 'land.water'
+  // Water: someone hitting it, a swim stroke, a step while wading.
+  | 'splash'
+  | 'swim.stroke'
+  | 'wade'
+  // Movement: the double jump's puff of air.
+  | 'jump.air'
+  // Water: gasp upon surfacing from a long dive.
+  | 'gasp';
 
 /** Continuous layers driven every frame by a level (0 = silent): the dive's wind and the UFO's hum. */
 export type AudioLoop = 'wind' | 'hum';
@@ -113,6 +121,11 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   'ufo.jump': 'environment',
   land: 'environment',
   'land.water': 'environment',
+  splash: 'environment',
+  'swim.stroke': 'environment',
+  wade: 'environment',
+  'jump.air': 'environment',
+  gasp: 'environment',
 };
 
 export interface PlayOptions {
@@ -143,6 +156,8 @@ export class GRAAudioManager {
   private readonly loops = new Map<AudioLoop, { gain: GainNode; filter: BiquadFilterNode; base: number }>();
   state: AudioState = 'NORMAL';
   volume = 0.8;
+  /** The camera is under the water: the world is heard muffled (on top of the state's own filter). */
+  private underwater = false;
 
   /** Creates/resumes the context; must run inside a user gesture (ENTER button). */
   unlock(): void {
@@ -199,10 +214,21 @@ export class GRAAudioManager {
       return;
     }
     this.state = s;
-    const t = this.ctx.currentTime;
-    // Aboard the UFO the world is heard through the hull.
-    const freq = s === 'LOW_HEALTH' ? 900 : s === 'POST_MATCH' ? 2600 : s === 'UFO' ? 5200 : 20000;
-    this.world.frequency.setTargetAtTime(freq, t, 0.12);
+    this.applyWorldFilter();
+  }
+
+  setUnderwater(on: boolean): void {
+    if (on === this.underwater) return;
+    this.underwater = on;
+    this.applyWorldFilter();
+  }
+
+  private applyWorldFilter(): void {
+    if (!this.ctx) return;
+    const s = this.state;
+    // Aboard the UFO the world is heard through the hull; under water, through the water.
+    const freq = Math.min(s === 'LOW_HEALTH' ? 900 : s === 'POST_MATCH' ? 2600 : s === 'UFO' ? 5200 : 20000, this.underwater ? 650 : 20000);
+    this.world.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.12);
   }
 
   play(cue: Cue, o: PlayOptions = {}): void {
@@ -551,6 +577,30 @@ export class GRAAudioManager {
         this.osc(out, 'sine', t, 220 * p, 80 * p, 0.2, 0.35);
         for (let k = 0; k < 4; k++) this.osc(out, 'sine', t + 0.08 + k * 0.07, (900 + k * 260) * p, (700 + k * 200) * p, 0.05, 0.06);
         return 0.62;
+      case 'splash':
+        // A smaller plunge: a wet slap, a low gulp and a few droplets.
+        this.noiseBurst(out, t, 0.38, 0.4, 'bandpass', 2400 * p, 700 * p, 0.7);
+        this.osc(out, 'sine', t, 300 * p, 110 * p, 0.15, 0.2);
+        for (let k = 0; k < 3; k++) this.osc(out, 'sine', t + 0.06 + k * 0.06, (1100 + k * 300) * p, (800 + k * 200) * p, 0.04, 0.05);
+        return 0.45;
+      case 'swim.stroke':
+        // An arm cutting the water: a soft rising swish and a little bloop.
+        this.noiseBurst(out, t, 0.22, 0.18, 'bandpass', 900 * p, 1500 * p, 0.9);
+        this.osc(out, 'sine', t + 0.12, 420 * p, 260 * p, 0.08, 0.05);
+        return 0.3;
+      case 'wade':
+        this.noiseBurst(out, t, 0.14, 0.16, 'bandpass', 1600 * p, 900 * p, 1.2);
+        return 0.16;
+      case 'jump.air':
+        // Air kicked down under the feet: a short rising swish with a light lift on top.
+        this.noiseBurst(out, t, 0.2, 0.3, 'bandpass', 500 * p, 2000 * p, 0.8);
+        this.osc(out, 'sine', t, 320 * p, 640 * p, 0.09, 0.07, 0.01);
+        return 0.22;
+      case 'gasp':
+        // A sharp intake of breath upon surfacing: breathy noise rushing in with a quick rise.
+        this.noiseBurst(out, t, 0.35, 0.3, 'bandpass', 600 * p, 2800 * p, 0.9);
+        this.osc(out, 'sine', t + 0.05, 200 * p, 380 * p, 0.15, 0.08);
+        return 0.36;
       case 'ult.ready':
         [659.25, 830.61, 987.77, 1318.51].forEach((f, k) => this.osc(out, 'triangle', t + k * 0.075, f, f, 0.4, 0.17, 0.01));
         this.noiseBurst(out, t + 0.2, 0.4, 0.07, 'highpass', 6500);

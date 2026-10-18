@@ -1,13 +1,17 @@
 /**
  * GraaoApp: owns the renderer, the shared world, the local character and the presentation phases.
  * Phases (GRAHudDirector): MENU → CHARACTER_CREATOR → MATCH (free roam / online). Each phase controls visible UI,
- * camera context and input. Inside MATCH the server's match phase (warmup → draft → UFO → match → results) drives
- * the HUD through the CombatDirector; the UFO and DROP presentation phases belong to the DeployDirector (aboard,
- * the ride owns the camera and the local player is not simulated).
+ * camera context and input. Inside MATCH the server's match phase (warmup lobby → draft → UFO → match → results)
+ * drives the HUD through the CombatDirector; the UFO and DROP presentation phases belong to the DeployDirector
+ * (aboard, the ride owns the camera and the local player is not simulated). Between matches, with the pointer free,
+ * the room's lobby panel is up; after one, the results screen.
+ *
+ * The player's name, look and settings live in localStorage and, when Supabase is reachable, in their cloud profile
+ * (ProfileService): the cloud row wins at startup unless the player already changed something this session.
  */
 import * as THREE from 'three';
-import { createGameWorld, latLonToDir, mulberry32, type GameWorld } from '@graao/game-core';
-import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance } from '@graao/game-data';
+import { createGameWorld, latLonToDir, mulberry32, waterDepth, type GameWorld } from '@graao/game-core';
+import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance, validateAppearance } from '@graao/game-data';
 import { ActionState, MatchPhase, MovementState, v3angle, type CharacterAppearance, type DraftStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
@@ -22,15 +26,20 @@ import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
 import { LocalPlayer } from '../game/LocalPlayer';
 import { Obstruction } from '../game/Obstruction';
+import { WaterDirector } from '../game/WaterDirector';
 import { GRARenderer, type Quality } from '../render/GRARenderer';
-import { GRAVFXSystem } from '../render/vfx/GRAVFXSystem';
+import { GRAVFXSystem, Shape } from '../render/vfx/GRAVFXSystem';
 import { Creator } from '../ui/Creator';
 import { DevOverlay } from '../ui/DevOverlay';
+import { HistoryPanel } from '../ui/HistoryPanel';
 import { Hud } from '../ui/Hud';
+import { LobbyPanel } from '../ui/LobbyPanel';
 import { Menu } from '../ui/Menu';
 import { DraftScreen } from '../ui/DraftScreen';
+import { ResultsScreen } from '../ui/ResultsScreen';
 import { PlanetView } from '../world/PlanetView';
 import { NetSession } from '../net/NetSession';
+import { ProfileService, type CloudProfile } from '../net/ProfileService';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
 
 export type HudPhase = 'BOOT' | 'MENU' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
@@ -64,6 +73,10 @@ export class GraaoApp {
   readonly camera: GraaoThirdPersonCamera;
   readonly audio = new GRAAudioManager();
   readonly hud = new Hud();
+  /** Cloud profile (Supabase): identity for the match server, name/look/settings, match history. */
+  readonly profile = new ProfileService();
+  /** After a match: the server's summary and the way back to the lobby. */
+  results!: ResultsScreen;
   vfx!: GRAVFXSystem;
   world!: GameWorld;
   planet!: PlanetView;
@@ -73,6 +86,8 @@ export class GraaoApp {
   combat!: CombatDirector;
   /** UFO deployment presentation (reveal, ride, dive, landing). */
   deploy!: DeployDirector;
+  /** Lakes and sea around characters: splashes, swim strokes, drips, the underwater view. */
+  water!: WaterDirector;
   net: NetSession | null = null;
   phase: HudPhase = 'BOOT';
   appearance: CharacterAppearance;
@@ -82,6 +97,9 @@ export class GraaoApp {
   private creator!: Creator;
   /** Ability Draft screen (over the world while the server runs the draft). */
   private draftUi!: DraftScreen;
+  /** The room between matches (pointer free). */
+  private lobby!: LobbyPanel;
+  private history!: HistoryPanel;
   private lastT = 0;
   private time = 0;
   private creatorYaw = 0;
@@ -108,7 +126,7 @@ export class GraaoApp {
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
     this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, 0, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
     window.addEventListener('resize', () => this.r.resize());
-    for (const id of ['paper', 'vignette']) {
+    for (const id of ['underwater', 'paper', 'vignette']) {
       const d = document.createElement('div');
       d.id = id;
       document.body.appendChild(d);
@@ -157,6 +175,8 @@ export class GraaoApp {
     this.r.scene.add(this.character.root);
     this.combat = new CombatDirector(this);
     this.deploy = new DeployDirector(this);
+    this.water = new WaterDirector(this);
+    this.camera.waterRadius = this.world.terrain.seaRadius;
     if (new URLSearchParams(location.search).has('lineup')) this.spawnLineup(dir);
     this.buildUi();
     t = performance.now();
@@ -196,6 +216,9 @@ export class GraaoApp {
 
   start(): void {
     this.setPhase('MENU');
+    // The cloud profile loads behind the menu; it never delays the first frame.
+    this.profile.onStatus = () => this.showProfileStatus();
+    void this.profile.start().then((row) => this.applyCloudProfile(row));
     // Every vsync callback goes through the limiter; skipped callbacks cost nothing (dt spans the rendered frames).
     this.r.renderer.setAnimationLoop((t) => {
       if (this.limiter.shouldRender(t)) this.frame(t);
@@ -211,15 +234,18 @@ export class GraaoApp {
         create: (name) => void this.online('create', '', name),
         join: (code, name) => void this.online('join', code, name),
         customize: () => this.setPhase('CHARACTER_CREATOR'),
+        history: () => void this.openHistory(),
         quality: (q) => {
           this.r.setQuality(q);
           this.vfx.setQuality(q);
           writeStorage(STORAGE.quality, q);
+          this.profile.save({ settings: { quality: q } });
           this.menu.setNote(q === 'LOW' ? 'BAIXA mantém jogadores, tiros e avisos de combate; menos grama e sem flores após recarregar.' : `Qualidade ${q === 'HIGH' ? 'ALTA' : 'MÉDIA'}`);
         },
         fpsCap: (c) => {
           this.limiter.cap = c;
           writeStorage(STORAGE.fpsCap, c);
+          this.profile.save({ settings: { fpsCap: c } });
           const hz = Math.round(this.limiter.refreshHz);
           this.menu.setNote(
             c === 0
@@ -244,8 +270,20 @@ export class GraaoApp {
       pick: (round, id) => this.net?.sendDraftPick(round, id),
       sound: (cue) => this.audio.play(cue),
     });
+    this.results = new ResultsScreen({
+      lobby: () => this.net?.sendReturnLobby(),
+      leave: () => this.leaveRoom(),
+      click: () => this.audio.play('ui.click'),
+    });
+    this.lobby = new LobbyPanel({
+      ready: (on) => this.combat.setReady(on),
+      play: () => this.input.requestLock(),
+      leave: () => this.leaveRoom(),
+      click: () => this.audio.play('ui.click'),
+    });
+    this.history = new HistoryPanel(() => this.history.show(false));
     this.hud.show(false);
-    this.ui.append(this.menu.el, this.creator.el, this.hud.el, this.draftUi.el);
+    this.ui.append(this.menu.el, this.history.el, this.creator.el, this.hud.el, this.lobby.el, this.draftUi.el, this.results.el);
     this.dev = new DevOverlay({ renderer: this.r.renderer, extra: () => this.devStats() });
 
     const canvas = this.r.canvas;
@@ -273,7 +311,8 @@ export class GraaoApp {
   /** Only the "click to play" prompt while the pointer is free; nothing over the game while playing. */
   private updateHint(): void {
     if (this.phase !== 'MATCH') return;
-    this.hud.setHint(this.input.locked ? '' : 'Clique para jogar · Esc de novo volta ao menu');
+    const quiet = this.input.locked || this.results.visible;
+    this.hud.setHint(quiet ? '' : this.net ? 'Clique no mundo para jogar · Esc de novo sai da sala' : 'Clique para jogar · Esc de novo volta ao menu');
   }
 
   private applyAppearance(a: CharacterAppearance): void {
@@ -281,6 +320,73 @@ export class GraaoApp {
     this.character.setAppearance(a);
     writeStorage(STORAGE.appearance, a);
     this.net?.sendAppearance(a);
+    this.profile.save({ appearance: a });
+  }
+
+  private rememberName(name: string): void {
+    this.name = name;
+    writeStorage(STORAGE.name, name);
+    this.profile.save({ name });
+  }
+
+  /**
+   * The cloud row arrived: it wins over this browser's copy, except for what the player already changed this session.
+   * No row yet (first sign-in): this browser's name, look and settings become the profile.
+   */
+  private applyCloudProfile(row: CloudProfile | null): void {
+    if (this.profile.status !== 'cloud') return;
+    const changed = this.profile.localChanges;
+    if (!row) {
+      this.profile.save({ name: this.name, appearance: this.appearance, settings: { quality: this.r.quality, fpsCap: this.limiter.cap } });
+      return;
+    }
+    // The cloud name, unless the player is typing a new one in the menu right now.
+    const typing = this.menu.name() !== '' && this.menu.name() !== this.name;
+    if (row.name && changed.display_name === undefined && !typing) {
+      this.name = row.name;
+      writeStorage(STORAGE.name, row.name);
+      this.menu.setName(row.name);
+    }
+    const look = migrateAppearance(row.appearance);
+    if (look && validateAppearance(look) && !changed.appearance) {
+      this.appearance = { ...look };
+      this.character.setAppearance(look);
+      writeStorage(STORAGE.appearance, look);
+      if (this.phase === 'CHARACTER_CREATOR') this.creator.setAppearance(look);
+      this.net?.sendAppearance(look);
+    }
+    const fps = row.settings.fpsCap;
+    if (!changed.settings && typeof fps === 'number' && (FPS_CAPS as readonly number[]).includes(fps)) {
+      this.limiter.cap = fps as FpsCap;
+      writeStorage(STORAGE.fpsCap, fps);
+    }
+  }
+
+  private showProfileStatus(): void {
+    const p = this.profile;
+    this.menu.setProfile(
+      p.status === 'cloud' ? '☁ Perfil salvo na nuvem' : p.status === 'connecting' ? 'Perfil: conectando…' : 'Convidado · salvo só neste navegador',
+      p.status === 'cloud',
+      p.detail,
+    );
+  }
+
+  private async openHistory(): Promise<void> {
+    this.history.show(true);
+    this.history.message('Carregando…');
+    try {
+      this.history.setEntries(await this.profile.history(8));
+    } catch (e) {
+      this.history.message(`Não deu para carregar o histórico (${(e as Error).message ?? e}).`);
+    }
+  }
+
+  /** Leaves the online room (lobby/results buttons, Esc twice) and goes back to the menu. */
+  leaveRoom(): void {
+    this.net?.leave();
+    this.net = null;
+    this.hud.setRoom(null);
+    this.setPhase('MENU');
   }
 
   /**
@@ -308,8 +414,12 @@ export class GraaoApp {
     if (p !== 'MATCH') {
       this.draftUi.show(false);
       this.deploy.reset();
+      this.results.hide();
+      this.lobby.show(false);
     }
     this.menu.show(p === 'MENU');
+    if (p !== 'MENU') this.history.show(false);
+    if (p === 'MENU') this.showProfileStatus();
     this.creator.show(p === 'CHARACTER_CREATOR');
     if (p === 'CHARACTER_CREATOR') this.creator.setAppearance(this.appearance);
     this.hud.show(p === 'MATCH');
@@ -326,8 +436,7 @@ export class GraaoApp {
   }
 
   private playSolo(): void {
-    this.name = this.menu.name();
-    writeStorage(STORAGE.name, this.name);
+    this.rememberName(this.menu.name());
     this.local.teleport({ x: this.spawn.x, y: this.spawn.y, z: this.spawn.z }, { x: this.menuFacing.x, y: this.menuFacing.y, z: this.menuFacing.z });
     this.camera.reset(this.spawn, this.menuFacing);
     this.hud.setRoom(null);
@@ -337,8 +446,7 @@ export class GraaoApp {
   }
 
   private async online(kind: 'create' | 'join', code: string, name: string): Promise<void> {
-    this.name = name;
-    writeStorage(STORAGE.name, name);
+    this.rememberName(name);
     this.menu.setBusy(true);
     this.menu.setNote(kind === 'create' ? 'Abrindo uma sala…' : `Entrando em ${code}…`);
     try {
@@ -369,12 +477,7 @@ export class GraaoApp {
     this.lastT = t;
     this.time += dt;
     if (this.input.consume('debug')) this.dev.toggle();
-    if (this.phase === 'MATCH' && !this.input.locked && this.input.consume('menu')) {
-      this.net?.leave();
-      this.net = null;
-      this.hud.setRoom(null);
-      this.setPhase('MENU');
-    }
+    if (this.phase === 'MATCH' && !this.input.locked && this.input.consume('menu')) this.leaveRoom();
 
     const feet = this.tmpPos;
     let facing = this.tmpFacing;
@@ -390,7 +493,7 @@ export class GraaoApp {
         feet.copy(this.deploy.focus);
       } else {
         this.camera.look(look.yaw, look.pitch);
-        this.camera.aim = this.input.isDown('aim') && this.combat.alive && !this.deploy.diving;
+        this.camera.aim = this.input.isDown('aim') && this.combat.alive && !this.deploy.diving && !this.local.state.swimming;
         const frame = this.camera.frame;
         const alpha = this.local.update(dt, this.input, frame, !!this.net, this.combat.frozen);
         this.net?.update(dt);
@@ -410,10 +513,13 @@ export class GraaoApp {
         aimPitch: Math.asin(THREE.MathUtils.clamp(s.aim.x * up.x + s.aim.y * up.y + s.aim.z * up.z, -1, 1)),
         action: this.combat.animAction(),
         diving: s.diving,
+        airJumped: s.airJumped,
         groundDist: this.deploy.groundDist,
+        waterDepth: waterDepth(feet),
       };
       if (!riding) this.obstruction.update(dt, this.r.camera.position, feet, up);
       this.updatePlace(feet);
+      this.updateLobby();
     } else {
       feet.copy(this.spawn);
       if (this.phase === 'CHARACTER_CREATOR') {
@@ -429,6 +535,8 @@ export class GraaoApp {
     this.character.setPose(feet, this.tmpUp.copy(feet).normalize(), facing);
     this.character.update(dt, anim);
     if (this.phase === 'MATCH') this.combat.present();
+    this.water.update(dt);
+    this.presentAirJumps();
     for (const c of this.lineup) c.update(dt, { moveState: MovementState.IDLE, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE });
     this.vfx.update(dt);
     this.draftUi.update(this.net ? this.net.serverNow() : Date.now());
@@ -438,6 +546,41 @@ export class GraaoApp {
     this.r.render();
     this.frameMs = performance.now() - t0;
     this.dev.frame();
+  }
+
+  /** Double jumps (ours and everyone else's, once each): a puff of air kicked down from the feet and a soft swish. */
+  private presentAirJumps(): void {
+    const remotes = this.net ? [...this.net.remotePlayers].map((r) => r.character) : [];
+    for (const c of [this.character, ...remotes]) {
+      if (!c.consumeAirJump() || !c.root.visible) continue;
+      const feet = c.root.position;
+      const down = this.tmpUp.copy(feet).normalize().negate();
+      this.vfx.burst(feet, down, { color: '#f4f7ff', count: 10, speed: 3.2, size: 0.14, life: 0.38, drag: 5, spread: 1.25, shape: Shape.DOT, category: 'CombatBurst' });
+      this.vfx.burst(feet, down, { color: '#ffffff', count: 1, speed: 0, speedJitter: 0, size: 1.1, sizeJitter: 0, life: 0.26, shape: Shape.RING, category: 'CombatBurst' });
+      if (c === this.character) {
+        this.audio.play('jump.air', { volume: 0.7 });
+        continue;
+      }
+      const cam = this.r.camera;
+      const d = new THREE.Vector3().subVectors(feet, cam.position);
+      const dist = d.length();
+      if (dist > 40) continue;
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+      this.audio.play('jump.air', { volume: 0.7 / (1 + dist / 12), pan: dist > 0.01 ? d.dot(right) / dist : 0, muffle: Math.min(0.8, dist / 60) });
+    }
+  }
+
+  /** The room's lobby panel: online, between matches, pointer free, nothing else over the world. */
+  private resultsUp = false;
+  private updateLobby(): void {
+    if (this.results.visible !== this.resultsUp) {
+      this.resultsUp = this.results.visible;
+      this.updateHint();
+    }
+    const net = this.net;
+    const show = !!net && this.combat.phase === MatchPhase.FREE_ROAM && !this.input.locked && !this.draftUi.visible && !this.results.visible;
+    if (show !== this.lobby.visible) this.lobby.show(show);
+    if (show && net) this.lobby.update(net.code, [...this.combat.roomPlayers], net.myIndex);
   }
 
   /** Menu framing: the character on the right third, the village and the sky behind. */
@@ -518,7 +661,7 @@ export class GraaoApp {
       fase: this.deploy && this.deploy.mode !== 'none' ? `${this.phase} / ${this.deploy.mode}` : this.phase,
       'tris OVNI': this.deploy?.ufo.triangles ?? 0,
       posição: s ? `lat ${lat.toFixed(1)} lon ${lon.toFixed(1)} r ${Math.hypot(s.pos.x, s.pos.y, s.pos.z).toFixed(2)}` : '-',
-      movimento: s ? `${stateName(s.moveState)} ${this.local.speed().toFixed(2)} m/s ${s.grounded ? 'no chão' : 'no ar'}` : '-',
+      movimento: s ? `${stateName(s.moveState)} ${this.local.speed().toFixed(2)} m/s ${s.grounded ? 'no chão' : 'no ar'}${waterDepth(s.pos) > 0 ? ` · água ${waterDepth(s.pos).toFixed(2)} m` : ''}` : '-',
       planeta: `R ${PLANET.radius} m`,
       'carga ms': Object.entries(this.loadMs).map(([k, v]) => `${k} ${v}`).join(' · '),
       animações: this.anims.report ? `${this.anims.clips.size} clipes, ${this.anims.report.ms.toFixed(0)} ms, fonte ${[...new Set(Object.values(this.anims.report.source))].join('/')}` : '-',

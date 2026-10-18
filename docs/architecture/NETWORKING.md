@@ -7,7 +7,8 @@ untrusted: they send **intent** only. Typed protocol in `packages/shared/src/pro
 
 ```
 client                                  server (GraaoMatchRoom, 20 Hz)
-create / joinById(code, JoinOptions) ─► onJoin: protocol check, appearance validation, spawn
+create / joinById(code, JoinOptions) ─► onAuth: Supabase token (optional) → verified user id or guest
+                                        onJoin: protocol check, appearance validation, spawn
                        ◄─ WELCOME {you, index, code, serverTime, tickHz, spawn}
                        ◄─ ROOM_STATE {phase, startsAt, phaseEndsAt, winner, players[name, appearance, ready,
                                        inMatch, kills, deaths]}   (reliable, on change)
@@ -20,6 +21,10 @@ READY {r}              ─► warmup only; everyone ready (≥ 2) starts the mat
 FIRE {s, w, o, d, a}   ─► validated (phase, slot, seq, fire rate, ammo, origin near head) → hitscan → damage
 RELOAD / SWITCH_WEAPON ─► validated
 UFO_JUMP {}            ─► UFO phase, aboard, inside the jump window → the dive starts on the server
+                       ◄─ MATCH_SUMMARY {code, winner, startedAt, endedAt, durationMs, players[placement, kills,
+                                         damage dealt/taken, shots, hits, spells, loadout, left]}   (once, at the end)
+RETURN_LOBBY {}        ─► RESULTS only; everyone asked (or the timer) → back to the warmup lobby
+                       ◄─ NOTICE {kind, code: MATCH_SAVED, text}  (private: the match reached your history)
                        ◄─ EVENTS {t, ev: shot | dmg | elim | respawn | reload | cast | proj | projEnd | area | fx
                                   | jump | land}   (broadcast per tick when any)
                        ◄─ SELF {weapon, ammo[], reloading, reloadEndsAt, alive, respawnAt, shotSeq}  (private, on change)
@@ -34,6 +39,12 @@ the UFO phase) and a per-player `deploy` state (NONE / SHIP / DIVING / LANDED); 
 exact start of the dive the server simulates, which the jumper's client predicts from — and
 `land {target, at, water}`. Riders are not simulated: their commands are acknowledged and dropped (see
 `docs/gameplay/UFO_DEPLOYMENT.md`).
+
+Protocol version 6 (0.6.0): the complete match loop. `MATCH_SUMMARY` (the server's MatchLedger: every number is its
+own count, never a client's claim), `RETURN_LOBBY` (a vote during RESULTS), ROOM_STATE players gain `wins` (the
+room's running score) and `back` (asked to return), `NOTICE` `MATCH_SAVED`. `JoinOptions.token` carries the
+Supabase access token; the server verifies it (JWKS, ES256) and keeps only the user id — identity never comes from
+what a client says about itself.
 
 ## Authority and anti-abuse
 

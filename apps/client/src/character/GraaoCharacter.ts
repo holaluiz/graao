@@ -2,7 +2,8 @@
  * GraaoCharacter: one visual character instance.
  *
  *   root (PlayerRoot visual, aligned to localUp on the planet)
- *   └── visualRoot (CharacterVisualRoot: the skydive tilt, belly-down while diving, feet-first near the ground)
+ *   └── visualRoot (CharacterVisualRoot: the skydive tilt, belly-down while diving, feet-first near the ground; the
+ *         double-jump flip; lifted to the water line while swimming)
  *         ├── Hips … (GRA_Rig_MixamoCompatible bones)
  *         ├── mesh     (merged SkinnedMesh: body + clothes + hair + accessory, palette material)
  *         └── outline  (same geometry, inverted-hull ink)
@@ -10,8 +11,9 @@
  * The gameplay capsule lives elsewhere (game-core); this class only presents it.
  */
 import * as THREE from 'three';
-import type { CharacterAppearance } from '@graao/shared';
-import { createOutlineMaterial, createStylizedMaterial, setPalette } from '../render/materials/GRAStylizedMaterial';
+import { MOVEMENT } from '@graao/game-data';
+import { MovementState, type CharacterAppearance } from '@graao/shared';
+import { createOutlineMaterial, createStylizedMaterial, setPalette, setWetness } from '../render/materials/GRAStylizedMaterial';
 import { buildSkeleton, type BoneName, type GRARig } from './rig/GRARig';
 import { buildPalette, geometryKey, type CharacterPartLibrary } from './CharacterAppearanceController';
 import { CharacterAnimationController, type AnimInput } from './CharacterAnimationController';
@@ -36,6 +38,24 @@ export class GraaoCharacter {
   private tilt = 0;
   private static readonly TILT_PIVOT = 0.95;
   private static readonly TILT_DIVE = 1.3;
+  /** Double jump: a forward flip about the same hips pivot, FLIP_TIME s long (progress 0..1, 1 = done). */
+  private flip = 1;
+  private wasAirJumped = false;
+  private airJumpPending = false;
+  private static readonly FLIP_TIME = 0.5;
+  /**
+   * Wetness after the water: how high on the body (m above the feet) it reached and how wet that still is (1 soaked →
+   * 0 dry). Soaked for WET_HOLD s after leaving the water, then dries over WET_DRY s.
+   */
+  wetLine = 0;
+  wetness = 0;
+  private dryTime = 0;
+  private static readonly WET_HOLD = 5;
+  private static readonly WET_DRY = 14;
+  /** Current lift (m) of the body from the capsule's feet to the water line while swimming. */
+  private swimLift = 0;
+  private readonly feet = new THREE.Vector3();
+  private readonly up = new THREE.Vector3(0, 1, 0);
 
   constructor(
     private readonly parts: CharacterPartLibrary,
@@ -120,6 +140,8 @@ export class GraaoCharacter {
     const m = new THREE.Matrix4().makeBasis(side, up, fwd);
     this.root.quaternion.setFromRotationMatrix(m);
     this.root.position.copy(feet);
+    this.feet.copy(feet);
+    this.up.copy(up);
   }
 
   update(dt: number, s: AnimInput): void {
@@ -128,10 +150,54 @@ export class GraaoCharacter {
     const target = s.diving ? THREE.MathUtils.lerp(0.15, GraaoCharacter.TILT_DIVE, flare) : 0;
     this.tilt += (target - this.tilt) * (1 - Math.exp(-dt * (s.diving ? 5 : 9)));
     if (Math.abs(this.tilt) < 1e-4 && target === 0) this.tilt = 0;
+    // Double jump (rising edge of the spent flag while airborne): a tucked forward flip, fast out and easing in.
+    const airJumped = !!s.airJumped && !s.grounded;
+    if (airJumped && !this.wasAirJumped) {
+      this.flip = 0;
+      this.airJumpPending = true;
+      this.anim.playOneShot('jumpStart', { speed: 1.8 });
+    }
+    this.wasAirJumped = airJumped;
+    if (s.grounded || s.moveState === MovementState.SWIM) this.flip = 1;
+    else if (this.flip < 1) this.flip = Math.min(1, this.flip + dt / GraaoCharacter.FLIP_TIME);
+    const spin = this.flip < 1 ? Math.PI * 2 * (1 - (1 - this.flip) ** 2) : 0;
     const h = GraaoCharacter.TILT_PIVOT;
-    this.visualRoot.rotation.set(this.tilt, 0, 0);
-    this.visualRoot.position.set(0, h * (1 - Math.cos(this.tilt)), -h * Math.sin(this.tilt));
+    // The swim clips are authored with their origin at the water line (head out, legs hanging below it): while
+    // swimming the body is lifted from the capsule's feet up to the surface.
+    const swimming = s.moveState === MovementState.SWIM;
+    const lift = swimming ? THREE.MathUtils.clamp(s.waterDepth ?? MOVEMENT.swimFloatDepth, 0, MOVEMENT.swimFloatDepth + 0.25) : 0;
+    this.swimLift = THREE.MathUtils.damp(this.swimLift, lift, 8, dt);
+    if (Math.abs(this.swimLift) < 1e-4 && lift === 0) this.swimLift = 0;
+    const pitch = this.tilt + spin;
+    this.visualRoot.rotation.set(pitch, 0, 0);
+    this.visualRoot.position.set(0, h * (1 - Math.cos(pitch)) + this.swimLift, -h * Math.sin(pitch));
+    this.updateWetness(dt, s.waterDepth, swimming);
     this.anim.update(dt, s);
+  }
+
+  /** True once per double jump (the frame its flip starts): the caller puffs air under the feet. */
+  consumeAirJump(): boolean {
+    const p = this.airJumpPending;
+    this.airJumpPending = false;
+    return p;
+  }
+
+  private updateWetness(dt: number, depth: number | undefined, swimming: boolean): void {
+    if (depth !== undefined && depth > 0.02) {
+      // In the water: soaked up to the surface (all over when swimming: splashes reach the hair).
+      const line = swimming ? 2.4 : depth + 0.1;
+      this.wetLine = this.wetness > 0.05 ? Math.max(this.wetLine, line) : line;
+      this.wetness = 1;
+      this.dryTime = 0;
+    } else if (this.wetness > 0) {
+      this.dryTime += dt;
+      this.wetness = 1 - THREE.MathUtils.smoothstep(this.dryTime, GraaoCharacter.WET_HOLD, GraaoCharacter.WET_HOLD + GraaoCharacter.WET_DRY);
+      if (this.wetness <= 0.001) {
+        this.wetness = 0;
+        this.wetLine = 0;
+      }
+    }
+    setWetness(this.material, this.wetness, this.wetLine, this.feet, this.up);
   }
 
   setFade(f: number): void {

@@ -7,7 +7,7 @@ import { Client, type Room } from '@colyseus/sdk';
 import { createCharacterState, type CharacterState, type PlayerHitTarget } from '@graao/game-core';
 import {
   type ActionState,
-  type MovementState,
+  MovementState,
   C2S,
   CLIENT_VERSION,
   FACING_SCALE,
@@ -28,6 +28,8 @@ import {
   type FireMsg,
   type InputMsg,
   type JoinOptions,
+  type MatchSummaryMsg,
+  type NoticeMsg,
   type PongMsg,
   type RoomStateMsg,
   type SelfStatusMsg,
@@ -91,6 +93,11 @@ export class NetSession {
     return this.rtt_;
   }
 
+  /** Every remote player (presentation directors iterate them). */
+  get remotePlayers(): IterableIterator<RemotePlayer> {
+    return this.remotes.values();
+  }
+
   remote(index: number): RemotePlayer | undefined {
     return this.remotes.get(index);
   }
@@ -102,7 +109,9 @@ export class NetSession {
 
   static async connect(app: GraaoApp, kind: 'create' | 'join', code: string, name: string): Promise<NetSession> {
     const client = new Client(serverUrl());
-    const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance };
+    // A signed-in player proves who they are with the Supabase access token (the server verifies it); else a guest.
+    const token = await app.profile.accessToken();
+    const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(token ? { token } : {}) };
     let room: Room;
     try {
       room = kind === 'create' ? await client.create(ROOM_NAME, options) : await client.joinById(code.toUpperCase(), options);
@@ -138,7 +147,8 @@ export class NetSession {
       room.onMessage(S2C.SELF, (m: SelfStatusMsg) => this.app.combat.onSelf(m));
       room.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => this.app.combat.abilities.onResult(m));
       room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => this.app.onDraftState(m));
-      room.onMessage(S2C.NOTICE, (m: { text: string }) => console.info('[graao] notice', m.text));
+      room.onMessage(S2C.MATCH_SUMMARY, (m: MatchSummaryMsg) => this.app.combat.onSummary(m));
+      room.onMessage(S2C.NOTICE, (m: NoticeMsg) => this.app.combat.onNotice(m));
       room.onLeave((codeNum: number) => {
         if (!this.left) {
           console.warn('[graao] disconnected', codeNum);
@@ -228,8 +238,10 @@ export class NetSession {
         st.grounded = (flags & SnapFlag.GROUNDED) !== 0;
         st.aiming = (flags & SnapFlag.AIMING) !== 0;
         st.diving = (flags & SnapFlag.DIVING) !== 0;
+        st.airJumped = (flags & SnapFlag.AIR_JUMPED) !== 0;
         st.airTime = st.grounded ? 0 : 1;
         st.moveState = move as CharacterState['moveState'];
+        st.swimming = move === MovementState.SWIM;
         st.aim = { ...this.app.local.state.aim };
         if (this.app.combat.consumeSnap()) {
           // Respawn / match start: the server moved us; teleport instead of reconciling across the planet.
@@ -314,6 +326,10 @@ export class NetSession {
 
   sendReady(ready: boolean): void {
     if (!this.left) this.room.send(C2S.READY, { r: ready ? 1 : 0 });
+  }
+
+  sendReturnLobby(): void {
+    if (!this.left) this.room.send(C2S.RETURN_LOBBY, {});
   }
 
   leave(): void {

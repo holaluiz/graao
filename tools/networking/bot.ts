@@ -6,6 +6,7 @@
  * ability after a short think (--pick sun_orb,wind_step,... tries those first, round by round: handy to force a
  * conflict with a human); --idle-draft never picks (the server chooses for it when time runs out).
  * UFO: --jump 2 leaves the ship 2 s after the hatch opens (without it the bot rides until it is dropped at the close).
+ * Results: --lobby 3 asks to go back to the lobby 3 s after a match ends (without it the room waits for its timer).
  */
 import { Client } from '@colyseus/sdk';
 import { randomAppearance } from '@graao/game-data';
@@ -27,6 +28,7 @@ import {
   v3rotateAxis,
   type DraftStateMsg,
   type InputCmd,
+  type MatchSummaryMsg,
   type RoomStateMsg,
   type UfoRouteMsg,
   type SnapshotMsg,
@@ -63,8 +65,17 @@ const wanted = arg('pick', '').split(',').filter(Boolean);
 let ready = false;
 const jumpAfter = args.includes('--jump') ? Number(arg('jump', '2')) : -1;
 let jumpRoute: UfoRouteMsg | null = null;
+const lobbyAfter = args.includes('--lobby') ? Number(arg('lobby', '3')) : -1;
+let lastPhase = -1;
 room.onMessage(S2C.ROOM_STATE, (m: RoomStateMsg) => {
   const me = m.players.find((p) => p.index === index);
+  if (m.phase !== lastPhase && m.phase === MatchPhase.RESULTS && lobbyAfter >= 0) {
+    setTimeout(() => {
+      room.send(C2S.RETURN_LOBBY, {});
+      console.log('[bot] back to the lobby');
+    }, lobbyAfter * 1000);
+  }
+  lastPhase = m.phase;
   if (jumpAfter >= 0 && m.ufo && me?.deploy === 1 && m.ufo.t0 !== jumpRoute?.t0) {
     jumpRoute = m.ufo;
     // Server time ≈ local time on one machine; good enough for a test bot.
@@ -97,6 +108,9 @@ room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => {
     draftTimer = null;
     room.send(C2S.DRAFT_PICK, { r: round, a: id });
   }, m.repick ? 900 : 1500 + Math.random() * 1500);
+});
+room.onMessage(S2C.MATCH_SUMMARY, (m: MatchSummaryMsg) => {
+  console.log(`[bot] match over in ${Math.round(m.durationMs / 1000)} s: ${m.players.map((p) => `${p.placement}º ${p.name} (${p.kills} elim., ${p.damageDealt} dano)`).join(' · ')}`);
 });
 for (const t of [S2C.PONG, S2C.SELF, S2C.EVENTS, S2C.ABILITY_RESULT, S2C.NOTICE]) room.onMessage(t, () => {});
 

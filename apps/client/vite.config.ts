@@ -13,6 +13,8 @@ export default defineConfig({
           if (id.includes('node_modules/three')) return 'three';
           if (id.includes('rapier3d')) return 'rapier';
           if (id.includes('colyseus')) return 'net';
+          // Loaded lazily behind the menu (cloud profile); never on the startup path.
+          if (id.includes('@supabase')) return 'supabase';
           return undefined;
         },
       },

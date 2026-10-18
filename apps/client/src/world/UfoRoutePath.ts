@@ -1,8 +1,8 @@
 /**
  * The UFO's route drawn like a dotted line on an illustrated map, so the deployment path reads at a glance:
  *
- *   - sky dots along the orbit: small paper-white dots before the hatch opens, bigger sun-yellow dots over the jump
- *     window, faded once the ship has passed them;
+ *   - sky dots along the orbit (one lap at most): small paper-white dots before the hatch opens, bigger sun-yellow
+ *     dots over the jump window, faded once the ship has passed them;
  *   - ground dots under the window: where a straight drop would land.
  *
  * One THREE.Points draw call with a fixed on-screen dot size and an ink edge. Rebuilt once per route.
@@ -66,7 +66,7 @@ export class UfoRoutePath {
     this.points.visible = false;
   }
 
-  /** Builds the dots for a route (sky from start to a little past the window, ground under the window). */
+  /** Builds the dots for a route (sky from start to a little past the window, ground under the window; one lap max). */
   setRoute(r: UfoRouteMsg): void {
     if (this.route && JSON.stringify(this.route) === JSON.stringify(r)) return;
     this.route = r;
@@ -83,14 +83,20 @@ export class UfoRoutePath {
       return { x: f.c.x * c + f.h.x * s, y: f.c.y * c + f.h.y * s, z: f.c.z * c + f.h.z * s };
     };
     const step = (1.4 * Math.PI) / 180;
-    for (let a = a0; a <= aClose + step * 4; a += step) {
+    // At most one lap of dots: a window that covers the whole orbit hides the approach and the tail under it.
+    const lap = Math.PI * 2;
+    const skyEnd = Math.min(aClose + step * 4, aOpen + lap);
+    const skyStart = Math.max(a0, skyEnd - lap);
+    const skySpan = Math.min(skyEnd - skyStart, lap - step * 0.5);
+    for (let a = skyStart; a <= skyStart + skySpan; a += step) {
       const p = at(a, f.radius);
       pos.push(p.x, p.y, p.z);
       angle.push(a);
       kind.push(a >= aOpen && a <= aClose ? 1 : 0);
     }
     // Ground track under the window, slightly denser.
-    for (let a = aOpen; a <= aClose; a += step * 0.7) {
+    const groundEnd = aOpen + Math.min(aClose - aOpen, lap - step * 0.35);
+    for (let a = aOpen; a <= groundEnd; a += step * 0.7) {
       const d = at(a, 1);
       const g = this.world.terrain.surfaceAt(d);
       pos.push(g.x + d.x * 0.8, g.y + d.y * 0.8, g.z + d.z * 0.8);

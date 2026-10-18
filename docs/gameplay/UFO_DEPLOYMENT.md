@@ -17,8 +17,12 @@ and in the integration suite; not yet played person vs person on two machines.
 ## Rules and numbers (`@graao/game-data` `UFO`, `MOVEMENT.dive*`)
 
 - Orbit radius 200 m (100 m above the sea), a great circle through a point ≤ 10° from the arena centre (Lantern
-  Village) with a random heading. The jump window spans 80° of arc centred on that point; the ship flies at 19.9 m/s.
-- Reveal 4.5 s, window 14 s. Out of the hatch: 3 m under the hull, 6 m/s along the course.
+  Village) with a random heading. The jump window is one full lap (360°): the hatch opens 10° before that point and
+  closes when the ship is back there, so a player can drop anywhere under the route (plus the steering reach either
+  side), while jumping at once or being dropped at the close still lands by the village. The ship flies at 41.9 m/s
+  (the ground track moves at 20.9 m/s).
+- Reveal 4.5 s, window 30 s (solo too, with a 3.4 s reveal). Out of the hatch: 3 m under the hull, 6 m/s along the
+  course.
 - Skydive: terminal 22 m/s (head-first with Shift 38 m/s, braking back at 30 m/s²), steering 13 m/s (6 m/s head-first),
   acceleration 16 m/s². Measured over 10 routes from the middle of the window (`tools/profiling/dive-stats.ts`):
   4.9 s to the ground, 3.4 s head-first, ≈ 42 m of reach steering straight ahead.
@@ -65,7 +69,10 @@ Before skipping grass/flowers from high up the reveal drew 122 calls and 1.01 M 
 
 - The jump starts on the server's confirmation (one round trip). Predicting it would need the client to agree on the
   jump time; the hatch sound and panel cover the wait today.
-- Landing spots are free: someone can glide to a far corner. There is no closing zone yet (see the directive's
+- Landing spots are free: with the full-lap window two players can land on opposite sides of the planet, and the
+  first one down may wait up to the whole window for the other. There is no closing zone yet (see the directive's
   spherical zone design: centre direction + angular radius).
+- One great circle reaches a band ≈ 40 m wide either side of the ground track (about 40 % of the surface); the
+  poles of the route stay out of reach in a given match (a new random heading every match moves the band).
 - The route ignores where players currently stand; with more than 2 players a wider window or several passes may be
   needed.

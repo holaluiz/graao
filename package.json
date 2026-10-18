@@ -32,6 +32,7 @@
     "@gltf-transform/core": "4.5.1",
     "@gltf-transform/extensions": "4.5.1",
     "@gltf-transform/functions": "4.5.1",
+    "@graao/database": "workspace:*",
     "@graao/game-core": "workspace:*",
     "@graao/game-data": "workspace:*",
     "@graao/shared": "workspace:*",

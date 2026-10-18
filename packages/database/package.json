@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Supabase schema (migrations), row types and thin data access helpers.",
-  "exports": { ".": "./src/index.ts" },
+  "description": "Supabase schema (migrations) and the shapes that cross it (profiles, match results, history).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
-    "@graao/shared": "workspace:*",
-    "@supabase/supabase-js": "2.118.0"
+    "@graao/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@graao/game-core": "workspace:*"
   }
 }

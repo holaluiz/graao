@@ -4,5 +4,7 @@ interface ImportMetaEnv {
   readonly VITE_ASSET_BASE?: string;
   readonly VITE_SUPABASE_URL?: string;
   readonly VITE_SUPABASE_ANON_KEY?: string;
+  /** Supabase publishable key (safe in the browser; RLS protects the data). */
+  readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string;
 }
 declare const __BUILD_TIME__: string;

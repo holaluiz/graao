@@ -44,6 +44,7 @@ const vertex = /* glsl */ `
 #ifdef USE_PALETTE
 attribute float aSlot;
 uniform vec3 uPalette[${PALETTE_SIZE}];
+varying float vSoak;
 #endif
 #ifdef USE_INSTANCE_FADE
 attribute float instanceFade;
@@ -88,6 +89,8 @@ void main() {
     int slot = int(aSlot + 0.5);
     vBase = uPalette[slot];
     vUnlit = (slot == 2 || slot == 3) ? 0.9 : 0.0;
+    // How much a soaking darkens this part: cloth and hair fully, skin a little, eyes and ink not at all.
+    vSoak = (slot == 2 || slot == 3) ? 0.0 : (slot == 0 || slot == 1 || slot == 15) ? 0.3 : 1.0;
   #endif
   vFade = 0.0;
   #ifdef USE_INSTANCE_FADE
@@ -142,6 +145,13 @@ uniform vec3 uSandColor;
 uniform vec3 uRockColor;
 uniform vec3 uCliffColor;
 #endif
+#ifdef USE_PALETTE
+varying float vSoak;
+uniform float uWet;
+uniform float uWetLine;
+uniform vec3 uFeet;
+uniform vec3 uBodyUp;
+#endif
 
 void main() {
   vec3 N = normalize(vWorldNormal);
@@ -149,6 +159,16 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
   vec3 up = normalize(vWorldPos);
   vec3 base = vBase;
+
+  // Wet (characters out of the water): soaked below the line the water reached, darker and richer, drying over time.
+  float wet = 0.0;
+  #ifdef USE_PALETTE
+    if (uWet > 0.001) {
+      float hb = dot(vWorldPos - uFeet, uBodyUp) + (graNoise3(vWorldPos * 11.0) - 0.5) * 0.07;
+      wet = uWet * (1.0 - smoothstep(uWetLine - 0.04, uWetLine + 0.04, hb));
+      base = mix(base, pow(base, vec3(1.35)) * 0.8, wet * vSoak);
+    }
+  #endif
 
   #ifdef USE_TERRAIN
     // Terrain coloring from height and slope, broken up by large world-space pigment patches.
@@ -167,8 +187,9 @@ void main() {
   // Sun: soft graphic ramp × shadow map.
   float ndl = 0.6;
   float shadow = 1.0;
+  vec3 L = up;
   #if NUM_DIR_LIGHTS > 0
-    vec3 L = normalize(inverseTransformDirection(directionalLights[0].direction, viewMatrix));
+    L = normalize(inverseTransformDirection(directionalLights[0].direction, viewMatrix));
     ndl = dot(N, L);
     #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
       shadow = receiveShadow ? getShadow(directionalShadowMap[0], directionalLightShadows[0].shadowMapSize, directionalLightShadows[0].shadowIntensity, directionalLightShadows[0].shadowBias, directionalLightShadows[0].shadowRadius, vDirectionalShadowCoord[0]) : 1.0;
@@ -194,6 +215,12 @@ void main() {
   float rim = 1.0 - clamp(dot(N, V), 0.0, 1.0);
   col *= 1.0 - uEdgePooling * smoothstep(0.5, 1.0, rim);
   col += uRimColor * uRim * smoothstep(0.6, 1.0, rim) * (0.35 + 0.65 * lit);
+  if (wet > 0.001) {
+    // Wet sheen: crisp painted sun glints and a cool rim of reflected sky.
+    float spec = pow(max(dot(N, normalize(L + V)), 0.0), 40.0);
+    col += vec3(1.0, 0.97, 0.9) * smoothstep(0.3, 0.55, spec) * 0.4 * wet * (0.3 + 0.7 * shadow);
+    col += vec3(0.62, 0.8, 1.0) * smoothstep(0.55, 1.0, rim) * 0.22 * wet;
+  }
 
   col = mix(col, base, vUnlit);
 
@@ -259,6 +286,10 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
       uTime: { value: 0 },
       uPlanetRadius: { value: 100 },
       uSeaLevel: { value: -0.7 },
+      uWet: { value: 0 },
+      uWetLine: { value: 0 },
+      uFeet: { value: new THREE.Vector3() },
+      uBodyUp: { value: new THREE.Vector3(0, 1, 0) },
       uGrassColor: { value: new THREE.Color('#72b04e') },
       uGrassDry: { value: new THREE.Color('#a9b852') },
       uSandColor: { value: new THREE.Color('#e6cf9c') },
@@ -285,6 +316,18 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
 export function setPalette(m: THREE.ShaderMaterial, colors: THREE.Color[]): void {
   const pal = m.uniforms.uPalette!.value as THREE.Color[];
   for (let i = 0; i < pal.length; i++) pal[i]!.copy(colors[i] ?? pal[i]!);
+}
+
+/**
+ * Wetness of a character material: `amount` 0 (dry) … 1 (soaked), below `line` m above the feet; `feet`/`up` place
+ * that line on the body in world space (set every frame with the pose).
+ */
+export function setWetness(m: THREE.ShaderMaterial, amount: number, line: number, feet: THREE.Vector3, up: THREE.Vector3): void {
+  const u = m.uniforms;
+  u.uWet!.value = amount;
+  u.uWetLine!.value = line;
+  (u.uFeet!.value as THREE.Vector3).copy(feet);
+  (u.uBodyUp!.value as THREE.Vector3).copy(up);
 }
 
 // ------------------------------------------------------------------------------------------------ outline

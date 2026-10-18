@@ -4,7 +4,7 @@
  * derived locally.
  */
 import * as THREE from 'three';
-import { GROUPS_WORLD_QUERY, type GamePhysics } from '@graao/game-core';
+import { GROUPS_WORLD_QUERY, waterDepth, type GamePhysics } from '@graao/game-core';
 import { PLANET } from '@graao/game-data';
 import { ActionState, MovementState, SnapFlag, type CharacterAppearance } from '@graao/shared';
 import type { GRAAnimationLibrary } from '../character/animation/GRAAnimationLibrary';
@@ -39,6 +39,8 @@ export class RemotePlayer {
   /** Riding the UFO (hidden inside the ship) / skydiving (from the latest snapshot). */
   onShip = false;
   diving = false;
+  /** In deep water (from the latest snapshot's movement state). */
+  swimming = false;
 
   constructor(
     readonly index: number,
@@ -85,6 +87,7 @@ export class RemotePlayer {
     this.extrapolatedMs = extrapolateMs;
     this.onShip = (b.flags & SnapFlag.ON_SHIP) !== 0;
     this.diving = !this.onShip && (b.flags & SnapFlag.DIVING) !== 0;
+    this.swimming = !this.onShip && b.moveState === MovementState.SWIM;
     this.character.root.visible = !this.onShip;
     if (this.onShip) {
       this.pos.copy(b.pos);
@@ -105,6 +108,8 @@ export class RemotePlayer {
     if (this.diving) {
       const hit = physics.castRay({ x: this.pos.x + up.x * 0.3, y: this.pos.y + up.y * 0.3, z: this.pos.z + up.z * 0.3 }, { x: -up.x, y: -up.y, z: -up.z }, 400);
       groundDist = hit ? Math.max(0, hit.toi - 0.3) : undefined;
+      // Over a lake the dive ends at the surface, not on the bed.
+      if (groundDist !== undefined) groundDist = Math.min(groundDist, Math.max(0, -waterDepth(this.pos)));
     }
     this.character.update(dt, {
       moveState: b.moveState,
@@ -114,7 +119,9 @@ export class RemotePlayer {
       aimPitch: a.aimPitch + (b.aimPitch - a.aimPitch) * alpha,
       action: (b.flags & SnapFlag.ALIVE) === 0 ? ActionState.DEAD : b.action,
       diving: this.diving,
+      airJumped: (b.flags & SnapFlag.AIR_JUMPED) !== 0,
       groundDist,
+      waterDepth: waterDepth(this.pos),
     });
     this.placeLabel(up, camera, viewport, physics);
   }

@@ -15,10 +15,12 @@ import {
   decodeInput,
   newInput,
   startDash,
+  stepBreath,
   type CharacterBody,
   type CharacterState,
   type GamePhysics,
 } from '@graao/game-core';
+import { MOVEMENT } from '@graao/game-data';
 import { AIM_SCALE, InputButton, SIM_DT, WISH_SCALE, type InputCmd, type Vec3 } from '@graao/shared';
 import type { Input } from './Input';
 import type { CameraFrame } from './GraaoThirdPersonCamera';
@@ -40,6 +42,11 @@ export class LocalPlayer {
   private dash: { seq: number; dir: Vec3; distance: number; duration: number } | null = null;
   /** Mirrored speed multiplier while slowed by an ability (set every frame by the ability director). */
   slow = 1;
+  /**
+   * Air left (s) under water, predicted with the server's rule (stepBreath) on every new command; never rebuilt on
+   * reconciliation (snapshots do not carry it), the server only decides the drowning damage.
+   */
+  breath: number = MOVEMENT.breathTime;
   stats = { replayed: 0, lastCorrection: 0, pending: 0 };
 
   constructor(private readonly physics: GamePhysics, spawn: Vec3, facing: Vec3) {
@@ -55,6 +62,7 @@ export class LocalPlayer {
     this.pending.length = 0;
     this.correction.set(0, 0, 0);
     this.dash = null;
+    this.breath = MOVEMENT.breathTime;
   }
 
   /** Sequence number of the next movement command this player will simulate. */
@@ -124,6 +132,7 @@ export class LocalPlayer {
       const cmd = this.buildCmd(input, cam, frozen);
       this.prev = cloneCharacterState(this.state);
       this.stepCmd(this.state, cmd);
+      this.breath = stepBreath(this.breath, this.state.pos, SIM_DT);
       if (networked) {
         this.pending.push(cmd);
         this.outbox.push(cmd);
