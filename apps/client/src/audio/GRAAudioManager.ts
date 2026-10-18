@@ -8,6 +8,8 @@
  * MVP sounds are synthesized (oscillators + filtered noise), so the game ships zero audio files for now and every
  * cue is tweakable in code. Recorded assets can replace any cue later behind the same names.
  */
+import { Ambience } from './Ambience';
+
 export type AudioCategory = 'threat' | 'weapons' | 'abilities' | 'match' | 'ui' | 'music' | 'environment';
 export type AudioState = 'NORMAL' | 'LOW_HEALTH' | 'UFO' | 'POST_MATCH';
 
@@ -27,6 +29,8 @@ export type Cue =
   | 'switch'
   | 'ui.click'
   | 'ui.ready'
+  // Character creator: a piece of clothing swapped (cloth swish and a soft pop).
+  | 'ui.swap'
   | 'countdown'
   | 'go'
   | 'victory'
@@ -91,6 +95,7 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   switch: 'weapons',
   'ui.click': 'ui',
   'ui.ready': 'ui',
+  'ui.swap': 'ui',
   'draft.lock': 'ui',
   'draft.reveal': 'match',
   'draft.lost': 'match',
@@ -158,6 +163,8 @@ export class GRAAudioManager {
   volume = 0.8;
   /** The camera is under the water: the world is heard muffled (on top of the state's own filter). */
   private underwater = false;
+  /** Wind and birds (built on first use). */
+  private ambience: Ambience | null = null;
 
   /** Creates/resumes the context; must run inside a user gesture (ENTER button). */
   unlock(): void {
@@ -273,6 +280,14 @@ export class GRAAudioManager {
         }
       },
     });
+  }
+
+  /** Outdoor bed (wind gusts, birds) at `level` (0 silent … 1 on the ground); `time` (s) drives the gusts. */
+  setAmbience(level: number, time: number): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.noise) return;
+    this.ambience ??= new Ambience(ctx, this.buses.get('environment')!, this.noise);
+    this.ambience.update(level, time);
   }
 
   /**
@@ -440,6 +455,10 @@ export class GRAAudioManager {
       case 'ui.click':
         this.osc(out, 'triangle', t, 1100, 900, 0.04, 0.16);
         return 0.05;
+      case 'ui.swap':
+        this.noiseBurst(out, t, 0.16, 0.22, 'bandpass', 900 * p, 2600 * p, 0.9);
+        this.osc(out, 'sine', t + 0.05, 520 * p, 780 * p, 0.09, 0.14);
+        return 0.2;
       case 'ui.ready':
         this.osc(out, 'sine', t, 660, 660, 0.09, 0.2);
         this.osc(out, 'sine', t + 0.08, 990, 990, 0.12, 0.2);

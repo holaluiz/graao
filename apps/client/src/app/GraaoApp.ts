@@ -39,6 +39,9 @@ import { DraftScreen } from '../ui/DraftScreen';
 import { ResultsScreen } from '../ui/ResultsScreen';
 import { Scoreboard } from '../ui/Scoreboard';
 import { PlanetView } from '../world/PlanetView';
+import { AmbientLife } from '../world/AmbientLife';
+import type { BoneName } from '../character/rig/GRARig';
+import { autoInk } from '../ui/ink';
 import { NetSession } from '../net/NetSession';
 import { ProfileService, type CloudProfile } from '../net/ProfileService';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
@@ -82,6 +85,8 @@ export class GraaoApp {
   vfx!: GRAVFXSystem;
   world!: GameWorld;
   planet!: PlanetView;
+  /** Birds and butterflies. */
+  ambient!: AmbientLife;
   obstruction!: Obstruction;
   local!: LocalPlayer;
   character!: GraaoCharacter;
@@ -151,6 +156,8 @@ export class GraaoApp {
     this.planet = new PlanetView(this.world, this.r.quality);
     mark('planetView', t);
     this.r.scene.add(this.planet.group);
+    this.ambient = new AmbientLife(PLANET.radius, this.world.terrain, this.r.quality === 'LOW' ? 8 : 18);
+    this.r.scene.add(this.ambient.group);
     this.obstruction = new Obstruction(this.world.physics, this.planet);
     this.vfx = new GRAVFXSystem(this.r.quality);
     this.vfx.setGround((d) => this.world.terrain.surfaceAt(d));
@@ -270,6 +277,7 @@ export class GraaoApp {
       this.appearance,
       (a) => this.applyAppearance(a),
       () => this.setPhase('MENU'),
+      (cue) => this.audio.play(cue),
     );
     this.draftUi = new DraftScreen({
       pick: (round, id) => this.net?.sendDraftPick(round, id),
@@ -288,7 +296,8 @@ export class GraaoApp {
     });
     this.history = new HistoryPanel(() => this.history.show(false));
     this.hud.show(false);
-    this.ui.append(this.menu.el, this.history.el, this.creator.el, this.hud.el, this.lobby.el, this.draftUi.el, this.results.el, this.scoreboard.el);
+    this.ui.append(this.menu.el, this.history.el, this.creator.stage, this.creator.el, this.hud.el, this.lobby.el, this.draftUi.el, this.results.el, this.scoreboard.el);
+    autoInk(this.ui);
     this.dev = new DevOverlay({ renderer: this.r.renderer, extra: () => this.devStats() });
 
     const canvas = this.r.canvas;
@@ -543,6 +552,7 @@ export class GraaoApp {
 
     this.character.setPose(feet, this.tmpUp.copy(feet).normalize(), facing);
     this.character.update(dt, anim);
+    if (this.phase === 'CHARACTER_CREATOR') this.layoutCreatorArrows();
     if (this.phase === 'MATCH') this.combat.present();
     this.water.update(dt);
     this.presentAirJumps();
@@ -552,7 +562,10 @@ export class GraaoApp {
     this.updateScoreboard();
     this.r.updateSun(this.phase === 'MATCH' ? feet : this.spawn, this.time);
     this.planet.update(this.time, feet, this.r.sunDir);
-    this.planet.setOrbit(this.r.setAltitude(PLANET.radius), this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
+    const orbit = this.r.setAltitude(PLANET.radius);
+    this.planet.setOrbit(orbit, this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
+    this.ambient.update(dt, this.time, this.phase === 'MATCH' ? feet : this.spawn);
+    this.audio.setAmbience(1 - orbit, this.time);
     this.r.render();
     this.frameMs = performance.now() - t0;
     this.dev.frame();
@@ -617,6 +630,39 @@ export class GraaoApp {
       this.r.camera.fov = 55;
       this.r.camera.updateProjectionMatrix();
     }
+  }
+
+  /** Projects the clothing rows (hat, hair, top, bottom, shoes) of the character to the screen for the creator arrows. */
+  private layoutCreatorArrows(): void {
+    const c = this.character;
+    c.root.updateMatrixWorld(true);
+    const cam = this.r.camera;
+    const rect = this.r.canvas.getBoundingClientRect();
+    const up = this.tmpUp.copy(this.spawn).normalize();
+    const screen = (p: THREE.Vector3) => {
+      const v = p.clone().project(cam);
+      return { x: rect.left + (v.x * 0.5 + 0.5) * rect.width, y: rect.top + (-v.y * 0.5 + 0.5) * rect.height };
+    };
+    const bone = (name: BoneName, lift = 0) => {
+      const b = c.bones.get(name);
+      const p = b ? b.getWorldPosition(new THREE.Vector3()) : this.spawn.clone();
+      return screen(p.addScaledVector(up, lift));
+    };
+    const hips = bone('Hips');
+    const knee = bone('LeftLeg');
+    const anchors = {
+      hat: bone('HeadTop_End', 0.1),
+      hair: bone('Head', 0.1),
+      top: bone('Spine1'),
+      bottom: { x: hips.x, y: hips.y * 0.55 + knee.y * 0.45 },
+      shoes: bone('LeftFoot', -0.02),
+    };
+    // Arrows ~0.45 m to each side of the body (in screen px at the body's depth), clear of the arms.
+    const side = new THREE.Vector3().crossVectors(up, this.menuFacing).normalize();
+    const pHips = c.bones.get('Hips')!.getWorldPosition(new THREE.Vector3());
+    const a = screen(pHips);
+    const b = screen(pHips.clone().addScaledVector(side, 0.45));
+    this.creator.layout(anchors, a.x, Math.max(60, Math.hypot(b.x - a.x, b.y - a.y)));
   }
 
   /** Creator framing: the character centered in the screen area the panel leaves free (measured, not guessed). */

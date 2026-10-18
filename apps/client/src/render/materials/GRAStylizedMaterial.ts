@@ -115,6 +115,20 @@ const fragment = /* glsl */ `
 
 ${GLSL_NOISE}
 
+vec3 graRgb2Hsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+vec3 graHsv2Rgb(vec3 c) {
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
 uniform vec3 uSunColor;
 uniform vec3 uShadowTint;
 uniform vec3 uSkyFill;
@@ -190,9 +204,22 @@ void main() {
   vec3 L = up;
   #if NUM_DIR_LIGHTS > 0
     L = normalize(inverseTransformDirection(directionalLights[0].direction, viewMatrix));
+    float sunFacing = dot(N, L);
+    #ifdef USE_PALETTE
+      // Characters are lit for the camera (a portrait key light): mostly the sun, raised, and pulled toward the view, so
+      // faces read and the shade wraps the far side of the body instead of cutting across the face.
+      L = normalize(L * 0.55 + up * 0.3 + V * 0.5);
+    #endif
     ndl = dot(N, L);
     #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
       shadow = receiveShadow ? getShadow(directionalShadowMap[0], directionalLightShadows[0].shadowMapSize, directionalLightShadows[0].shadowIntensity, directionalLightShadows[0].shadowBias, directionalLightShadows[0].shadowRadius, vDirectionalShadowCoord[0]) : 1.0;
+    #endif
+  #endif
+  #ifdef USE_PALETTE
+    #if NUM_DIR_LIGHTS > 0
+      // The real sun's shadow map only where the surface faces that sun (shade from trees and houses); on the far side
+      // it would only be the body shadowing itself, which the portrait light already shapes.
+      shadow = mix(1.0, shadow, smoothstep(0.05, 0.35, sunFacing));
     #endif
   #endif
   float lit = smoothstep(uRampCenter - uRampSoftness, uRampCenter + uRampSoftness, ndl) * shadow;
@@ -205,9 +232,14 @@ void main() {
     base = mix(base, base * vec3(1.06, 0.98, 0.9), (macro - 0.5) * uMacro * 2.0);
   #endif
 
+  // Two flat tones, like ink and wash: the lit color, and a shadow color that is the same pigment darker, a touch
+  // warmer in hue and richer (HSV), plus a little cool sky bounce on surfaces facing up.
   float hemi = dot(N, up) * 0.5 + 0.5;
-  vec3 fill = mix(uGroundFill, uSkyFill, hemi);
-  vec3 shade = base * fill * uShadowTint;
+  vec3 hsv = graRgb2Hsv(base);
+  hsv.x = fract(hsv.x - 0.02 + 1.0);
+  hsv.y = min(1.0, hsv.y * 1.12);
+  hsv.z *= 0.6;
+  vec3 shade = graHsv2Rgb(hsv) * uShadowTint + base * mix(uGroundFill, uSkyFill, hemi) * 0.08;
   vec3 sun = base * uSunColor;
   vec3 col = mix(shade, sun, lit);
 
@@ -250,10 +282,11 @@ export interface GRAStylizedOptions {
 
 /** Look constants shared by every GRAStylizedMaterial (golden hour). */
 export const LOOK = {
-  sun: new THREE.Color('#ffe2b8').multiplyScalar(1.08),
-  shadowTint: new THREE.Color('#a39ccc'),
-  skyFill: new THREE.Color('#d6e2ff'),
-  groundFill: new THREE.Color('#c99c86'),
+  sun: new THREE.Color('#fff7ea'),
+  /** Multiplies the HSV shadow color (a faint cool cast keeps shade from going muddy). */
+  shadowTint: new THREE.Color('#eef4ff'),
+  skyFill: new THREE.Color('#bfe6ef'),
+  groundFill: new THREE.Color('#d8c9a8'),
   rimWarm: new THREE.Color('#ffd7a3'),
 };
 
@@ -274,13 +307,14 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
       uShadowTint: { value: LOOK.shadowTint.clone() },
       uSkyFill: { value: LOOK.skyFill.clone() },
       uGroundFill: { value: LOOK.groundFill.clone() },
-      uRampCenter: { value: o.variant === 'character' ? 0.08 : 0.02 },
-      uRampSoftness: { value: o.variant === 'character' ? 0.07 : o.variant === 'foliage' ? 0.35 : 0.22 },
-      uPigment: { value: o.pigment ?? (o.variant === 'terrain' ? 0.16 : 0.12) },
+      // Characters: a hard cut between light and shade (graphic); the world a little softer so moving shadows ease.
+      uRampCenter: { value: o.variant === 'character' ? 0.12 : 0.04 },
+      uRampSoftness: { value: o.variant === 'character' ? 0.02 : o.variant === 'foliage' ? 0.14 : 0.06 },
+      uPigment: { value: o.pigment ?? (o.variant === 'terrain' ? 0.12 : 0.06) },
       uPigmentScale: { value: o.variant === 'foliage' ? 0.35 : 0.22 },
-      uMacro: { value: o.variant === 'character' ? 0 : 0.35 },
-      uEdgePooling: { value: o.edgePooling ?? (o.variant === 'character' ? 0.0 : o.variant === 'terrain' ? 0.05 : 0.14) },
-      uRim: { value: o.variant === 'character' ? 0.12 : 0.0 },
+      uMacro: { value: o.variant === 'character' ? 0 : 0.2 },
+      uEdgePooling: { value: o.edgePooling ?? 0.0 },
+      uRim: { value: 0.0 },
       uRimColor: { value: LOOK.rimWarm.clone() },
       uFade: { value: 0 },
       uTime: { value: 0 },
@@ -290,11 +324,11 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
       uWetLine: { value: 0 },
       uFeet: { value: new THREE.Vector3() },
       uBodyUp: { value: new THREE.Vector3(0, 1, 0) },
-      uGrassColor: { value: new THREE.Color('#72b04e') },
-      uGrassDry: { value: new THREE.Color('#a9b852') },
-      uSandColor: { value: new THREE.Color('#e6cf9c') },
-      uRockColor: { value: new THREE.Color('#a09482') },
-      uCliffColor: { value: new THREE.Color('#8a7a72') },
+      uGrassColor: { value: new THREE.Color('#69ad55') },
+      uGrassDry: { value: new THREE.Color('#a6c46a') },
+      uSandColor: { value: new THREE.Color('#ead9b0') },
+      uRockColor: { value: new THREE.Color('#a7a49a') },
+      uCliffColor: { value: new THREE.Color('#8c8a86') },
     },
   ]);
 

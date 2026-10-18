@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WeaponId } from '@graao/game-data';
 import { createStylizedMaterial } from '../render/materials/GRAStylizedMaterial';
+import { INK_STATE } from '../render/InkPass';
 
 type Geo = THREE.BufferGeometry;
 
@@ -155,6 +156,7 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
   const body = new THREE.Mesh(d.body, material!);
   body.castShadow = true;
   const ink = new THREE.Mesh(d.ink, inkMaterial!);
+  ink.visible = !INK_STATE.post;
   const muzzle = new THREE.Object3D();
   muzzle.name = 'muzzle';
   muzzle.position.copy(d.muzzle);
@@ -163,12 +165,17 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
 }
 
 /**
- * Mount transform from the weapon frame to the canonical RightHand bone (bind: T-pose, fingers along −X, back of the
- * hand +Y): barrel → −X, top → +Y, grip in the palm.
+ * Mount transform from the weapon frame to the canonical RightHand bone (bind: T-pose, fingers along −X, palm −Y,
+ * thumb +Z). Held like a real pistol: the grip runs across the palm from the index side down past the little finger
+ * (weapon −Y → hand −Z), the top of the weapon sits on the thumb side (weapon +Y → hand +Z) and the barrel continues
+ * the line of the forearm (weapon +Z → hand −X). The grip's middle lands inside the closed fist (GraaoCharacter curls
+ * the fingers around it).
  */
 export const HAND_MOUNT = {
-  position: new THREE.Vector3(-0.058, -0.03, 0.012),
-  rotation: new THREE.Euler(0, -Math.PI / 2, 0),
+  position: new THREE.Vector3(-0.074, -0.036, 0.036),
+  rotation: new THREE.Euler().setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0)),
+  ),
 };
 
 /** Both weapons of one character, mounted in the right hand; only the equipped slot is visible. */

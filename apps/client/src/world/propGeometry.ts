@@ -13,8 +13,10 @@ function paint(g: Geo, color: THREE.ColorRepresentation, jitter = 0, rand?: () =
   const c = new THREE.Color(color);
   const n = g.getAttribute('position').count;
   const arr = new Float32Array(n * 3);
+  // One flat color per piece (a jitter varies the piece, never its vertices): the ink pass outlines where pieces of
+  // different colors meet, so a piece must not be speckled.
+  const k = jitter && rand ? 1 + (rand() - 0.5) * jitter : 1;
   for (let i = 0; i < n; i++) {
-    const k = jitter && rand ? 1 + (rand() - 0.5) * jitter : 1;
     arr[i * 3] = c.r * k;
     arr[i * 3 + 1] = c.g * k;
     arr[i * 3 + 2] = c.b * k;
@@ -114,40 +116,160 @@ export function bushGeometry(variant: number): Geo {
 
 // -------------------------------------------------------------------------------------------- architecture
 
-const WALLS = ['#f2e2c9', '#e9c8b5', '#d8e3d2'];
-const ROOFS = ['#d0694e', '#4f8f8c', '#c98a4a'];
+/** Per-variant palettes: pastel plaster, a darker plinth, a painted accent (door, shutters) and terracotta tiles. */
+const HOUSE_LOOKS = [
+  { wall: '#f3e3c8', plinth: '#d6b08d', accent: '#3f8f8a', tile: '#cf6a4c' },
+  { wall: '#f2c4b0', plinth: '#c48b78', accent: '#4b77b6', tile: '#b9563f' },
+  { wall: '#cfe6d4', plinth: '#9dbea6', accent: '#e0a03a', tile: '#d27b45' },
+];
+const TRIM = '#fbf7ee';
+const GLASS = '#86b9cc';
+const METAL = '#b9bec0';
 
+type Side = 'front' | 'back' | 'left' | 'right';
+type AddFn = (g: Geo, color: THREE.ColorRepresentation) => void;
+
+/** Box in a facade-local frame (x along the wall, y up, z out of the wall). */
+const B = (w: number, h: number, d: number, x: number, y: number, z: number, rx = 0) => at(new THREE.BoxGeometry(w, h, d), x, y, z, rx);
+
+/**
+ * Brazilian-village houses with Messenger-grade detail: plinth band, corner trims and a cornice, framed windows with
+ * sills, lintels, mullions and slatted shutters, a paneled door with its step and awning, tiled roof slabs with ridge,
+ * fascia and verge boards over gable walls, and the life of a street: AC unit, light meter, downspout, planters and
+ * (on the tall house) a blue rooftop water tank. Everything stays inside the gameplay collider but for shallow reliefs.
+ */
 export function houseGeometry(variant: number): Geo {
   const v = HOUSE_VARIANTS[variant % HOUSE_VARIANTS.length]!;
+  const look = HOUSE_LOOKS[variant % HOUSE_LOOKS.length]!;
+  const accentDark = new THREE.Color(look.accent).multiplyScalar(0.8);
+  const tileDark = new THREE.Color(look.tile).multiplyScalar(0.82);
   const parts: Geo[] = [];
-  // Foundation sinks into slopes; walls; trim band.
-  parts.push(paint(at(new THREE.BoxGeometry(v.w + 0.2, 1.4, v.d + 0.2), 0, -0.4, 0), '#a89a8a'));
-  parts.push(paint(at(new THREE.BoxGeometry(v.w, v.h, v.d), 0, v.h / 2, 0), WALLS[variant % 3]!));
-  // Gable roof as a prism (extruded triangle along X).
+  const box = (w: number, h: number, d: number, x: number, y: number, z: number, color: THREE.ColorRepresentation, rx = 0) =>
+    parts.push(paint(at(new THREE.BoxGeometry(w, h, d), x, y, z, rx), color));
+  /** Places facade-local pieces on one side of the house, centered at (u along the wall, y). */
+  const onWall = (side: Side, u: number, y: number, build: (add: AddFn) => void) => {
+    const m = new THREE.Matrix4();
+    if (side === 'front') m.makeRotationY(0).setPosition(u, y, v.d / 2);
+    else if (side === 'back') m.makeRotationY(Math.PI).setPosition(-u, y, -v.d / 2);
+    else if (side === 'right') m.makeRotationY(Math.PI / 2).setPosition(v.w / 2, y, -u);
+    else m.makeRotationY(-Math.PI / 2).setPosition(-v.w / 2, y, u);
+    build((g, color) => parts.push(paint(g.applyMatrix4(m), color)));
+  };
+
+  const windowAt = (side: Side, u: number, y: number, shutters: boolean, planter = false) =>
+    onWall(side, u, y, (add) => {
+      add(B(0.98, 1.12, 0.07, 0, 0, 0.035), TRIM);
+      add(B(0.8, 0.94, 0.04, 0, 0, 0.06), GLASS);
+      add(B(0.05, 0.94, 0.03, 0, 0, 0.085), TRIM);
+      add(B(0.8, 0.05, 0.03, 0, 0.14, 0.085), TRIM);
+      add(B(1.14, 0.07, 0.17, 0, -0.6, 0.085), TRIM);
+      add(B(1.08, 0.09, 0.09, 0, 0.6, 0.045), TRIM);
+      if (shutters) {
+        for (const k of [-1, 1]) {
+          add(B(0.42, 1.06, 0.04, k * 0.72, 0, 0.03), look.accent);
+          for (let i = 0; i < 4; i++) add(B(0.34, 0.03, 0.02, k * 0.72, -0.36 + i * 0.24, 0.058), accentDark);
+        }
+      }
+      if (planter) {
+        add(B(0.86, 0.2, 0.2, 0, -0.74, 0.12), '#c4734e');
+        for (const k of [-0.25, 0.02, 0.27]) add(at(new THREE.IcosahedronGeometry(0.15, 1), k, -0.58, 0.12, 0, 0, 0, 1, 0.8, 0.9), k > 0 ? '#5f9c4b' : '#79b152');
+      }
+    });
+
+  const doorAt = (side: Side, u: number) =>
+    onWall(side, u, 0, (add) => {
+      add(B(1.14, 2.14, 0.07, 0, 1.07, 0.035), TRIM);
+      add(B(0.92, 2.0, 0.08, 0, 1.0, 0.05), look.accent);
+      add(B(0.66, 0.74, 0.02, 0, 1.46, 0.1), accentDark);
+      add(B(0.66, 0.62, 0.02, 0, 0.55, 0.1), accentDark);
+      add(at(new THREE.SphereGeometry(0.04, 8, 6), 0.33, 1.0, 0.12), '#e8c25a');
+      add(B(1.4, 0.14, 0.42, 0, 0.07, 0.21), '#c9c2b6');
+      // Awning on two brackets.
+      add(B(1.6, 0.08, 0.72, 0, 2.42, 0.34, 0.32), look.tile);
+      for (const k of [-0.68, 0.68]) add(B(0.06, 0.06, 0.5, k, 2.26, 0.25, -0.6), TRIM);
+    });
+
+  // Foundation (sinks into slopes), plinth band, walls, corner trims, cornice (and a floor band on the tall house).
+  box(v.w + 0.2, 1.4, v.d + 0.2, 0, -0.4, 0, '#a89a8a');
+  box(v.w + 0.06, 0.5, v.d + 0.06, 0, 0.25, 0, look.plinth);
+  box(v.w, v.h, v.d, 0, v.h / 2, 0, look.wall);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(0.16, v.h - 0.5, 0.16, sx * (v.w / 2 - 0.05), 0.5 + (v.h - 0.5) / 2, sz * (v.d / 2 - 0.05), TRIM);
+  box(v.w + 0.16, 0.16, v.d + 0.16, 0, v.h - 0.08, 0, TRIM);
+  const twoFloors = v.h > 4.5;
+  if (twoFloors) box(v.w + 0.1, 0.12, v.d + 0.1, 0, 2.75, 0, TRIM);
+
+  // Roof: gable walls under two tiled slabs, tile rows, ridge cap, fascia and verge boards.
   const o = v.overhang;
-  const shape = new THREE.Shape();
-  shape.moveTo(-(v.d / 2 + o), 0);
-  shape.lineTo(v.d / 2 + o, 0);
-  shape.lineTo(0, v.roofH);
-  shape.lineTo(-(v.d / 2 + o), 0);
-  const roof = new THREE.ExtrudeGeometry(shape, { depth: v.w + o * 2, bevelEnabled: false });
-  roof.translate(0, 0, -(v.w / 2 + o));
-  roof.rotateY(Math.PI / 2);
-  parts.push(paint(at(roof, 0, v.h, 0), ROOFS[variant % 3]!));
-  // Door, windows, chimney.
-  parts.push(paint(at(new THREE.BoxGeometry(0.95, 1.9, 0.12), 0.6, 0.95, v.d / 2 + 0.02), '#5b4a5e'));
-  const winColor = '#8fb4c9';
-  const floors = v.h > 4.5 ? 2 : 1;
-  for (let f = 0; f < floors; f++) {
-    const wy = 1.55 + f * 2.3;
-    parts.push(paint(at(new THREE.BoxGeometry(0.85, 0.85, 0.1), -v.w / 4 - 0.2, wy, v.d / 2 + 0.03), winColor));
-    if (f > 0 || v.w > 5) parts.push(paint(at(new THREE.BoxGeometry(0.85, 0.85, 0.1), v.w / 4 + 0.6, wy + (f ? 0 : 0.0), v.d / 2 + 0.03), winColor));
-    parts.push(paint(at(new THREE.BoxGeometry(0.1, 0.8, 0.8), v.w / 2 + 0.03, wy, 0), winColor));
-    parts.push(paint(at(new THREE.BoxGeometry(0.1, 0.8, 0.8), -v.w / 2 - 0.03, wy, 0), winColor));
+  const gable = new THREE.Shape();
+  gable.moveTo(-v.d / 2, 0);
+  gable.lineTo(v.d / 2, 0);
+  gable.lineTo(0, v.roofH);
+  gable.lineTo(-v.d / 2, 0);
+  const gableGeo = new THREE.ExtrudeGeometry(gable, { depth: v.w, bevelEnabled: false });
+  gableGeo.translate(0, 0, -v.w / 2);
+  gableGeo.rotateY(Math.PI / 2);
+  parts.push(paint(at(gableGeo, 0, v.h, 0), look.wall));
+  const run = v.d / 2 + o;
+  const slope = Math.atan2(v.roofH, run);
+  const len = Math.hypot(run, v.roofH) + 0.06;
+  for (const k of [1, -1]) {
+    // Slab k = +1 covers the front slope (+Z), k = -1 the back one; n is the slope's outward normal.
+    const nY = Math.cos(slope);
+    const nZ = Math.sin(slope) * k;
+    const cy = v.h + v.roofH / 2;
+    const cz = (k * run) / 2;
+    box(v.w + 2 * o, 0.12, len, 0, cy + nY * 0.06, cz + nZ * 0.06, look.tile, k * slope);
+    for (const t of [0.2, 0.4, 0.6, 0.8]) {
+      const y = v.h + v.roofH * (1 - t);
+      const z = k * run * t;
+      box(v.w + 2 * o, 0.035, 0.07, 0, y + nY * 0.135, z + nZ * 0.135, tileDark, k * slope);
+    }
+    box(v.w + 2 * o, 0.16, 0.05, 0, v.h - 0.03, k * (run + 0.02), TRIM);
+    for (const sx of [-1, 1]) box(0.07, 0.15, len, sx * (v.w / 2 + o), cy + nY * 0.05, cz + nZ * 0.05, TRIM, k * slope);
   }
-  parts.push(paint(at(new THREE.BoxGeometry(0.55, 1.4, 0.55), -v.w / 3, v.h + v.roofH * 0.55, -v.d / 6), '#b58a6e'));
-  // Awning over the door.
-  parts.push(paint(at(new THREE.BoxGeometry(1.5, 0.12, 0.7), 0.6, 2.15, v.d / 2 + 0.35, 0.25, 0, 0), ROOFS[(variant + 1) % 3]!));
+  parts.push(paint(at(new THREE.CylinderGeometry(0.1, 0.1, v.w + 2 * o + 0.04, 10), 0, v.h + v.roofH + 0.08, 0, 0, 0, Math.PI / 2), tileDark));
+
+  // Openings per variant.
+  if (variant % 3 === 0) {
+    doorAt('front', 1.15);
+    windowAt('front', -1.15, 1.55, true, true);
+    windowAt('back', -1.2, 1.55, false);
+    windowAt('back', 1.2, 1.55, false);
+    windowAt('left', 0, 1.55, true);
+    windowAt('right', 0.6, 1.55, false);
+  } else if (variant % 3 === 1) {
+    doorAt('front', -0.95);
+    windowAt('front', 1.0, 1.55, true, true);
+    windowAt('front', -1.05, 3.95, true);
+    windowAt('front', 1.05, 3.95, true);
+    windowAt('back', 0, 1.55, false);
+    windowAt('back', 0, 3.95, false);
+    windowAt('left', 0, 3.95, false);
+    windowAt('right', 0.7, 1.55, true);
+    // Blue fiberglass water tank on the ridge.
+    parts.push(paint(at(new THREE.CylinderGeometry(0.46, 0.4, 0.62, 16), -v.w / 4, v.h + v.roofH + 0.2, 0), '#4f8fc0'));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.5, 0.5, 0.08, 16), -v.w / 4, v.h + v.roofH + 0.54, 0), '#3d76a3'));
+  } else {
+    doorAt('front', 0);
+    windowAt('front', -1.95, 1.5, true, true);
+    windowAt('front', 1.95, 1.5, true, true);
+    windowAt('back', -1.4, 1.5, false);
+    windowAt('back', 1.4, 1.5, false);
+    windowAt('right', 0, 1.5, false);
+  }
+
+  // Street life: AC unit with grille, fan and drain pipe; light meter by the door; downspout at a front corner.
+  onWall('right', variant % 3 === 1 ? -1.1 : -v.d / 2 + 0.75, twoFloors ? 3.3 : 2.35, (add) => {
+    add(B(0.74, 0.48, 0.3, 0, 0, 0.15), '#e9e9e4');
+    for (let i = 0; i < 4; i++) add(B(0.6, 0.025, 0.02, -0.04, -0.16 + i * 0.1, 0.31), METAL);
+    add(at(new THREE.CylinderGeometry(0.15, 0.15, 0.02, 14), 0.2, 0, 0.31, Math.PI / 2), '#9aa1a4');
+    add(at(new THREE.CylinderGeometry(0.025, 0.025, 1.9, 6), -0.28, -1.15, 0.1), METAL);
+  });
+  onWall('front', variant % 3 === 1 ? -0.1 : variant % 3 === 0 ? 0.3 : 0.85, 1.55, (add) => {
+    add(B(0.32, 0.42, 0.12, 0, 0, 0.06), '#c9ccc9');
+    add(B(0.18, 0.12, 0.02, 0, 0.06, 0.125), '#3b4a52');
+  });
+  parts.push(paint(at(new THREE.CylinderGeometry(0.05, 0.05, v.h, 8), v.w / 2 + 0.07, v.h / 2, v.d / 2 + 0.07), METAL));
   return merge(parts);
 }
 

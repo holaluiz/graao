@@ -1,8 +1,8 @@
 /** Base body: torso, neck, head (nose, ears), arms, small mitten hands, legs and bare feet. */
 import * as THREE from 'three';
 import type { BoneName } from '../rig/GRARig';
-import { mirrorRings, type BodyShape } from '../build/anatomy';
-import { PartBuilder, Slot, type V3 } from '../build/PartBuilder';
+import { ARM_Z, FOOT_STATIONS, mirrorRings, type BodyShape } from '../build/anatomy';
+import { PartBuilder, Slot, type RingSpec, type V3 } from '../build/PartBuilder';
 
 const TORSO_BONES: BoneName[] = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'LeftShoulder', 'RightShoulder', 'LeftUpLeg', 'RightUpLeg'];
 
@@ -23,14 +23,28 @@ export function buildBody(b: PartBuilder, s: BodyShape): void {
 
   // Head.
   const h = s.head;
-  b.starSurface((d) => h.surface(d), 22, 16, { slot: Slot.SKIN, region: 'head', bones: ['Head'] });
+  b.starSurface((d) => h.surface(d), 40, 28, { slot: Slot.SKIN, region: 'head', bones: ['Head'] });
   // Ears (mostly hidden by hair; they keep the side silhouette human).
   for (const sx of [1, -1]) {
     b.ellipsoid([sx * (h.a * 0.93), h.center[1] - 0.012, h.center[2] - 0.008], [0.018, 0.03, 0.022], { slot: Slot.SKIN, region: 'head', bones: ['Head'] }, 8, 6);
   }
-  // Nose: a small soft wedge.
-  const nose = h.frontPoint(0, -0.03, -0.004);
-  if (nose) b.ellipsoid([nose.p[0], nose.p[1], nose.p[2]], [0.011, 0.017, 0.012], { slot: Slot.SKIN, region: 'head', bones: ['Head'], outline: 0.5 }, 8, 6);
+  // Nose, sculpted: a narrow bridge rising from between the eyes to a rounded tip with two soft wings (a real bridge
+  // keeps the face from reading flat; the ink pass draws its side and the shadow sits under it).
+  const bridge: RingSpec[] = [];
+  for (let i = 0; i <= 5; i++) {
+    const t = i / 5;
+    const v = -0.006 - 0.028 * t;
+    const prot = 0.0018 + 0.0088 * Math.pow(t, 1.25);
+    const q = h.frontPoint(0, v, prot * 0.45);
+    if (q) bridge.push({ p: q.p, ra: 0.0044 + 0.0034 * t, rb: prot * 0.6 + 0.0028, region: 'head' });
+  }
+  if (bridge.length >= 3) b.tube(bridge, { slot: Slot.SKIN, region: 'head', bones: ['Head'], ref: [1, 0, 0], segments: 10, capStart: 'round', capEnd: 'flat' });
+  const tip = h.frontPoint(0, -0.0345, 0.007);
+  if (tip) b.ellipsoid(tip.p, [0.0082, 0.0074, 0.0068], { slot: Slot.SKIN, region: 'head', bones: ['Head'] }, 12, 8);
+  for (const sx of [1, -1]) {
+    const wing = h.frontPoint(sx * 0.009, -0.0368, 0.0018);
+    if (wing) b.ellipsoid(wing.p, [0.0052, 0.0046, 0.005], { slot: Slot.SKIN, region: 'head', bones: ['Head'] }, 10, 6);
+  }
 
   // Arms and hands.
   for (const side of ['Left', 'Right'] as const) {
@@ -45,7 +59,7 @@ export function buildBody(b: PartBuilder, s: BodyShape): void {
       capEnd: 'round',
       capScale: 0.6,
     });
-    buildHand(b, side, sx, p.wristX, p.shoulderY - 0.003, -0.015, p.handLen);
+    buildHand(b, side, sx, p.wristX, p.shoulderY - 0.003, ARM_Z, p.handLen);
   }
 
   // Legs and feet.
@@ -61,11 +75,12 @@ export function buildBody(b: PartBuilder, s: BodyShape): void {
       capEnd: 'round',
       capScale: 0.5,
     });
-    b.ellipsoid([sx * p.legSocketX, 0.04, 0.045], [0.04, 0.038, 0.1], {
-      slot: Slot.SKIN,
-      region: 'feet',
-      bones: [`${side}Foot`, `${side}ToeBase`, `${side}Leg`] as BoneName[],
-    }, 10, 8);
+    b.tube(
+      FOOT_STATIONS.map((f) => ({ p: [sx * p.legSocketX, f.y, f.z] as V3, ra: f.w, rb: f.h, n: 2.5, region: 'feet' as const })),
+      { slot: Slot.SKIN, region: 'feet', bones: [`${side}Foot`, `${side}ToeBase`, `${side}Leg`] as BoneName[], ref: [1, 0, 0], segments: 12, capStart: 'round', capEnd: 'round', capScale: 0.7 },
+    );
+    // Big toe on the inner side of the front (reads as a foot, not a mitten).
+    b.ellipsoid([sx * (p.legSocketX - 0.019), 0.017, 0.152], [0.012, 0.0145, 0.016], { slot: Slot.SKIN, region: 'feet', bones: [`${side}ToeBase`, `${side}Foot`] as BoneName[] }, 10, 7);
   }
 }
 

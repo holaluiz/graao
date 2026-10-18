@@ -8,6 +8,7 @@
  */
 import * as THREE from 'three';
 import { GLSL_NOISE } from './materials/GRAStylizedMaterial';
+import { InkPass } from './InkPass';
 
 export type Quality = 'LOW' | 'MEDIUM' | 'HIGH';
 
@@ -59,11 +60,12 @@ void main() {
   vec3 p = d * 2.6 + vec3(uTime * 0.004, 0.0, uTime * 0.002);
   float n = graFbm3(p) + graNoise3(p * 3.1) * 0.18;
   float band = smoothstep(-0.02, 0.12, h) * (1.0 - smoothstep(0.55, 0.85, h));
-  float cloud = smoothstep(0.6, 0.66, n) * band;
-  float shade = smoothstep(0.62, 0.78, graFbm3(p + d * 0.08 + 1.7));
-  vec3 cc = mix(uCloudLight, uCloudShade, shade * 0.7);
-  cc += uSunColor * pow(sd, 4.0) * 0.25;
-  col = mix(col, cc, cloud * 0.92);
+  // Flat, cut-paper cloud shapes: a crisp light mass with a crisp shaded underside (two tones, no gradients).
+  float cloud = smoothstep(0.6, 0.607, n) * band;
+  float under = smoothstep(0.5, 0.507, graFbm3(p * 1.3 - vec3(0.0, 0.18, 0.0) + 1.7)) * smoothstep(0.66, 0.6, n + h * 0.25);
+  vec3 cc = mix(uCloudLight, uCloudShade, under);
+  cc += uSunColor * pow(sd, 4.0) * 0.12;
+  col = mix(col, cc, cloud);
   // From orbit (UFO): a painted dusk around the planet, a warm halo hugging its limb and a few soft stars.
   if (uOrbit > 0.001) {
     // Angle from the planet's centre as seen from the camera; uLimb is the planet's angular radius.
@@ -85,14 +87,14 @@ void main() {
 `;
 
 export const SKY = {
-  zenith: new THREE.Color('#4f86c9'),
-  mid: new THREE.Color('#9cc4e6'),
-  horizon: new THREE.Color('#f7cfa6'),
-  below: new THREE.Color('#e9c3a8'),
-  sun: new THREE.Color('#ffd9a0'),
-  cloudLight: new THREE.Color('#fff4e6'),
-  cloudShade: new THREE.Color('#c9b3d9'),
-  fog: new THREE.Color('#e7cdb4'),
+  zenith: new THREE.Color('#4aa3c2'),
+  mid: new THREE.Color('#8ed2da'),
+  horizon: new THREE.Color('#d3f0e6'),
+  below: new THREE.Color('#c4e4d8'),
+  sun: new THREE.Color('#fff1cf'),
+  cloudLight: new THREE.Color('#f6fcf8'),
+  cloudShade: new THREE.Color('#a8d8db'),
+  fog: new THREE.Color('#cbe8df'),
   space: new THREE.Color('#7489c6'),
   spaceDeep: new THREE.Color('#2e3a6b'),
   /** Fog and sky tint with the camera under the water. */
@@ -105,9 +107,11 @@ export class GRARenderer {
   readonly camera = new THREE.PerspectiveCamera(70, 1, 0.05, 2000);
   readonly sun = new THREE.DirectionalLight(0xffffff, 1);
   readonly sky: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
-  readonly fog = new THREE.FogExp2(SKY.fog.getHex(), 0.0085);
+  readonly fog = new THREE.FogExp2(SKY.fog.getHex(), 0.0075);
   readonly sunDir = new THREE.Vector3(0, 1, 0);
   quality: Quality;
+  /** Drawn outlines (post process); off when the GPU cannot render float targets (characters keep their ink hull). */
+  readonly ink: InkPass;
   /** 0..1: the camera is under the sea surface (dense teal fog, the sky only glowing through). */
   underwater = 0;
   private shadowExtent = 26;
@@ -122,6 +126,7 @@ export class GRARenderer {
     this.renderer.shadowMap.enabled = q.shadows;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.info.autoReset = false;
+    this.ink = new InkPass(this.renderer, q.antialias ? 4 : 0);
     this.scene.fog = this.fog;
     this.scene.background = SKY.fog.clone();
 
@@ -129,7 +134,7 @@ export class GRARenderer {
     this.sun.shadow.mapSize.set(q.shadowMap, q.shadowMap);
     this.sun.shadow.radius = q.shadowRadius;
     this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.035;
+    this.sun.shadow.normalBias = 0.05;
     const cam = this.sun.shadow.camera;
     cam.left = -this.shadowExtent;
     cam.right = this.shadowExtent;
@@ -189,6 +194,7 @@ export class GRARenderer {
     const h = this.canvas.clientHeight || window.innerHeight;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY[this.quality].pixelRatio));
     this.renderer.setSize(w, h, false);
+    if (this.ink.enabled) this.ink.setSize();
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
   }
@@ -247,6 +253,7 @@ export class GRARenderer {
   render(): void {
     this.sky.position.copy(this.camera.position);
     this.renderer.info.reset();
-    this.renderer.render(this.scene, this.camera);
+    if (this.ink.enabled) this.ink.render(this.scene, this.camera);
+    else this.renderer.render(this.scene, this.camera);
   }
 }

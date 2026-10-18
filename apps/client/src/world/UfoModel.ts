@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Vec3 } from '@graao/shared';
 import { createStylizedMaterial } from '../render/materials/GRAStylizedMaterial';
+import { INK_STATE } from '../render/InkPass';
 
 const INK = new THREE.Color('#2a2130');
 const RIM_RADIUS = 4.5;
@@ -150,6 +151,7 @@ export class UfoModel {
     const bodyMesh = new THREE.Mesh(body, mat);
     bodyMesh.castShadow = true;
     const inkMesh = new THREE.Mesh(ink, inkMat);
+    inkMesh.visible = !INK_STATE.post;
 
     // Running lights on the lower slope of the rim.
     const bulbs: THREE.BufferGeometry[] = [];

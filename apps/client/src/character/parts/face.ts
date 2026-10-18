@@ -1,11 +1,13 @@
 /**
  * Faces as flat ink decals projected onto the head surface: crisp at any distance, zero textures, no outline.
- * Each face is a small set of graphic marks (eyes with a highlight, brows, mouth, optional blush).
+ * Few marks, carefully placed (the Messenger lesson): open oval eyes with a highlight and an upper lid line, soft
+ * arched brows, a small mouth with a hint of lower lip. The nose is sculpted on the head (body.ts), not drawn.
  */
 import type { HeadShape } from '../build/anatomy';
 import { PartBuilder, Slot, type SlotId } from '../build/PartBuilder';
 
 type UV = [number, number];
+
 
 /** Filled ellipse decal at (cu, cv) in head-local face coordinates (meters from the head center). */
 function ellipse(b: PartBuilder, h: HeadShape, cu: number, cv: number, rw: number, rh: number, rot: number, slot: SlotId, lift: number, n = 14, squash?: (t: number) => number): void {
@@ -89,76 +91,100 @@ const arc = (cu: number, cv: number, w: number, bend: number, n = 8, tilt = 0): 
     return [cu + t * w, cv + bend * (1 - 4 * t * t) + tilt * t] as UV;
   });
 
+const L = 0.0022; // lift above the skin
+const EYE_U = 0.042;
+const EYE_V = -0.004;
+
+/** One open eye: dark oval iris, a highlight up and toward the outer corner, and a lid line over it. */
+function eye(b: PartBuilder, h: HeadShape, s: number, size = 1, lid = 1): void {
+  const u = s * EYE_U;
+  ellipse(b, h, u, EYE_V, 0.0102 * size, 0.0138 * size, 0, Slot.INK, L, 18);
+  ellipse(b, h, u + s * 0.0034 * size, EYE_V + 0.0052 * size, 0.0033 * size, 0.0033 * size, 0, Slot.EYE_WHITE, L + 0.0008, 10);
+  // Upper lid: a thin arc hugging the top of the iris, a little longer on the outer side (no slant, no fold).
+  const lidPts: [number, number][] = Array.from({ length: 9 }, (_, i) => {
+    const t = i / 8;
+    const x = -0.0135 + 0.029 * t;
+    const y = EYE_V + 0.0118 * size + 0.0042 * Math.sin(Math.PI * Math.min(1, t * 1.08)) * lid;
+    return [u + s * x * size, y];
+  });
+  stroke(b, h, lidPts, 0.0034, Slot.INK, L + 0.0004);
+}
+
+/** Closed eye (sleep, wink, a big laugh): a soft downward smile curve. */
+function closedEye(b: PartBuilder, h: HeadShape, s: number): void {
+  stroke(b, h, arc(s * EYE_U, EYE_V - 0.001, 0.025, 0.0065, 9), 0.0042, Slot.INK, L, false);
+}
+
+/** Brows: soft arches in the hair color; `lift` raises them (surprise), `tilt` angles the inner end (worry/mischief). */
+function brows(b: PartBuilder, h: HeadShape, lift = 0, tilt = 0, width = 0.0052): void {
+  for (const s of [1, -1]) stroke(b, h, arc(s * (EYE_U + 0.002), EYE_V + 0.033 + lift, 0.029, 0.0045, 8, s * (-0.003 + tilt)), width, Slot.HAIR, L);
+}
+
+/** Small closed mouth with a hint of a smile and a lower lip shadow. */
+function mouth(b: PartBuilder, h: HeadShape, smile = 0.0025, w = 0.02, du = 0): void {
+  stroke(b, h, arc(du, -0.066, w, -smile, 8), 0.0034, Slot.INK, L);
+  ellipse(b, h, du, -0.0712, w * 0.36, 0.0026, 0, Slot.LIPS, L * 0.7, 10);
+}
+
+function blush(b: PartBuilder, h: HeadShape): void {
+  for (const s of [1, -1]) ellipse(b, h, s * 0.064, -0.039, 0.0125, 0.0068, 0, Slot.BLUSH, L * 0.6, 12);
+}
+
 export function buildFace(b: PartBuilder, h: HeadShape, faceId: string): void {
-  const L = 0.0022; // lift above the skin
-  const eyeU = 0.043;
-  const eyeV = -0.006;
   switch (faceId) {
     case 'face.bright': {
-      for (const s of [1, -1]) {
-        ellipse(b, h, s * eyeU, eyeV, 0.0135, 0.0175, 0, Slot.INK, L);
-        ellipse(b, h, s * eyeU + 0.005, eyeV + 0.007, 0.0045, 0.0045, 0, Slot.EYE_WHITE, L + 0.0008, 8);
-        stroke(b, h, arc(s * (eyeU + 0.002), eyeV + 0.036, 0.03, 0.006, 8, s * -0.004), 0.0055, Slot.HAIR, L);
-        ellipse(b, h, s * 0.066, -0.042, 0.014, 0.008, 0, Slot.BLUSH, L * 0.6, 10);
-      }
-      stroke(b, h, arc(0, -0.066, 0.024, -0.006, 8), 0.0045, Slot.INK, L);
+      for (const s of [1, -1]) eye(b, h, s, 1.1, 1.2);
+      brows(b, h, 0.003);
+      blush(b, h);
+      // Open "D" smile.
+      ellipse(b, h, 0, -0.066, 0.0125, 0.0085, 0, Slot.INK, L, 16, (t) => (Math.sin(t) > 0 ? 0.15 : 1));
+      ellipse(b, h, 0, -0.0705, 0.0065, 0.0028, 0, Slot.BLUSH, L + 0.0008, 10);
       break;
     }
     case 'face.sleepy': {
       for (const s of [1, -1]) {
-        stroke(b, h, arc(s * eyeU, eyeV - 0.002, 0.026, -0.006, 9), 0.0052, Slot.INK, L, false);
-        stroke(b, h, arc(s * (eyeU + 0.002), eyeV + 0.03, 0.028, 0.0, 6, s * 0.003), 0.005, Slot.HAIR, L);
+        // Heavy lids: the iris shows only below a thicker, flatter lid line.
+        ellipse(b, h, s * EYE_U, EYE_V - 0.003, 0.0098, 0.009, 0, Slot.INK, L, 16, (t) => (Math.sin(t) > 0 ? 0.35 : 1));
+        stroke(b, h, arc(s * EYE_U, EYE_V - 0.0005, 0.03, 0.0015, 8), 0.0042, Slot.INK, L + 0.0004, false);
       }
-      ellipse(b, h, 0, -0.07, 0.0055, 0.0045, 0, Slot.INK, L, 10);
+      brows(b, h, -0.003, 0.002);
+      mouth(b, h, 0.0005, 0.016);
       break;
     }
     case 'face.wink': {
-      // Left eye open (almond), right eye a closed smile-curve; lopsided grin and blush.
-      ellipse(b, h, eyeU, eyeV, 0.0125, 0.0165, 0.12, Slot.INK, L, 16, (t) => (Math.sin(t) > 0 ? 0.82 : 1));
-      ellipse(b, h, eyeU + 0.004, eyeV + 0.006, 0.0036, 0.0036, 0, Slot.EYE_WHITE, L + 0.0008, 8);
-      stroke(b, h, arc(-eyeU, eyeV - 0.002, 0.026, 0.007, 9), 0.0052, Slot.INK, L, false);
-      for (const s of [1, -1]) {
-        stroke(b, h, arc(s * (eyeU + 0.001), eyeV + 0.034 + (s < 0 ? -0.003 : 0), 0.03, 0.003, 6, s * -0.002), 0.0058, Slot.HAIR, L);
-        ellipse(b, h, s * 0.066, -0.042, 0.013, 0.007, 0, Slot.BLUSH, L * 0.6, 10);
-      }
-      stroke(b, h, arc(0.004, -0.066, 0.026, -0.007, 8, 0.004), 0.0045, Slot.INK, L);
+      eye(b, h, 1);
+      closedEye(b, h, -1);
+      brows(b, h, 0.001);
+      blush(b, h);
+      mouth(b, h, 0.006, 0.024, 0.004);
       break;
     }
     case 'face.grin': {
-      // Big open smile: a half-moon mouth with teeth and tongue; round, bright eyes.
-      for (const s of [1, -1]) {
-        ellipse(b, h, s * eyeU, eyeV, 0.013, 0.0165, 0, Slot.INK, L);
-        ellipse(b, h, s * eyeU + 0.0045, eyeV + 0.0065, 0.0042, 0.0042, 0, Slot.EYE_WHITE, L + 0.0008, 8);
-        stroke(b, h, arc(s * (eyeU + 0.002), eyeV + 0.037, 0.03, 0.007, 8, s * -0.004), 0.0055, Slot.HAIR, L);
-      }
-      ellipse(b, h, 0, -0.066, 0.021, 0.015, 0, Slot.INK, L, 18, (t) => (Math.sin(t) > 0 ? 0.18 : 1));
-      ellipse(b, h, 0, -0.0645, 0.016, 0.0035, 0, Slot.EYE_WHITE, L + 0.0008, 12);
-      ellipse(b, h, 0, -0.0755, 0.0095, 0.0045, 0, Slot.BLUSH, L + 0.0008, 10);
+      for (const s of [1, -1]) eye(b, h, s, 1.04);
+      brows(b, h, 0.002);
+      // Wide open smile with teeth and tongue.
+      ellipse(b, h, 0, -0.064, 0.02, 0.0135, 0, Slot.INK, L, 20, (t) => (Math.sin(t) > 0 ? 0.16 : 1));
+      ellipse(b, h, 0, -0.0625, 0.0155, 0.0032, 0, Slot.EYE_WHITE, L + 0.0008, 12);
+      ellipse(b, h, 0, -0.0728, 0.0085, 0.0038, 0, Slot.BLUSH, L + 0.0008, 10);
       break;
     }
     case 'face.freckles': {
       for (const s of [1, -1]) {
-        ellipse(b, h, s * eyeU, eyeV, 0.0125, 0.0165, s * 0.12, Slot.INK, L, 16, (t) => (Math.sin(t) > 0 ? 0.82 : 1));
-        ellipse(b, h, s * eyeU + 0.004, eyeV + 0.006, 0.0036, 0.0036, 0, Slot.EYE_WHITE, L + 0.0008, 8);
-        stroke(b, h, arc(s * (eyeU + 0.001), eyeV + 0.034, 0.03, 0.004, 6, s * -0.002), 0.0058, Slot.HAIR, L);
-        // Freckles: a loose cluster over each cheek and the bridge of the nose.
-        for (const [u, v] of [[0.052, -0.03], [0.064, -0.036], [0.058, -0.045], [0.073, -0.044], [0.046, -0.039], [0.069, -0.027]] as const) {
-          ellipse(b, h, s * u, v, 0.0033, 0.0033, 0, Slot.LIPS, L * 0.8, 7);
+        eye(b, h, s);
+        for (const [u, v] of [[0.052, -0.03], [0.064, -0.036], [0.058, -0.045], [0.073, -0.043], [0.046, -0.038], [0.068, -0.027]] as const) {
+          ellipse(b, h, s * u, v, 0.0028, 0.0028, 0, Slot.LIPS, L * 0.8, 7);
         }
-        ellipse(b, h, s * 0.02, -0.024, 0.0022, 0.0022, 0, Slot.LIPS, L * 0.8, 6);
+        ellipse(b, h, s * 0.019, -0.024, 0.002, 0.002, 0, Slot.LIPS, L * 0.8, 6);
       }
-      stroke(b, h, arc(0, -0.067, 0.022, -0.004, 7), 0.0042, Slot.INK, L);
+      brows(b, h);
+      mouth(b, h, 0.004);
       break;
     }
     case 'face.calm':
     default: {
-      for (const s of [1, -1]) {
-        // Almond eye: an ellipse slightly flattened on top, tilted outward, with a small highlight.
-        ellipse(b, h, s * eyeU, eyeV, 0.0125, 0.0165, s * 0.12, Slot.INK, L, 16, (t) => (Math.sin(t) > 0 ? 0.82 : 1));
-        ellipse(b, h, s * eyeU + 0.004, eyeV + 0.006, 0.0036, 0.0036, 0, Slot.EYE_WHITE, L + 0.0008, 8);
-        stroke(b, h, arc(s * (eyeU + 0.001), eyeV + 0.034, 0.03, 0.002, 6, s * -0.002), 0.0058, Slot.HAIR, L);
-      }
-      stroke(b, h, arc(0, -0.068, 0.02, 0.0, 6), 0.0042, Slot.INK, L);
+      for (const s of [1, -1]) eye(b, h, s);
+      brows(b, h);
+      mouth(b, h);
       break;
     }
   }
