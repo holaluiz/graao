@@ -25,12 +25,13 @@ import {
   type KitCategory,
   type KitColor,
   type KitCover,
+  type KitDoor,
   type KitPart,
   type WallKind,
 } from './kitCore';
 
-const add = (category: KitCategory, id: string, name: string, cover: KitCover, parts: KitPart[], o: { water?: boolean; scale?: [number, number]; alignToGround?: boolean; length?: number } = {}) =>
-  addPrefab({ id, name, category, cover, parts, scale: o.scale ?? [1, 1], ...(o.water ? { material: 'water' as const } : {}), ...(o.alignToGround ? { alignToGround: true } : {}), ...(o.length ? { length: o.length } : {}) });
+const add = (category: KitCategory, id: string, name: string, cover: KitCover, parts: KitPart[], o: { water?: boolean; scale?: [number, number]; alignToGround?: boolean; length?: number; door?: KitDoor } = {}) =>
+  addPrefab({ id, name, category, cover, parts, scale: o.scale ?? [1, 1], ...(o.water ? { material: 'water' as const } : {}), ...(o.alignToGround ? { alignToGround: true } : {}), ...(o.length ? { length: o.length } : {}), ...(o.door ? { door: o.door } : {}) });
 const serra = (id: string, name: string, cover: KitCover, parts: KitPart[], o?: Parameters<typeof add>[5]) => add('serra', id, name, cover, parts, o);
 const bosque = (id: string, name: string, cover: KitCover, parts: KitPart[], o?: Parameters<typeof add>[5]) => add('bosque', id, name, cover, parts, o);
 
@@ -144,22 +145,30 @@ bosque('margem-riacho-4', 'Margem do riacho 4 m', 'decoracao', [
 ], { alignToGround: true });
 bosque('pedras-travessia', 'Pedras de travessia', 'decoracao', [...[[-0.9, 0.1], [0, -0.2], [0.9, 0.15]].map(([x, z]) => cyl(x!, 0.08, z!, 0.32, 0.14, 'rochaClara', { seg: 7 }))]);
 /**
- * Waterfall (cachoeira): a quartzite cliff 5 m high and 10 m wide with a ledge on top where the stream leaves it, the
- * pool at its foot, and a cleft behind the falling water — a hidden way from the pool up a rock stair to the ledge.
- * Origin: the pool's edge level; the cliff face toward +Z.
+ * Waterfall (cachoeira): a quartzite cliff 5 m high, 10 m wide and 10 m deep with a ledge on top where the stream leaves
+ * it, the pool at its foot, and a cleft behind the falling water — a hidden way from the pool up a rock stair to the
+ * ledge. The rock covers the terrain's step from the pool level to the shelf behind (planet.ts flattens the cleft's
+ * floor to the pool's level). Origin: the pool's edge level; the cliff face toward +Z.
  */
-const FALL = { h: 5.0, w: 10 };
+const FALL = { h: 5.0, w: 10, d: 10 };
 serra('cachoeira-paredao', 'Cachoeira: paredão', 'estrutura', [
-  // Two cliff blocks with the cleft between them (x −1.0 .. 1.0), and the upper ledge.
-  span(-FALL.w / 2, -1.0, -7.0, -1.0, FALL.h, -0.6, 'quartzito'),
-  span(1.0, -1.0, -7.0, FALL.w / 2, FALL.h, -0.6, 'quartzito'),
-  span(-1.0, -1.0, -7.0, 1.0, FALL.h, -6.15, 'quartzito'),
-  box(-3.2, FALL.h + 0.04, -3.6, 2.2, 0.06, 3.2, 'musgo', deco),
-  box(3.0, FALL.h + 0.04, -3.6, 2.0, 0.06, 3.2, 'musgo', deco),
+  // Two cliff blocks with the cleft between them (x −1.0 .. 1.0), the rock closing the cleft, and the upper ledge.
+  span(-FALL.w / 2, -1.0, -FALL.d, -1.0, FALL.h, -0.6, 'quartzito'),
+  span(1.0, -1.0, -FALL.d, FALL.w / 2, FALL.h, -0.6, 'quartzito'),
+  span(-1.0, -1.0, -FALL.d, 1.0, FALL.h, -6.15, 'quartzito'),
+  box(-3.2, FALL.h + 0.04, -5.0, 2.2, 0.06, 4.6, 'musgo', deco),
+  box(3.0, FALL.h + 0.04, -5.0, 2.0, 0.06, 4.6, 'musgo', deco),
   ...boulder(3, 1.0, ['rochaClara', 'quartzito']).map((p) => ({ ...p, x: p.x - 4.4, z: p.z + 0.3 })),
   ...boulder(8, 0.8, ['quartzito', 'musgo']).map((p) => ({ ...p, x: p.x + 4.5, z: p.z + 0.2 })),
   // Strata lines on the face.
   ...[1.2, 2.6, 3.9].flatMap((y, i) => [box(-3.0, y, -0.58, 2.0, 0.05, 0.02, 'rochaClara', near), box(3.0, y + (i % 2) * 0.3, -0.58, 2.0, 0.05, 0.02, 'rochaClara', near)]),
+  // Quartzite ledges and blocks breaking the cliff's planes (campo rupestre rock: pale, tilted, mossy on top).
+  ...([[-3.9, 1.6, 0.9, 0.35, -8, 'rochaClara'], [-2.0, 3.1, 1.3, 0.3, 6, 'quartzito'], [-4.2, 4.3, 0.8, 0.45, -4, 'rochaClara'], [2.4, 0.9, 1.1, 0.4, 7, 'rochaClara'], [3.8, 2.4, 0.9, 0.3, -6, 'quartzito'], [2.2, 4.1, 1.2, 0.4, 5, 'rochaClara']] as [number, number, number, number, number, KitColor][]).flatMap(([x, y, hx, hy, rz, c]) => [
+    box(x, y, -0.45, hx, hy, 0.28, c, { ...deco, rz }),
+    box(x, y + hy + 0.04, -0.45, hx * 0.8, 0.05, 0.22, 'musgo', { ...near, rz }),
+  ]),
+  // Rounded blocks on the rim and a jagged skyline.
+  ...([[-4.2, -1.5, 0.9], [-1.6, -2.4, 0.7], [1.8, -1.9, 0.8], [4.3, -3.2, 1.0], [-3.6, -8.6, 1.1], [3.4, -7.4, 0.9]] as [number, number, number][]).map(([x, z, r], i) => box(x, FALL.h + r * 0.45, z, r, r * 0.55, r * 0.8, i % 2 ? 'quartzito' : 'rochaClara', { ry: i * 37 })),
   // Rock stair inside the cleft, from the pool up to the ledge (rising toward −Z, 42°).
   ...stair(0, { rise: FALL.h, run: 5.6, steps: 18, width: 1.8, landing: 0, color: 'rochaClara' }).map((p) => ({ ...p, z: -0.5 - p.z, rx: p.rx ? -p.rx : p.rx })),
 ]);
@@ -167,9 +176,9 @@ serra('cachoeira-agua', 'Cachoeira: queda e poço', 'decoracao', [
   // Falling sheet just in front of the cleft, the foam at the bottom, the pool.
   box(0, FALL.h / 2 + 0.1, -0.35, 1.3, FALL.h / 2 + 0.1, 0.06, 'agua', deco),
   box(0, 0.2, 0.2, 1.6, 0.25, 0.5, 'espuma', deco),
-  cyl(0, -0.05, 2.6, 3.6, 0.03, 'agua', { ...deco, seg: 14 }),
+  cyl(0, 0.05, 2.6, 3.6, 0.03, 'agua', { ...deco, seg: 14 }),
   // Stream on the upper ledge, toward the edge.
-  box(0, FALL.h + 0.06, -3.6, 0.9, 0.02, 3.1, 'agua', deco),
+  box(0, FALL.h + 0.06, -5.2, 0.9, 0.02, 4.7, 'agua', deco),
 ], { water: true });
 bosque('poco-borda', 'Borda de pedras do poço', 'baixa', [
   ...Array.from({ length: 9 }, (_, i) => {
@@ -182,7 +191,7 @@ addBuilding({
   name: 'Cachoeira do Bosque',
   category: 'bosque',
   halfX: 5.5,
-  halfZ: 7.0,
+  halfZ: 10.0,
   settle: 'center',
   pieces: [
     { prefab: 'cachoeira-paredao', x: 0, z: 0 },
@@ -196,7 +205,9 @@ addBuilding({
 
 /** Rural house walls: whitewash with a blue frame, a dark barrado; tall wooden doors. */
 const SITIO = { color: 'cal' as KitColor, frame: 'azulColonial' as KitColor, leaf: 'azulColonial' as KitColor, look: 'colonial' as const, plinth: { h: 0.6, color: 'terraVermelha' as KitColor } };
-for (const kind of ['cheia', 'janela', 'porta'] as WallKind[]) bosque(`sitio-${kind}-2`, `Sítio: ${kind} 2 m`, 'alta', wall(2, kind, SITIO), { length: 2 });
+for (const kind of ['cheia', 'janela', 'porta'] as WallKind[]) {
+  bosque(`sitio-${kind}-2`, `Sítio: ${kind} 2 m`, 'alta', wall(2, kind, { ...SITIO, openLeaves: false }), { length: 2, ...(kind === 'porta' ? { door: { w: 1.4, h: 2.55, style: 'dupla' as const, color: SITIO.leaf } } : {}) });
+}
 bosque('fundacao-sitio-8x6', 'Piso do sítio 8×6', 'passagem', foundation(8, 6, 'terraVermelha', 'telhaColonial'));
 /** Porch (varanda) along the front: a brick floor, wooden posts and a lean-to roof continuing the main one. */
 bosque('varanda-8', 'Varanda 8 m', 'passagem', [

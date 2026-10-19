@@ -1,5 +1,5 @@
 /** The static game world (terrain trimesh + prop colliders) is identical for every room: build once per process. */
-import { createGameWorld, resolveChestSpots, type ChestSpot, type GameWorld } from '@graao/game-core';
+import { buildNavGraph, createGameWorld, resolveChestSpots, resolveCreepAreas, type ChestSpot, type CreepArea, type GameWorld, type NavGraph } from '@graao/game-core';
 import { log } from './log';
 
 let world: Promise<GameWorld> | null = null;
@@ -25,4 +25,31 @@ export function getChestSpots(w: GameWorld): ChestSpot[] {
     log('chest spots ready', { ms: Math.round(performance.now() - t0), valid: spots.length - bad.length, refused: bad.map((s) => `${s.def.id}: ${s.reason}`) });
   }
   return spots;
+}
+
+const creepAreas = new WeakMap<GameWorld, CreepArea[]>();
+
+/** The creep areas validated against the static world (once per process; every room spawns from these). */
+export function getCreepAreas(w: GameWorld): CreepArea[] {
+  let areas = creepAreas.get(w);
+  if (!areas) {
+    const t0 = performance.now();
+    areas = resolveCreepAreas(w.physics);
+    creepAreas.set(w, areas);
+    log('creep areas ready', { ms: Math.round(performance.now() - t0), points: areas.map((a) => `${a.def.id}: ${a.points.length}`), off: areas.filter((a) => !a.points.length).map((a) => `${a.def.id} ${JSON.stringify(a.refused)}`) });
+  }
+  return areas;
+}
+
+const navs = new WeakMap<GameWorld, NavGraph>();
+
+/** The bots' navigation graph of the static world (built on first use, once per process: about 2 s). */
+export function getNav(w: GameWorld): NavGraph {
+  let nav = navs.get(w);
+  if (!nav) {
+    nav = buildNavGraph(w);
+    navs.set(w, nav);
+    log('nav graph ready', nav.stats);
+  }
+  return nav;
 }

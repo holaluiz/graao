@@ -168,7 +168,7 @@ describe('GRALootSpawner on the sphere', () => {
 
 describe('chest colliders per room (the server world is shared)', () => {
   it('stops a character at its own room’s chest and lets another room’s characters through', () => {
-    const s = spots.find((x) => x.def.id === 'lago-margem-norte')!;
+    const s = spots.find((x) => x.def.id === 'trilha-leste')!;
     const handle = addChestCollider(world.physics, s.pos, s.up, s.forward);
     refreshQueries(world.physics);
     try {
@@ -214,7 +214,7 @@ describe('GRALootSystem (authoritative chests and pickups)', () => {
       equip: (a, slot) => ((a as Actor).weapon = slot),
     };
     const sys = new GRALootSystem(host, spots);
-    sys.generate(1234, 4, ['vila-poco']);
+    sys.generate(1234, 4, ['trilha-oeste']);
     const chest = sys.chests[0]!;
     const near = (k: number): Vec3 => {
       const p = { x: chest.spot.pos.x + chest.spot.forward.x * 1.6 + k * 0.3, y: chest.spot.pos.y + chest.spot.forward.y * 1.6, z: chest.spot.pos.z + chest.spot.forward.z * 1.6 };

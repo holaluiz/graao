@@ -4,10 +4,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, type Room } from '@colyseus/sdk';
-import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, PLANET, UFO, WEAPONS, randomAppearance } from '@graao/game-data';
-import { castOrigin, chestOf, diveStart, tormentaCircleAt, tormentaEdgeMeters, tormentaInside, ufoPosition, ufoSpeed } from '@graao/game-core';
+import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, MAP_HASH, PLANET, UFO, WEAPONS, randomAppearance } from '@graao/game-data';
+import { Group, castOrigin, chestOf, diveStart, groups, latLonToDir, northTangent, tormentaCircleAt, tormentaEdgeMeters, tormentaInside, ufoPosition, ufoSpeed, waterDepth } from '@graao/game-core';
 import { SnapshotInterpolator } from '../apps/client/src/net/SnapshotInterpolator';
-import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MAX_PLAYERS, MAX_SOLO_BOTS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, v3angle, v3normalize, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
+import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MAX_PLAYERS, MAX_SOLO_BOTS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, v3angle, v3cross, v3normalize, v3projectOnPlane, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
 import type { RecordMatchPayload } from '@graao/database';
 import { createGraaoServer } from '../apps/server/src/app';
 import { setAuthVerifier } from '../apps/server/src/auth/SupabaseAuth';
@@ -48,6 +48,69 @@ function waitFor<T>(room: Room, type: number, pred: (m: T) => boolean = () => tr
   });
 }
 
+/**
+ * A world-space wish (× WISH_SCALE, as sent in InputCmd) along which a runner standing at `feet` stays clear of props,
+ * rails, chests and water for `meters`. The server re-projects that constant wish onto each step's tangent plane, so
+ * the path is simulated the same way. The authored map changes with the editor: movement tests that measure timing
+ * must not depend on where its walls happen to be (a Vila das Lanternas wall stopped the runner after 2026-10-19).
+ */
+async function clearWish(feet: Vec3, meters: number): Promise<[number, number, number]> {
+  const wish = await findClearWish(feet, meters);
+  if (!wish) throw new Error(`no clear ${meters} m run from ${JSON.stringify(feet)}`);
+  return wish;
+}
+
+async function findClearWish(feet: Vec3, meters: number): Promise<[number, number, number] | null> {
+  const w = await getWorld();
+  const blockers = groups(0xffff, Group.PROP | Group.RAIL | Group.CHEST | Group.BARRIER);
+  const up0 = v3normalize(feet);
+  const e1 = northTangent(up0);
+  const e2 = v3cross(up0, e1);
+  const step = 0.5;
+  for (let k = 0; k < 24; k++) {
+    const angle = (k / 24) * Math.PI * 2;
+    const wish = v3normalize({ x: e1.x * Math.cos(angle) + e2.x * Math.sin(angle), y: e1.y * Math.cos(angle) + e2.y * Math.sin(angle), z: e1.z * Math.cos(angle) + e2.z * Math.sin(angle) });
+    let p = feet;
+    let clear = true;
+    for (let s = 0; s < meters && clear; s += step) {
+      const up = v3normalize(p);
+      const d = v3normalize(v3projectOnPlane(wish, up));
+      const side = v3cross(up, d);
+      for (const lateral of [-0.45, 0, 0.45]) {
+        for (const h of [0.35, 1.2]) {
+          const o = { x: p.x + up.x * h + side.x * lateral, y: p.y + up.y * h + side.y * lateral, z: p.z + up.z * h + side.z * lateral };
+          if (w.physics.castRay(o, d, step + 0.6, blockers)) clear = false;
+        }
+      }
+      p = w.terrain.surfaceAt(v3normalize({ x: p.x + d.x * step, y: p.y + d.y * step, z: p.z + d.z * step }));
+      if (waterDepth(p) > 0) clear = false;
+    }
+    if (clear) return [Math.round(wish.x * WISH_SCALE), Math.round(wish.y * WISH_SCALE), Math.round(wish.z * WISH_SCALE)];
+  }
+  return null;
+}
+
+/** Open ground (no water) with a clear `meters` run in some direction: a spawn for timing tests, wherever the map's buildings are. */
+async function openSpot(meters: number, skip: { lat: number; lon: number }[] = []): Promise<{ lat: number; lon: number }> {
+  const w = await getWorld();
+  for (let lat = -60; lat <= 60; lat += 7.5) {
+    for (let lon = -180; lon < 180; lon += 7.5) {
+      if (skip.some((s) => Math.abs(s.lat - lat) < 15 && Math.abs(s.lon - lon) < 15)) continue;
+      const feet = w.terrain.surfaceAt(latLonToDir(lat, lon));
+      if (waterDepth(feet) > 0) continue;
+      if (await findClearWish(feet, meters * 1.5)) return { lat, lon };
+    }
+  }
+  throw new Error(`no open ${meters} m ground on the planet`);
+}
+
+/** Feet of player `index` in the next snapshot `room` receives. */
+async function feetOf(room: Room, index: number): Promise<Vec3> {
+  const s = await waitFor<SnapshotMsg>(room, S2C.SNAPSHOT, (m) => m.p.some((p) => p[0] === index));
+  const p = s.p.find((q) => q[0] === index)!;
+  return { x: p[1]! / 1000, y: p[2]! / 1000, z: p[3]! / 1000 };
+}
+
 /** Fires aimed Sunbeam shots from `a`'s head toward `ib`'s chest using the latest snapshot positions. */
 function shooter(a: Room, ia: () => number, ib: () => number) {
   async function positions(): Promise<{ pa: number[]; pb: number[] }> {
@@ -81,8 +144,11 @@ describe('two clients in one graao room', () => {
   let welcomeB: WelcomeMsg;
 
   it('creates a room with a short code and lets a second client join by that code', async () => {
+    // A stands in the open with nothing in the way (the timing tests below run it ~20 m), and no creeps chase it.
+    const spawnA = await openSpot(26);
+    const spawnB = await openSpot(26, [spawnA]);
     const ca = new Client(url);
-    a = await ca.create(ROOM_NAME, { ...opts('A'), maxPlayers: 2 });
+    a = await ca.create(ROOM_NAME, { ...opts('A'), maxPlayers: 2, freeRoamSpawns: [spawnA, spawnB], creepCount: 0 });
     welcomeA = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
     expect(welcomeA.code).toMatch(/^GR-[2-9A-HJ-NP-Z]{4}$/);
     const cb = new Client(url);
@@ -116,6 +182,8 @@ describe('two clients in one graao room', () => {
   }, 15000);
 
   it('advances a steadily moving player uniformly per snapshot despite send jitter (smooth remotes)', async () => {
+    // 3.1 s at ≈ 5.6 m/s, plus margin: a run that meets no wall, so any speed disagreement is timing.
+    const [wx, wy, wz] = await clearWish(await feetOf(b, welcomeA.index), 22);
     let seq = 100000;
     let sending = true;
     const t0 = Date.now();
@@ -124,7 +192,7 @@ describe('two clients in one graao room', () => {
       while (sending) {
         // Like the browser client: a real-time accumulator produces exactly 60 commands per second on average.
         const due = Math.floor(((Date.now() - t0) / 1000) * 60) - sent;
-        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, WISH_SCALE, 0, 0, 0, 0, AIM_SCALE, 0] as InputCmd);
+        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, wx, wy, wz, 0, 0, AIM_SCALE, 0] as InputCmd);
         sent += cmds.length;
         if (cmds.length) a.send(C2S.PLAYER_INPUT, { i: cmds });
         // 33 ms ± 12 ms jitter, like a real browser on Wi-Fi.
@@ -162,6 +230,8 @@ describe('two clients in one graao room', () => {
   }, 15000);
 
   it('renders a remote smoothly at 60 Hz from real snapshot arrivals (client interpolation)', async () => {
+    // 3.5 s at ≈ 5.6 m/s, plus margin: wall contacts would be real speed changes, not interpolation hitches.
+    const [wx, wy, wz] = await clearWish(await feetOf(b, welcomeA.index), 24);
     let seq = 200000;
     let sending = true;
     const t0 = Date.now();
@@ -169,7 +239,7 @@ describe('two clients in one graao room', () => {
     void (async () => {
       while (sending) {
         const due = Math.floor(((Date.now() - t0) / 1000) * 60) - sent;
-        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, -WISH_SCALE, 0, 0, 0, 0, AIM_SCALE, 0] as InputCmd);
+        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, wx, wy, wz, 0, 0, AIM_SCALE, 0] as InputCmd);
         sent += cmds.length;
         if (cmds.length) a.send(C2S.PLAYER_INPUT, { i: cmds });
         await new Promise((r) => setTimeout(r, 33 + (Math.random() - 0.5) * 24));
@@ -219,6 +289,10 @@ describe('two clients in one graao room', () => {
   it('rejects a client speaking another protocol version', async () => {
     const cc = new Client(url);
     await expect(cc.create(ROOM_NAME, opts('C', PROTOCOL_VERSION + 99))).rejects.toThrow(/VERSION_MISMATCH/);
+    // Same protocol, another map build (e.g. a Graao Host installed before a map edit): refused before any state.
+    await expect(new Client(url).create(ROOM_NAME, { ...opts('C'), map: `${MAP_HASH}-outro` })).rejects.toThrow(/MAP_MISMATCH/);
+    // The welcome names the server's map, so a page can tell the other way round too.
+    expect(welcomeA.map).toBe(MAP_HASH);
     // An explicitly configured two-player room still refuses a third player.
     await expect(new Client(url).joinById(welcomeA.code, opts('D'))).rejects.toThrow(/locked|full/);
   });
@@ -480,7 +554,7 @@ describe('abilities through the authoritative server (gate 4: guns and magic)', 
     await sleep(450);
   });
 
-  it('refuses what A does not own, a projectile hits B (server-simulated), spam is refused by cooldown', async () => {
+  it('refuses what A does not own, reveals the first orb target privately and refuses cooldown spam', async () => {
     expect((await cast(1, 'leaf_shell')).r).toBe(AbilityReject.NOT_OWNED);
     expect((await cast(3, 'petal_cyclone')).r).toBe(AbilityReject.NOT_OWNED);
     events.length = 0;
@@ -495,11 +569,10 @@ describe('abilities through the authoritative server (gate 4: guns and magic)', 
     expect(events.some((e) => e.e === 'cast' && e.by === ia && e.a === 'sun_orb')).toBe(true);
     expect(events.some((e) => e.e === 'proj' && e.by === ia)).toBe(true);
     expect(events.some((e) => e.e === 'projEnd' && e.t === ib)).toBe(true);
-    const dmg = events.find((e) => e.e === 'dmg' && e.target === ib);
-    expect(dmg && dmg.e === 'dmg' && dmg.a === 'sun_orb' && dmg.kinds.includes(HitKind.ABILITY) && dmg.amount === 26).toBe(true);
+    expect(events.some((e) => e.e === 'dmg' && e.a === 'sun_orb')).toBe(false);
   });
 
-  it('areas at B warn first, then damage, slow and knock B back; the drained Mana refuses the next cast', async () => {
+  it('pollen slows without damage, meteor warns then deals moderate damage and knockback; mana gates further casts', async () => {
     events.length = 0;
     const pb = await cast(2, 'pollen_burst', 'point');
     expect(pb.r).toBe(AbilityReject.OK);
@@ -515,26 +588,22 @@ describe('abilities through the authoritative server (gate 4: guns and magic)', 
     expect(areas).toEqual(['pollen_burst', 'sun_meteor']);
     expect(events.some((e) => e.e === 'fx' && e.k === 'slow' && e.target === ib)).toBe(true);
     expect(events.some((e) => e.e === 'fx' && e.k === 'knock' && e.target === ib)).toBe(true);
-    expect(events.filter((e) => e.e === 'dmg' && e.target === ib).length).toBe(2);
+    const impacts = events.filter((e) => e.e === 'dmg' && e.target === ib);
+    expect(impacts).toHaveLength(1);
+    expect(impacts[0]!.e === 'dmg' && impacts[0]!.amount).toBe(35);
   }, 15000);
 
-  it('A eliminates B with abilities only: no respawn, RESULTS names A the winner', async () => {
-    const results = waitFor<RoomStateMsg>(a, S2C.ROOM_STATE, (m) => m.phase === MatchPhase.RESULTS, 20000);
-    const deadline = Date.now() + 16000;
-    while (!events.some((e) => e.e === 'elim') && Date.now() < deadline) {
-      // Orbs as soon as cooldown and Mana allow (the server answers COOLDOWN / NO_MANA meanwhile).
-      const r = await cast(0, 'sun_orb', 'dir');
-      await sleep(r.ok ? 700 : 300);
-    }
-    const elim = events.find((e) => e.e === 'elim');
-    expect(elim && elim.e === 'elim' && elim.by === ia && elim.target === ib).toBe(true);
-    const lethal = events.filter((e) => e.e === 'dmg' && e.target === ib).pop();
-    expect(lethal && lethal.e === 'dmg' && lethal.kinds.includes(HitKind.ELIMINATION) && lethal.kinds.includes(HitKind.ABILITY)).toBe(true);
-    const res = await results;
-    expect(res.winner).toBe(ia);
-    expect(res.players.find((p) => p.index === ia)!.kills).toBe(1);
-    // Results screen: abilities are off.
-    expect((await cast(0, 'sun_orb', 'dir')).r).toBe(AbilityReject.PHASE);
+  it('utility magic does not eliminate a fully protected player; temporary shield remains separate from normal shield', async () => {
+    expect(events.some((e) => e.e === 'elim')).toBe(false);
+    const result = waitFor<AbilityResultMsg>(b, S2C.ABILITY_RESULT, (m) => m.s === 1);
+    const status = waitFor<SelfStatusMsg>(b, S2C.SELF, (m) => m.tempShield === 40);
+    b.send(C2S.ABILITY_REQUEST, { s: 1, k: 1, a: 'leaf_shell', c: 0 });
+    expect((await result).ok).toBe(true);
+    expect((await status).tempShieldUntil).toBeGreaterThan(Date.now() + 6000);
+    const snap = await waitFor<SnapshotMsg>(a, S2C.SNAPSHOT, (m) => m.p.some((p) => p[0] === ib));
+    const target = snap.p.find((p) => p[0] === ib)!;
+    expect(target[15]).toBe(100);
+    expect(target[16]).toBe(65);
     await a.leave(true);
     await b.leave(true);
   }, 25000);
@@ -590,7 +659,7 @@ describe('ability draft through the authoritative server (gate 6: players enter 
     b.send(C2S.READY, { r: 1 });
     await ra.until((m) => m.phase === MatchPhase.ABILITY_DRAFT);
     const s = await da.until((m) => m.round === 0 && m.stage === 'pick');
-    expect(s).toMatchObject({ rounds: 4, kind: 'basic', unique: true, mine: null, repick: false });
+    expect(s).toMatchObject({ rounds: 4, kind: 'basic', unique: false, mine: null, repick: false });
     expect(s.pool).toContain('sun_orb');
     expect(s.pool).not.toContain('sun_meteor');
     expect([...s.priority].sort()).toEqual([ia, ib].sort());
@@ -602,36 +671,24 @@ describe('ability draft through the authoritative server (gate 6: players enter 
     expect(r.r).toBe(AbilityReject.PHASE);
   });
 
-  it('keeps choices hidden; a disputed ability goes to the player with priority and the other repicks', async () => {
-    const first = da.latest()!.priority[0]!;
-    const winner = first === ia ? a : b;
-    const loser = first === ia ? b : a;
-    const loserBox = first === ia ? db : da;
-    const loserIndex = first === ia ? ib : ia;
-    winner.send(C2S.DRAFT_PICK, { r: 0, a: 'sun_orb' });
+  it('keeps choices hidden and accepts the same ability for both participants', async () => {
+    a.send(C2S.DRAFT_PICK, { r: 0, a: 'sun_orb' });
     // The other side sees a lock, never the choice.
-    const seen = await (first === ia ? db : da).until((m) => m.seats.some((x) => x.index === first && x.locked));
+    const seen = await db.until((m) => m.seats.some((x) => x.index === ia && x.locked));
     expect(seen.mine).toBeNull();
     expect(seen.owners).toEqual([]);
-    loser.send(C2S.DRAFT_PICK, { r: 0, a: 'sun_orb' });
-    const lost = await loserBox.until((m) => m.repick);
-    expect(lost.lostTo).toEqual({ index: first, a: 'sun_orb' });
-    expect(lost.owners).toEqual([['sun_orb', first]]);
-    // Taking it anyway is refused (the state keeps no choice); something else is accepted.
-    loser.send(C2S.DRAFT_PICK, { r: 0, a: 'sun_orb' });
-    await sleep(150);
-    expect(loserBox.latest()!.mine).toBeNull();
-    loser.send(C2S.DRAFT_PICK, { r: 0, a: 'sap_snare' });
+    b.send(C2S.DRAFT_PICK, { r: 0, a: 'sun_orb' });
     const rev = await da.until((m) => m.round === 0 && m.stage === 'reveal');
     expect(rev.reveal).toEqual(
       expect.arrayContaining([
-        { index: first, a: 'sun_orb', auto: false, contested: true },
-        { index: loserIndex, a: 'sap_snare', auto: false, contested: true },
+        { index: ia, a: 'sun_orb', auto: false, contested: false },
+        { index: ib, a: 'sun_orb', auto: false, contested: false },
       ]),
     );
-    // Round 2 gives priority to the other player.
+    expect(rev.repick).toBe(false);
+    expect(rev.lostTo).toBeNull();
     const r1 = await da.until((m) => m.round === 1 && m.stage === 'pick');
-    expect(r1.priority[0]).toBe(loserIndex);
+    expect(r1.unique).toBe(false);
   });
 
   it('rounds 2–4 (the last one an Ultimate); a player who runs out of time gets a random free ability', async () => {
@@ -642,12 +699,13 @@ describe('ability draft through the authoritative server (gate 6: players enter 
     b.send(C2S.DRAFT_PICK, { r: 2, a: 'gust_ring' });
     const ult = await da.until((m) => m.round === 3 && m.stage === 'pick');
     expect(ult.kind).toBe('ultimate');
-    expect(ult.pool.sort()).toEqual(['dawn_lance', 'petal_cyclone', 'sun_meteor']);
+    expect(ult.pool).toHaveLength(10);
+    expect(ult.pool).toEqual(expect.arrayContaining(['dawn_lance', 'petal_cyclone', 'sun_meteor', 'chalk_shortcut']));
     a.send(C2S.DRAFT_PICK, { r: 3, a: 'dawn_lance' });
     // B waits: the window (2.5 s) expires and the server picks for B.
     const done = await da.until((m) => m.stage === 'done', 6000);
     expect(picksOf(done, ia)[3]).toBe('dawn_lance');
-    expect(['sun_meteor', 'petal_cyclone']).toContain(picksOf(done, ib)[3]);
+    expect(ult.pool).toContain(picksOf(done, ib)[3]);
   }, 10000);
 
   it('the match starts with the drafted loadouts, public in ROOM_STATE, and only they can be cast', async () => {
@@ -659,7 +717,8 @@ describe('ability draft through the authoritative server (gate 6: players enter 
     expect(lb).toEqual(picksOf(final, ib));
     expect(la.slice(1, 3)).toEqual(['wind_step', 'pollen_burst']);
     expect(lb.slice(1, 3)).toEqual(['leaf_shell', 'gust_ring']);
-    expect(la.filter((id) => lb.includes(id))).toEqual([]);
+    expect(la[0]).toBe('sun_orb');
+    expect(lb[0]).toBe('sun_orb');
     expect(st.players.every((p) => p.inMatch)).toBe(true);
     await sleep(450); // countdown
     const ask = (room: Room, s: number, k: number, id: string) =>
@@ -1041,7 +1100,8 @@ describe('solo matches with server-controlled bots', () => {
   });
 
   it.each([-1, '2', true, null, Infinity, NaN])('rejects an invalid solo bot count (%s)', async (soloBots) => {
-    await expect(new Client(url).create(ROOM_NAME, { ...opts('A'), soloBots })).rejects.toThrow();
+    // The reason reaches the client (not a bare 500 from the HTTP router).
+    await expect(new Client(url).create(ROOM_NAME, { ...opts('A'), soloBots })).rejects.toThrow(/invalid solo bot count/);
   });
 
   it('waits for the human, completes the draft promptly and lets bots jump from the UFO', async () => {

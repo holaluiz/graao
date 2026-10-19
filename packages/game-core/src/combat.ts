@@ -16,13 +16,22 @@ export interface Vitals {
   /** Ability protection, separate from normal Shield; its owner expires it in the authoritative tick. */
   temporaryShield?: number;
   temporaryShieldUntil?: number;
+  /** In-match attributes (Vitalidade, Energia) raise these; absent = the ATTRIBUTES defaults. */
+  maxHealth?: number;
+  maxMana?: number;
+  /** Mana regeneration multiplier (Energia). */
+  manaRegen?: number;
 }
 
 export const newVitals = (): Vitals => ({ health: ATTRIBUTES.maxHealth, shield: ATTRIBUTES.maxShield, mana: ATTRIBUTES.maxMana, alive: true });
 
+/** The Health and Mana maxima of these vitals (attributes included). */
+export const maxHealthOf = (v: Pick<Vitals, 'maxHealth'>): number => v.maxHealth ?? ATTRIBUTES.maxHealth;
+export const maxManaOf = (v: Pick<Vitals, 'maxMana'>): number => v.maxMana ?? ATTRIBUTES.maxMana;
+
 /** Replaces/refreshes protection without converting it to normal Shield or allowing additive stacking. */
 export function applyTemporaryShield(v: Vitals, amount: number, durationSeconds: number, now: number): number {
-  if (!v.alive || !Number.isFinite(amount) || amount <= 0 || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return 0;
+  if (!v.alive || !Number.isFinite(amount) || amount <= 0 || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || !Number.isFinite(now)) return 0;
   expireTemporaryShield(v, now);
   const before = v.temporaryShield ?? 0;
   v.temporaryShield = Math.min(ATTRIBUTES.maxShield, Math.max(before, Math.round(amount)));
@@ -154,6 +163,8 @@ export interface PlayerHitTarget {
   index: number;
   feet: Vec3;
   alive: boolean;
+  /** Another body (a creep): a capsule from `bottom` to `top` above the feet, no head (no critical hits). */
+  box?: { bottom: number; top: number; radius: number };
 }
 
 /**
@@ -165,11 +176,11 @@ export function rayPlayers(o: Vec3, d: Vec3, maxDist: number, players: PlayerHit
   for (const p of players) {
     if (p.index === ignore || !p.alive) continue;
     const up = v3normalize(p.feet);
-    const head = v3addScaled(p.feet, up, HITBOX.headHeight);
-    const th = raySphere(o, d, head, HITBOX.headRadius + inflate);
-    const a = v3addScaled(p.feet, up, HITBOX.bodyBottom);
-    const b = v3addScaled(p.feet, up, HITBOX.bodyTop);
-    const tb = rayCapsule(o, d, a, b, HITBOX.bodyRadius + inflate);
+    const box = p.box;
+    const th = box ? -1 : raySphere(o, d, v3addScaled(p.feet, up, HITBOX.headHeight), HITBOX.headRadius + inflate);
+    const a = v3addScaled(p.feet, up, box ? box.bottom + box.radius * 0.5 : HITBOX.bodyBottom);
+    const b = v3addScaled(p.feet, up, box ? Math.max(box.bottom + box.radius * 0.5, box.top - box.radius) : HITBOX.bodyTop);
+    const tb = rayCapsule(o, d, a, b, (box ? box.radius : HITBOX.bodyRadius) + inflate);
     let t = -1;
     let isHead = false;
     if (th >= 0 && (tb < 0 || th <= tb)) {
@@ -211,6 +222,8 @@ export interface PelletResult {
   target: number;
   head: boolean;
   distance: number;
+  /** The world collider that stopped the pellet (−1: a player, or nothing within range). */
+  handle: number;
 }
 
 /**
@@ -225,8 +238,10 @@ export function resolvePellet(
   range: number,
   players: PlayerHitTarget[],
   shooter: number,
+  /** Server: only this room's run-time colliders (doors, crates: interactives.ts). */
+  predicate?: (collider: { handle: number }) => boolean,
 ): PelletResult {
-  const world = physics.castRay(cameraOrigin, dir, range, GROUPS_WORLD_QUERY);
+  const world = physics.castRay(cameraOrigin, dir, range, GROUPS_WORLD_QUERY, predicate);
   const tw = world ? world.toi : range;
   const hp = rayPlayers(cameraOrigin, dir, tw, players, shooter);
   const aimT = hp ? hp.t : tw;
@@ -236,14 +251,14 @@ export function resolvePellet(
   const len = Math.hypot(toAim.x, toAim.y, toAim.z);
   if (len > 0.05) {
     const md = { x: toAim.x / len, y: toAim.y / len, z: toAim.z / len };
-    const block = physics.castRay(muzzle, md, len - 0.15, GROUPS_WORLD_QUERY);
+    const block = physics.castRay(muzzle, md, len - 0.15, GROUPS_WORLD_QUERY, predicate);
     if (block) {
       const p = v3addScaled(muzzle, md, block.toi);
-      return { point: p, target: -1, head: false, distance: block.toi };
+      return { point: p, target: -1, head: false, distance: block.toi, handle: block.handle };
     }
   }
   const dist = Math.hypot(aimPoint.x - muzzle.x, aimPoint.y - muzzle.y, aimPoint.z - muzzle.z);
-  return { point: aimPoint, target: hp ? hp.index : -1, head: hp ? hp.head : false, distance: dist };
+  return { point: aimPoint, target: hp ? hp.index : -1, head: hp ? hp.head : false, distance: dist, handle: !hp && world ? world.handle : -1 };
 }
 
 /** Muzzle position for a character at `feet` facing `facing` (approximate right-hand blaster). */

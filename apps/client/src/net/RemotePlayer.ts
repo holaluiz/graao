@@ -37,6 +37,8 @@ export class RemotePlayer {
   readonly holder = new WeaponHolder();
   /** performance.now() of this player's last shot (holds the aim pose). */
   firedAt = -1e9;
+  /** performance.now() of this player's last punch (empty hands). */
+  punchedAt = -1e9;
   alive = true;
   /** Authoritative vitals from the same snapshot being presented. */
   health = 0;
@@ -48,6 +50,8 @@ export class RemotePlayer {
   diving = false;
   /** In deep water (from the latest snapshot's movement state). */
   swimming = false;
+  /** Gait of the latest snapshot (footsteps: walk, run or sprint). */
+  moveState: MovementState = MovementState.IDLE;
   /** Outside the Tormenta's safe region, by the server's verdict (latest snapshot). */
   inTormenta = false;
 
@@ -111,6 +115,7 @@ export class RemotePlayer {
     this.onShip = (b.flags & SnapFlag.ON_SHIP) !== 0;
     this.diving = !this.onShip && (b.flags & SnapFlag.DIVING) !== 0;
     this.swimming = !this.onShip && b.moveState === MovementState.SWIM;
+    this.moveState = b.moveState;
     this.character.root.visible = !this.onShip;
     if (this.onShip) {
       this.pos.copy(b.pos);
@@ -124,7 +129,8 @@ export class RemotePlayer {
     this.facing.addScaledVector(up, -this.facing.dot(up)).normalize();
     this.character.setPose(this.pos, up, this.facing);
     const v = b.vel.clone();
-    const speed = v.addScaledVector(up, -v.dot(up)).length();
+    const vertical = v.dot(up);
+    const speed = v.addScaledVector(up, -vertical).length();
     this.alive = (b.flags & SnapFlag.ALIVE) !== 0;
     this.inTormenta = (b.flags & SnapFlag.IN_TORMENTA) !== 0;
     this.label.classList.toggle('down', !this.alive);
@@ -146,6 +152,7 @@ export class RemotePlayer {
       airJumped: (b.flags & SnapFlag.AIR_JUMPED) !== 0,
       groundDist,
       waterDepth: waterDepth(this.pos),
+      vertical,
     });
     this.placeLabel(up, camera, viewport, physics);
   }

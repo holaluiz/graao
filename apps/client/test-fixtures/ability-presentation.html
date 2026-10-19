@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>graao · QA de apresentação das magias</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #e9e0cd; color: #2a2130; font: 15px system-ui; }
+  header { padding: 16px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  p { margin: 0; }
+  button { padding: 10px 16px; border: 2px solid #2a2130; border-radius: 10px; background: #fff9ec; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  canvas { display: block; width: 100%; height: 64vh; }
+  #status { min-height: 72px; padding: 16px 24px; font-weight: 650; }
+  .note { padding: 0 24px 20px; font-size: 13px; }
+</style>
+<header>
+  <h1>graao · apresentação das magias</h1>
+  <button id="restart">Reiniciar amostra</button>
+  <button id="shoot">Atirar na lâmpada · 30</button>
+  <button id="expire">Avançar 7 segundos</button>
+</header>
+<canvas aria-label="Farol, asas com guarda-chuva e Roda de Confetes"></canvas>
+<div id="overlay"></div>
+<p id="status" role="status">Carregando…</p>
+<p class="note">Fixture de desenvolvimento: renderer real, anexos de conjurações aceitas e Farol do engine autoritativo. Bonecos simplificados; sem rede, áudio ou motor de movimento. Não representa uma partida completa.</p>
+<script type="module">
+  import * as THREE from 'three';
+  import { ABILITIES } from '@graao/game-data';
+  import { GRAAbilitySystem, createCharacterState, newVitals, newAbilityRuntime, raySphere } from '@graao/game-core';
+  import { AbilityWorldPresentation } from '../src/render/vfx/AbilityWorldPresentation';
+
+  const canvas = document.querySelector('canvas');
+  const status = document.querySelector('#status');
+  const shoot = document.querySelector('#shoot');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#b4d9dc');
+  const camera = new THREE.PerspectiveCamera(42, 1, .1, 500);
+  camera.position.set(0, 106, 17); camera.lookAt(0, 101.5, 0);
+  const floor = new THREE.Mesh(new THREE.SphereGeometry(100, 80, 48), new THREE.MeshBasicMaterial({ color: '#9cae65' }));
+  scene.add(floor);
+  // Only the analytical planet query is needed by the beacon placement; no character or cover physics is simulated.
+  const physics = { castRay(origin, dir, max) {
+    const toi = raySphere(origin, dir, { x: 0, y: 0, z: 0 }, 100);
+    return toi >= 0 && toi <= max ? { toi, handle: 1 } : null;
+  } };
+  const presentation = new AbilityWorldPresentation(scene, physics, camera, document.querySelector('#overlay'));
+  presentation.mirrorCollisions = false;
+  const actors = [];
+  const dummies = [];
+  for (let i = 0; i < 3; i++) {
+    const root = new THREE.Group();
+    root.position.set((i - 1) * 5, Math.sqrt(10000 - ((i - 1) * 5) ** 2), 0);
+    root.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), root.position.clone().normalize());
+    scene.add(root); dummies.push(root);
+    if (i > 0) {
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(.3, .9, 4, 8), new THREE.MeshBasicMaterial({ color: '#496c83' }));
+      body.position.y = 1; root.add(body);
+      const head = new THREE.Mesh(new THREE.IcosahedronGeometry(.3, 1), new THREE.MeshBasicMaterial({ color: '#ecc18e' }));
+      head.position.y = 1.9; root.add(head);
+    }
+  }
+  const engine = new GRAAbilitySystem({
+    physics, actors: () => actors, canFight: () => true, damage() {}, dash() {},
+    emit(event) {
+      if (event.e === 'abilityEntity') presentation.onEntity(event.entity);
+      if (event.e === 'abilityEntityEnd') presentation.removeEntity(event.id);
+    },
+  });
+  let offset = 0;
+  let hitText = '';
+  let until = 0;
+  const now = () => performance.now() + offset;
+  function updateStatus() {
+    const beacon = engine.entities.find((entity) => entity.kind === 'beacon');
+    const attachments = dummies.map((root) => root.children.filter((child) => child.name.startsWith('ability-attachment:')).length);
+    shoot.disabled = !beacon;
+    status.textContent = `Farol: ${beacon ? beacon.health + '/60' : 'destruído/expirado'} · Asas + guarda-chuva: ${attachments[1]} anexos · Roda: ${attachments[2] ? 'ativa' : 'expirada'} · ${Math.max(0, (until - now()) / 1000).toFixed(1)} s. ${hitText}`;
+  }
+  function restart() {
+    engine.clear(); presentation.clear(); actors.length = 0; offset = 0; hitText = '';
+    const actor = { index: 0, state: createCharacterState({ x: 0, y: 100, z: 0 }, { x: 1, y: 0, z: 0 }),
+      vitals: newVitals(), runtime: newAbilityRuntime(0), loadout: ['wind_step', 'sap_snare', 'leaf_shell', 'firefly_beacon'],
+      cooldownEnds: [0, 0, 0, 0], castUntil: 0, slowUntil: 0, slowFactor: 1 };
+    actors.push(actor);
+    const at = dummies[0].position;
+    const start = now();
+    engine.request(actor, { slot: 3, id: 'firefly_beacon', seq: 1, cmdSeq: 0, point: { x: at.x, y: at.y, z: at.z } }, start - 500);
+    engine.update(start, .05);
+    presentation.onCast(1, ABILITIES.paper_wings, dummies[1], start);
+    presentation.onCast(1, ABILITIES.magic_umbrella, dummies[1], start);
+    presentation.onCast(2, ABILITIES.confetti_wheel, dummies[2], start);
+    until = start + 6000; updateStatus();
+  }
+  document.querySelector('#restart').onclick = restart;
+  document.querySelector('#expire').onclick = () => { offset += 7000; engine.update(now(), .05); presentation.update(now()); updateStatus(); };
+  shoot.onclick = () => {
+    const view = engine.entities.find((entity) => entity.kind === 'beacon');
+    if (!view) return;
+    const root = presentation.root.children.find((child) => child.userData.ability === 'firefly_beacon');
+    const center = root.children[1].getWorldPosition(new THREE.Vector3());
+    const up = center.clone().normalize();
+    const side = new THREE.Vector3().crossVectors(up, new THREE.Vector3(0, 0, 1)).normalize();
+    const origin = center.clone().addScaledVector(side, -4);
+    const hit = engine.occludeRay(origin, side, 8);
+    if (hit) engine.damageBarrier(hit.handle, 30);
+    hitText = hit ? 'Tiro atingiu a lâmpada visível.' : 'ERRO: tiro atravessou a lâmpada.'; updateStatus();
+  };
+  function frame() {
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix();
+    engine.update(now(), 1 / 60); presentation.update(now());
+    updateStatus(); renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  restart(); frame();
+</script>
+</html>

@@ -10,7 +10,8 @@
  *
  * Plus PersistentMark objects (Ultimate Marks, see UltimateMarks.ts): two meshes per marked player.
  *
- * Spawning writes one slot of a ring buffer; nothing is allocated per effect and no Object3D is created.
+ * Spawning writes one pooled slot; nothing is allocated per effect and no Object3D is created.
+ * Active ground warnings are protected from other decals, including repeated area pulses.
  * Categories decide what quality levels may drop: GameplayCritical and PersistentMark effects are never reduced.
  */
 import * as THREE from 'three';
@@ -314,6 +315,7 @@ export class GRAVFXSystem {
   private readonly dColor: THREE.BufferAttribute;
   private readonly dParams: THREE.BufferAttribute;
   private readonly decalExpiry: Float32Array;
+  private readonly decalModes = new Uint8Array(this.decalN);
   private decalDirty = false;
   /** Terrain surface for a direction (set by the app once the world exists). */
   private ground: ((dir: Vec3) => Vec3) | null = null;
@@ -464,11 +466,14 @@ export class GRAVFXSystem {
   /**
    * A disc on the ground around `center` (radius m) living `life` s. The grid is conformed to the terrain when
    * spawned; on a roof or a rock top (centre well above the terrain) it stays a flat disc at the centre's height.
-   * Telegraphs and shockwaves are GameplayCritical (never reduced); splashes are Environment.
+   * Telegraphs and shockwaves are kept at every quality; splashes are Environment. An expired slot is reused
+   * first, then a non-warning decal. If all twenty slots contain active warnings, new decals are dropped
+   * until capacity is available; an existing warning must remain visible until its scheduled impact.
    */
   decal(center: Vec3, radius: number, color: THREE.ColorRepresentation, life: number, mode: DecalMode): void {
     if (mode === DecalMode.SPLASH && this.scale < 0.5) return;
-    const k = this.decalCursor;
+    const k = this.availableDecalSlot();
+    if (k < 0) return;
     this.decalCursor = (k + 1) % this.decalN;
     const G = DECAL_GRID;
     const per = G * G;
@@ -505,7 +510,18 @@ export class GRAVFXSystem {
         this.dParams.setXYZW(v, this.time, life, mode, k * 1.7);
       }
     this.decalExpiry[k] = this.time + life;
+    this.decalModes[k] = mode;
     this.decalDirty = true;
+  }
+
+  private availableDecalSlot(): number {
+    let replaceable = -1;
+    for (let offset = 0; offset < this.decalN; offset++) {
+      const slot = (this.decalCursor + offset) % this.decalN;
+      if (this.decalExpiry[slot]! <= this.time) return slot;
+      if (replaceable < 0 && this.decalModes[slot]! >= DecalMode.SHOCKWAVE) replaceable = slot;
+    }
+    return replaceable;
   }
 
   /** Floats an Ultimate Mark over a character (`parent` = its root, local +Y = up). PersistentMark: always drawn. */

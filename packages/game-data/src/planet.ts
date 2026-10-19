@@ -56,13 +56,24 @@ export const TERRAIN_FEATURES: TerrainFeature[] = [
   { kind: 'flatten', lat: -12.06, lon: -18.02, radiusDeg: 11, falloffDeg: 5, height: 1.7 },
   { kind: 'channel', points: RIVERS.baixada, widthDeg: 3.0, bankDeg: 2.4, floor: 0.35 },
   { kind: 'channel', points: RIVERS.corrego, widthDeg: 0.75, bankDeg: 0.6, floor: -1.55 },
-  // Lago Espelho's island (after the islands of the Pampulha lagoon).
-  { kind: 'mound', lat: -28.31, lon: -42.92, radiusDeg: 3.6, height: 5.6 },
+  // Lago Espelho's island (after the islands of the Pampulha lagoon): low and gentle (≤ 36°), so the footbridges land
+  // on a walkable shore.
+  { kind: 'mound', lat: -28.31, lon: -42.92, radiusDeg: 5.0, height: 4.6 },
   // Serra do Mirante (after the Serra do Curral): two crests from the Planalto toward the Fenda, a pass between them.
   { kind: 'ridge', lat1: 68.4, lon1: -63.5, lat2: 60.6, lon2: -83.5, widthDeg: 5.2, height: 6.2 },
   { kind: 'ridge', lat1: 57.9, lon1: -87.7, lat2: 49.1, lon2: -96.9, widthDeg: 4.6, height: 5.0 },
-  // Giant Tree hill.
+  // The chapada the Serra do Mirante massif stands on (docs/world/SERRA_DO_MIRANTE.md): the first crest levelled under
+  // its foot and its trail ramp, so the rock rises from the ground on every side.
+  { kind: 'flatten', lat: 64.2, lon: -77.5, radiusDeg: 6.8, falloffDeg: 3.6, height: 6.2 },
+  // Bosque dos Varais: the giant tree's hill; on its south flank the waterfall's pool terrace, the floor of the cleft
+  // behind the falls (level with the pool, so the rock stair stands clear of the ground) and the shelf above the cliff.
+  // The step from the cleft's floor to the shelf happens under the cliff's rock (cachoeira-paredao is 10 m deep).
   { kind: 'mound', lat: 34, lon: 62, radiusDeg: 16, height: 7 },
+  { kind: 'flatten', lat: 23.8, lon: 62, radiusDeg: 2.6, falloffDeg: 1.4, height: 2.2 },
+  { kind: 'flatten', lat: 27.04, lon: 62, radiusDeg: 1.6, falloffDeg: 1.0, height: 2.2 },
+  { kind: 'flatten', lat: 31.82, lon: 62, radiusDeg: 1.6, falloffDeg: 1.0, height: 7.2 },
+  // The farm's leveled yard (terreiro).
+  { kind: 'flatten', lat: 24.89, lon: 74.27, radiusDeg: 4.2, falloffDeg: 2.6, height: 1.1 },
   // Observatory hill.
   { kind: 'mound', lat: -18, lon: 128, radiusDeg: 15, height: 9 },
   { kind: 'flatten', lat: -18, lon: 128, radiusDeg: 3.2, falloffDeg: 2.5, height: 8.6 },
@@ -139,18 +150,21 @@ export const SCATTER: ScatterRule[] = [
   { kind: 'flower', count: 1800, minHeight: 0.5, maxSlope: 0.6, density: { frequency: 5.1, threshold: 0.1 }, visualOnly: true, seed: 16, biomes: { campo: 1, mata: 1, orla: 1, colonial: 0.6, urbano: 0.35, serra: 0.45 } },
 ];
 
-/** Free-roam spawn points (also used as fallback landing points). */
+/**
+ * Free-roam spawn points (also used as fallback landing points): the open ground of the Vila das Lanternas' largo
+ * (between the fountain, the stalls and the sobrado, each with room to run north) and a few spots in the open country.
+ */
 export const SPAWNS: { lat: number; lon: number }[] = [
-  { lat: 7, lon: -2 },
-  { lat: 9, lon: 2.5 },
+  { lat: 6.4, lon: 1.39 },
+  { lat: 8.47, lon: 1.97 },
+  { lat: 7.35, lon: -1.65 },
   { lat: 22, lon: 30 },
   { lat: -10, lon: 95 },
   { lat: 30, lon: -60 },
   { lat: -15, lon: -150 },
   { lat: 4, lon: -2 },
-  { lat: 11, lon: -2 },
-  { lat: 6.5, lon: 4.5 },
-  { lat: 11, lon: -6 },
+  { lat: 11.19, lon: -1.28 },
+  { lat: 7.87, lon: 4.0 },
 ];
 
 /** Centre of the MVP arena (Lantern Village plaza). Match spawns face it. */

@@ -136,8 +136,8 @@ const itemOf = (name: string) => ITEM_IDS.indexOf(name as (typeof ITEM_IDS)[numb
 describe('chests and loot through the authoritative server (two clients)', () => {
   it('one opening, one winner per item, swaps, ammunition, consumables, death drops and fresh chests next match', async () => {
     const chestsBefore = (await getWorld()).physics.chestHandles.size;
-    const [sa, sb] = await Promise.all([standAt('lago-margem-norte', 1.45, -0.45), standAt('lago-margem-norte', 1.45, 0.75)]);
-    const a = await new Client(url).create(ROOM_NAME, { ...opts('A'), maxPlayers: 2, countdownMs: 100, resultsMs: 6000, skipDraft: true, skipUfo: true, tormentaOff: true, matchSpawns: [sa, sb], lootSeed: 777, lootSpots: ['lago-margem-norte'], chestCount: 6 });
+    const [sa, sb] = await Promise.all([standAt('trilha-leste', 1.45, -0.45), standAt('trilha-leste', 1.45, 0.75)]);
+    const a = await new Client(url).create(ROOM_NAME, { ...opts('A'), maxPlayers: 2, countdownMs: 100, resultsMs: 6000, skipDraft: true, skipUfo: true, tormentaOff: true, matchSpawns: [sa, sb], lootSeed: 777, lootSpots: ['trilha-leste'], chestCount: 6 });
     const A = watch(a);
     const ia = (await waitWelcome(a)).index;
     const b = await new Client(url).joinById((await A.rooms.until((m) => m.players.length === 1)).code, opts('B'));
@@ -293,8 +293,8 @@ describe('chests and loot through the authoritative server (two clients)', () =>
   }, 60000);
 
   it('an opening completes even if the opener leaves at once; late requests from an old generation are refused', async () => {
-    const [sa, sb] = await Promise.all([standAt('vila-poco', 1.45, -0.45), standAt('vila-poco', 1.45, 0.75)]);
-    const a = await new Client(url).create(ROOM_NAME, { ...opts('A'), maxPlayers: 2, countdownMs: 100, resultsMs: 4000, skipDraft: true, skipUfo: true, tormentaOff: true, matchSpawns: [sa, sb], lootSeed: 99, lootSpots: ['vila-poco'], chestCount: 4 });
+    const [sa, sb] = await Promise.all([standAt('trilha-oeste', 1.45, -0.45), standAt('trilha-oeste', 1.45, 0.75)]);
+    const a = await new Client(url).create(ROOM_NAME, { ...opts('A'), maxPlayers: 2, countdownMs: 100, resultsMs: 4000, skipDraft: true, skipUfo: true, tormentaOff: true, matchSpawns: [sa, sb], lootSeed: 99, lootSpots: ['trilha-oeste'], chestCount: 4 });
     const A = watch(a);
     await waitWelcome(a);
     const b = await new Client(url).joinById((await A.rooms.until((m) => m.players.length === 1)).code, opts('B'));

@@ -3,10 +3,13 @@
  *
  *   bottom-left   Fôlego bubbles (only under water / catching breath), Escudo / Vida / Mana (+ status chips: LENTO)
  *   bottom-centre ability slots 1 2 3 + Ultimate 4: icon (shape per ability), Mana cost, cooldown sweep
- *   bottom-right  E / Q weapon slots (rarity mark, magazine · reserve, reload progress); above them the
- *                 consumable belt Z / X / C and the pickup feed (LootHud)
+ *   bottom-right  SOCOS card (empty hands, H) and the E / Q weapon slots (rarity mark, magazine · reserve, reload
+ *                 progress; "Vazio" until a chest gives a weapon); above them the consumable belt Z / X / C and the
+ *                 pickup feed (LootHud)
  *   centre-low    interaction prompt [F], the weapon replacement card, the use bar (LootHud)
- *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs
+ *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs;
+ *                 the stamina wheel to its right while it is not full (climbing, hanging, gliding) with the glide time
+ *                 left as an inner arc
  *   top           place name, match status chip, room code, kill feed
  *   overlays      countdown / banners, elimination screen (the results card is its own screen: ResultsScreen)
  *   deploy        UFO / drop panel (bottom-centre): what to do, the jump key, the window bar, the altitude; combat
@@ -26,6 +29,7 @@ import { ABILITY_ICONS } from './abilityIcons';
 import { TormentaMap, type TormentaMapView } from './TormentaMap';
 import '../styles/tormenta.css';
 import '../styles/abilities-v2.css';
+import '../styles/traversal.css';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 /** The reticle follows the spread cone at this fraction of its true screen size: it still opens and closes with the
@@ -84,6 +88,11 @@ export interface AbilitySlotView {
   /** Mirror of the server state (the HUD only displays it). */
   state: 'ready' | 'cooldown' | 'nomana' | 'casting' | 'locked' | 'silenced' | 'invalid_target' | 'blocked' | 'passive' | 'disabled';
 }
+
+const ABILITY_STATE_LABELS: Record<AbilitySlotView['state'], string> = {
+  ready: 'Pronta', cooldown: 'Recarregando', nomana: 'Mana insuficiente', casting: 'Conjurando', locked: 'Indisponível',
+  silenced: 'Silenciado', invalid_target: 'Alvo inválido', blocked: 'Bloqueada', passive: 'Passiva equipada', disabled: 'Indisponível',
+};
 
 /** UFO deployment panel (aboard, falling, landed). */
 export interface DeployView {
@@ -163,6 +172,17 @@ export class Hud {
       '<rect class="t t-left" x="-12" y="-1.5" width="7" height="3" rx="1.5"/><rect class="t t-right" x="5" y="-1.5" width="7" height="3" rx="1.5"/></g><circle class="dot" r="1.8"/>',
   );
   private readonly reticleCircle = svg('reticle circle', '-50 -50 100 100', '<circle class="ring" r="8"/><circle class="dot" r="1.8"/>');
+  /** Stamina wheel (traversal): outer ring = stamina, inner ring = glide time left (only while gliding). */
+  private readonly stamina = svg('stamina-wheel', '-20 -20 40 40',
+    '<circle class="track" r="15"/><circle class="fill" r="15" pathLength="100" transform="rotate(-90)"/>' +
+    '<circle class="glide-track" r="9.5"/><circle class="glide" r="9.5" pathLength="100" transform="rotate(-90)"/>');
+  private lastStamina = '';
+  /** Empty hands: a short-range mark (four knuckles around a dot) that pops on a landed punch and droops on a miss. */
+  private readonly reticleFists = svg(
+    'reticle fists',
+    '-50 -50 100 100',
+    '<g class="kn"><circle cx="-6" cy="-6" r="2"/><circle cx="6" cy="-6" r="2"/><circle cx="-6" cy="6" r="2"/><circle cx="6" cy="6" r="2"/></g><circle class="dot" r="1.8"/>',
+  );
   private readonly blocked = svg('blocked', '-50 -50 100 100', '<path d="M-7 -7 L7 7 M7 -7 L-7 7"/>');
   private readonly hitmarker = svg(
     'hitmarker',
@@ -186,6 +206,8 @@ export class Hud {
 
   private readonly effectsEl = el('div', 'fx-chips', this.vitals);
   private readonly slowChip = el('div', 'fx-chip slow', this.effectsEl);
+  private readonly silenceChip = el('div', 'fx-chip silence-chip', this.effectsEl);
+  private readonly temporaryShieldChip = el('div', 'fx-chip temporary-shield-chip', this.effectsEl);
   /** Breath under water: a row of bubbles over the vitals that pop as the air runs out. */
   private readonly breathEl = el('div', 'breath');
   private readonly breathBubbles: HTMLElement[] = [];
@@ -197,6 +219,9 @@ export class Hud {
 
   // Weapons.
   private readonly weaponsEl = el('div', 'weapons', this.el);
+  private readonly fistsEl = el('div', 'slot fists', this.weaponsEl);
+  private readonly fistsKey = el('div', 'slot-key', this.fistsEl, 'H');
+  private lastFists = '';
   private readonly slots: { root: HTMLElement; name: HTMLElement; ammo: HTMLElement; fill: HTMLElement; key: HTMLElement; rarity: HTMLElement; last: string }[] = [];
   private readonly ammoHint = el('div', 'ammo-hint', this.el);
   private reloadKey = keyLabel(DEFAULT_BINDINGS.reload);
@@ -246,7 +271,11 @@ export class Hud {
   private lastVitals = { health: -1, shield: -1, mana: -1 };
 
   constructor() {
-    this.center.append(this.reticleCross, this.reticleCircle, this.blocked, this.hitmarker);
+    this.center.append(this.reticleCross, this.reticleCircle, this.reticleFists, this.blocked, this.hitmarker, this.stamina);
+    const fistHead = el('div', 'slot-head', this.fistsEl);
+    el('span', 'slot-rarity', fistHead, '✊');
+    el('span', 'slot-name', fistHead, 'Socos');
+    el('div', 'slot-ammo', this.fistsEl).innerHTML = '<small>sem custo</small>';
     this.placeEl.style.opacity = '0';
     this.roomEl.hidden = true;
     this.statusEl.hidden = true;
@@ -255,6 +284,7 @@ export class Hud {
     this.noticeEl.hidden = true;
     this.ammoHint.hidden = true;
     this.slowChip.hidden = true;
+    this.silenceChip.hidden = this.temporaryShieldChip.hidden = true;
     this.deployEl.hidden = true;
     this.altimeter.hidden = true;
     this.tormHead.append(svg('torm-icon', '-16 -16 32 32', `<path class="torn" d="${tornRing()}"/><circle class="safe" r="5.5"/>`), el('span', 'torm-title', undefined, 'TORMENTA'), this.tormPips);
@@ -470,14 +500,27 @@ export class Hud {
 
   // ------------------------------------------------------------------------------------------------ centre
 
-  setReticle(profile: 'dot-cross' | 'circle', spreadPx: number, blocked: boolean, visible: boolean): void {
+  /** The Escudo / Vida / Mana block (the in-match level strip is its last row). */
+  get vitalsEl(): HTMLElement {
+    return this.vitals;
+  }
+
+  setReticle(profile: 'dot-cross' | 'circle' | 'fists', spreadPx: number, blocked: boolean, visible: boolean): void {
     this.reticleCross.style.display = visible && profile === 'dot-cross' ? '' : 'none';
     this.reticleCircle.style.display = visible && profile === 'circle' ? '' : 'none';
+    this.reticleFists.style.display = visible && profile === 'fists' ? '' : 'none';
     this.blocked.style.display = visible && blocked ? '' : 'none';
     const s = Math.max(0, spreadPx) * RETICLE_SCALE;
     this.reticleCross.style.setProperty('--spread', `${s}px`);
     // The ring follows the cone; its radius changes (not a scale), so the stroke stays thin at any spread.
     this.reticleCircle.style.setProperty('--ring', `${Math.max(8, s)}px`);
+  }
+
+  /** A punch of the local player: landed (pop), nothing in reach (droop) or stopped by a wall (shake). */
+  meleeFeedback(kind: 'hit' | 'miss' | 'wall'): void {
+    for (const k of ['hit', 'miss', 'wall']) this.reticleFists.classList.remove(k);
+    replay(this.reticleFists, kind);
+    if (kind === 'wall') this.notice('PAREDE NO CAMINHO', 0.7);
   }
 
   /** Server-confirmed hit by the local player. The strongest kind decides the shape; abilities add their diamonds. */
@@ -535,6 +578,25 @@ export class Hud {
     this.healthRow.root.classList.toggle('critical', low);
   }
 
+  /**
+   * Stamina wheel: `frac` 0..1 of stamina, `glide` 0..1 of the glide time left while gliding (null: not gliding), `show`
+   * false hides it (full and on the ground). Low stamina turns it red, an empty one blinks.
+   */
+  setStamina(frac: number, glide: number | null, show: boolean): void {
+    const key = show ? `${Math.round(frac * 100)}|${glide === null ? '-' : Math.round(glide * 100)}` : 'off';
+    if (key === this.lastStamina) return;
+    this.lastStamina = key;
+    this.stamina.classList.toggle('on', show);
+    if (!show) return;
+    const fill = this.stamina.querySelector<SVGCircleElement>('.fill')!;
+    fill.style.strokeDasharray = `${(frac * 100).toFixed(1)} 100`;
+    const g = this.stamina.querySelector<SVGCircleElement>('.glide')!;
+    g.style.strokeDasharray = `${((glide ?? 0) * 100).toFixed(1)} 100`;
+    this.stamina.classList.toggle('gliding', glide !== null);
+    this.stamina.classList.toggle('low', frac < 0.3 && frac > 0);
+    this.stamina.classList.toggle('out', frac <= 0);
+  }
+
   /** Air left under water (0..1); null hides the meter (head out of the water and lungs full). */
   setBreath(frac: number | null): void {
     // Redraw only when a bubble visibly changes (twentieths).
@@ -553,27 +615,38 @@ export class Hud {
     this.breathEl.classList.toggle('out', key <= 0);
   }
 
-  setWeapons(active: number, slots: WeaponSlotView[], reload: number): void {
+  /**
+   * Weapon slots and the fists card. `fists` says the attack is a punch right now (no weapon at all, or weapons put
+   * away with `fistsKey`): the fists card is the active one and no weapon slot is.
+   */
+  setWeapons(active: number, slots: WeaponSlotView[], reload: number, fists = false, fistsKey = 'H'): void {
+    const fk = `${fists}|${fistsKey}`;
+    if (fk !== this.lastFists) {
+      this.lastFists = fk;
+      this.fistsEl.classList.toggle('active', fists);
+      this.fistsKey.textContent = fistsKey;
+      this.fistsEl.title = fists ? 'Atacando com socos' : `${fistsKey}: guardar as armas e lutar com socos`;
+    }
     slots.forEach((s, i) => {
       const v = this.slots[i]!;
-      const key = `${i === active}|${s.key}|${s.name}|${s.ammo}|${s.reserve}|${s.rarity?.name}|${s.empty}`;
+      const key = `${i === active && !fists}|${s.key}|${s.name}|${s.ammo}|${s.reserve}|${s.rarity?.name}|${s.empty}`;
       if (key !== v.last) {
         // A new weapon in this slot: a short pop so the change reads.
         if (v.last && v.name.textContent !== s.name) replay(v.root, 'fresh');
         v.last = key;
-        v.root.classList.toggle('active', i === active && !s.empty);
+        v.root.classList.toggle('active', i === active && !s.empty && !fists);
         v.root.classList.toggle('empty', !!s.empty);
         v.key.textContent = s.key;
-        v.name.textContent = s.empty ? 'vazio' : s.name;
+        v.name.textContent = s.empty ? 'Vazio' : s.name;
         v.rarity.textContent = s.rarity?.symbol ?? '';
         v.rarity.title = s.rarity?.name ?? '';
         v.root.style.setProperty('--rarity', s.rarity?.color ?? 'transparent');
-        v.ammo.innerHTML = s.empty ? '<small>pegue uma arma</small>' : `${s.ammo}<small> / ${s.reserve}</small>`;
+        v.ammo.innerHTML = s.empty ? '<small>abra baús</small>' : `${s.ammo}<small> / ${s.reserve}</small>`;
         v.root.classList.toggle('dry', !s.empty && s.ammo === 0);
       }
       v.fill.style.width = i === active && reload >= 0 ? `${reload * 100}%` : '0%';
     });
-    const a = slots[active];
+    const a = fists ? undefined : slots[active];
     const dry = !!a && !a.empty && a.ammo === 0 && reload < 0;
     this.ammoHint.hidden = !(dry || reload >= 0);
     this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : a && a.reserve <= 0 ? 'SEM MUNIÇÃO · procure caixas de munição' : `SEM MUNIÇÃO · ${this.reloadKey}`;
@@ -607,13 +680,10 @@ export class Hud {
         s.cost.hidden = s.sweep.hidden = s.time.hidden = passive;
         s.name.textContent = v.name;
       }
-      const stateLabel: Record<AbilitySlotView['state'], string> = {
-        ready: 'Pronta', cooldown: 'Recarregando', nomana: 'Mana insuficiente', casting: 'Conjurando', locked: 'Indisponível',
-        silenced: 'Silenciado', invalid_target: 'Alvo inválido', blocked: 'Bloqueada', passive: v.active ? 'Passiva ativa' : 'Passiva equipada', disabled: 'Indisponível',
-      };
-      s.root.title = `${v.name} · ${stateLabel[v.state]}${v.description ? `\n${v.description}` : ''}`;
-      s.root.setAttribute('aria-label', s.root.title);
-      s.root.dataset.active = String(v.active ?? false);
+      const title = `${v.name} · ${passive && v.active ? 'Passiva ativa' : ABILITY_STATE_LABELS[v.state]}${v.description ? `\n${v.description}` : ''}`;
+      if (s.root.title !== title) { s.root.title = title; s.root.setAttribute('aria-label', title); }
+      const active = String(v.active ?? false);
+      if (s.root.dataset.active !== active) s.root.dataset.active = active;
       if (s.root.dataset.state !== v.state) s.root.dataset.state = v.state;
       s.sweep.style.setProperty('--p', v.cd.toFixed(3));
       const t = v.secondsLeft > 0 ? (v.secondsLeft >= 10 ? String(Math.ceil(v.secondsLeft)) : v.secondsLeft.toFixed(1).replace('.', ',')) : '';
@@ -634,15 +704,12 @@ export class Hud {
   }
 
   setAbilityStatus(silencedSeconds: number, temporaryShield: number): void {
-    this.effectsEl.dataset.silenced = String(silencedSeconds > 0);
-    let silence = this.effectsEl.querySelector<HTMLElement>('.silence-chip');
-    if (!silence) silence = el('div', 'fx-chip silence-chip', this.effectsEl);
-    silence.hidden = silencedSeconds <= 0;
-    if (!silence.hidden) silence.textContent = `SILENCIADO · ${silencedSeconds.toFixed(1).replace('.', ',')} s`;
-    let temporary = this.effectsEl.querySelector<HTMLElement>('.temporary-shield-chip');
-    if (!temporary) temporary = el('div', 'fx-chip temporary-shield-chip', this.effectsEl);
-    temporary.hidden = temporaryShield <= 0;
-    if (!temporary.hidden) temporary.textContent = `◈ ${Math.ceil(temporaryShield)} ESCUDO TEMPORÁRIO`;
+    this.silenceChip.hidden = silencedSeconds <= 0;
+    const silence = `SILENCIADO · ${silencedSeconds.toFixed(1).replace('.', ',')} s`;
+    if (!this.silenceChip.hidden && this.silenceChip.textContent !== silence) this.silenceChip.textContent = silence;
+    this.temporaryShieldChip.hidden = temporaryShield <= 0;
+    const shield = `◈ ${Math.ceil(temporaryShield)} ESCUDO TEMPORÁRIO`;
+    if (!this.temporaryShieldChip.hidden && this.temporaryShieldChip.textContent !== shield) this.temporaryShieldChip.textContent = shield;
   }
 
   /** Ultimate charged: URGENT once (pop + notice), then RELEVANT (a short shimmer), then a quiet golden rim. */

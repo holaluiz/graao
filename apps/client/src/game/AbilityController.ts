@@ -43,6 +43,18 @@ export class AbilityController {
   /** Local clock when the current slow ends, and its factor. */
   slowEnd = 0;
   slowFactor = 1;
+  silencedEnd = 0;
+  blockedEnd = 0;
+  rootedEnd = 0;
+  noSprintEnd = 0;
+  temporaryShield = 0;
+  temporaryShieldEnd = 0;
+  speed = 1;
+  airControl = 1;
+  sprintSpeed = 1;
+  readonly passiveActive = new Array<boolean>(LOADOUT_SLOTS).fill(false);
+  private readonly deniedUntil = new Array<number>(LOADOUT_SLOTS).fill(0);
+  private readonly deniedReason = new Array<AbilityReject>(LOADOUT_SLOTS).fill(AbilityReject.OK);
   private seq = 0;
   private readonly inFlight: InFlight[] = [];
 
@@ -82,6 +94,11 @@ export class AbilityController {
 
   /** What the mirror expects the server to answer for this slot now (presentation only). */
   expect(slot: number, now: number, alive: boolean, canFight: boolean): AbilityReject {
+    const id = this.loadout[slot];
+    const def = id ? ABILITIES[id] : undefined;
+    if (def?.kind === 'passive') return AbilityReject.PASSIVE;
+    if (def && now < this.silencedEnd && !def.tags.includes('cleanse')) return AbilityReject.SILENCED;
+    if (def && now < this.blockedEnd) return AbilityReject.BUSY;
     return checkCast(
       { alive, canFight, mana: this.manaShown, loadout: this.loadout, cooldownEnds: this.cdEnd, castUntil: this.castEnd },
       slot,
@@ -91,8 +108,9 @@ export class AbilityController {
   }
 
   /** A key press: always a request; predicted (cooldown, wind-up and Mana mirrored at once) when expected to pass. */
-  press(slot: number, now: number, alive: boolean, canFight: boolean): AbilityPress {
+  press(slot: number, now: number, alive: boolean, canFight: boolean): AbilityPress | null {
     const def = this.def(slot);
+    if (def.kind === 'passive') return null;
     const predicted = this.expect(slot, now, alive, canFight) === AbilityReject.OK;
     this.seq = (this.seq + 1) & 0x7fffffff;
     const f: InFlight = { seq: this.seq, slot, cost: def.manaCost, t: now, predicted, prevCd: this.cdEnd[slot]! };
@@ -111,6 +129,10 @@ export class AbilityController {
    * prediction: present it now), or nothing.
    */
   onResult(r: AbilityResultMsg): { rollback: boolean; late: boolean; reason: AbilityReject } {
+    if (!r.ok && r.k >= 0 && r.k < LOADOUT_SLOTS) {
+      this.deniedUntil[r.k] = performance.now() + 900;
+      this.deniedReason[r.k] = r.r;
+    }
     const i = this.inFlight.findIndex((f) => f.seq === r.s);
     if (i < 0) return { rollback: false, late: false, reason: r.r };
     const f = this.inFlight[i]!;
@@ -139,6 +161,24 @@ export class AbilityController {
     this.mana = s.mana;
     this.slowEnd = s.slowUntil > serverNow ? serverToLocal(s.slowUntil) : 0;
     this.slowFactor = s.slow / 100;
+    const end = (t = 0) => t > serverNow ? serverToLocal(t) : 0;
+    this.silencedEnd = end(s.silencedUntil);
+    this.blockedEnd = end(s.blockedUntil);
+    this.rootedEnd = end(s.rootedUntil);
+    this.noSprintEnd = end(s.noSprintUntil);
+    this.temporaryShieldEnd = end(s.tempShieldUntil);
+    this.temporaryShield = s.tempShield ?? 0;
+    this.speed = (s.speed ?? 100) / 100;
+    this.airControl = (s.airControl ?? 100) / 100;
+    this.sprintSpeed = (s.sprintSpeed ?? 100) / 100;
+    for (let i = 0; i < LOADOUT_SLOTS; i++) this.passiveActive[i] = s.passiveActive?.[i] ?? false;
+  }
+
+  /** Short per-slot error state; never replaces the authoritative cooldown or silence timers. */
+  targetState(slot: number, now: number): 'blocked' | 'invalid_target' | null {
+    if (now >= this.deniedUntil[slot]!) return null;
+    const reason = this.deniedReason[slot];
+    return reason === AbilityReject.BLOCKED ? 'blocked' : reason === AbilityReject.BAD_TARGET || reason === AbilityReject.OUT_OF_RANGE ? 'invalid_target' : null;
   }
 
   /** The speed multiplier the local prediction applies now (mirrors the server's slow). */
@@ -152,6 +192,12 @@ export class AbilityController {
     this.castEnd = 0;
     this.slowEnd = 0;
     this.slowFactor = 1;
+    this.silencedEnd = this.blockedEnd = this.rootedEnd = this.noSprintEnd = this.temporaryShieldEnd = 0;
+    this.temporaryShield = 0;
+    this.speed = this.airControl = this.sprintSpeed = 1;
+    this.passiveActive.fill(false);
+    this.deniedUntil.fill(0);
+    this.deniedReason.fill(AbilityReject.OK);
   }
 
   get ultimateSlot(): number {

@@ -89,14 +89,117 @@ export function treeGeometry(variant: number): Geo {
   return merge(parts);
 }
 
+/**
+ * Araucária (the southern Minas pine): a tall bare trunk and a candelabra crown of flat-topped tiers, wider at the top
+ * (its unmistakable silhouette against the sky). Same trunk collider as before (game-core scatterColliders 'pine').
+ */
 export function pineGeometry(variant: number): Geo {
-  const parts: Geo[] = [paint(at(new THREE.CylinderGeometry(0.13, 0.22, 2.2, 6), 0, 1.1, 0), '#7a5640')];
-  const tiers = 3 + (variant % 2);
+  const r = mulberry32(200 + variant);
+  const h = 4.6 + variant * 0.5;
+  const parts: Geo[] = [paint(at(new THREE.CylinderGeometry(0.12, 0.22, h, 7), 0, h / 2, 0), '#6e5040')];
+  const tiers = 2 + (variant % 2);
   for (let i = 0; i < tiers; i++) {
-    const t = i / tiers;
-    parts.push(paint(at(new THREE.ConeGeometry(1.35 - t * 0.85, 1.5, 7), 0, 1.6 + i * 0.95, 0, 0, i * 0.4, 0), i % 2 ? '#3f7d57' : '#4b8a5e'));
+    const y = h - 0.4 - i * 0.75;
+    const w = 2.3 - i * 0.55;
+    // Branch whorls (thin bars) and the flat dark-green shelves they carry.
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2 + i * 0.5 + r() * 0.3;
+      parts.push(paint(at(new THREE.CylinderGeometry(0.03, 0.05, w, 4), Math.cos(a) * w * 0.45, y - 0.12, Math.sin(a) * w * 0.45, 0, -a, Math.PI / 2 - 0.25), '#5c4234'));
+    }
+    parts.push(paint(at(new THREE.CylinderGeometry(w, w * 0.75, 0.45, 9), 0, y + 0.15, 0, 0, i * 0.3, 0), i % 2 ? '#2f6447' : '#3a7352', 0.06, r));
   }
+  parts.push(paint(at(new THREE.ConeGeometry(0.7, 0.6, 7), 0, h + 0.15, 0), '#3a7352'));
   return merge(parts.map(faceted));
+}
+
+/** Cerrado tree (pequizeiro, barbatimão): a twisted dark trunk, low crooked branches, flat sparse crowns. */
+export function cerradoTreeGeometry(variant: number): Geo {
+  const r = mulberry32(600 + variant);
+  const parts: Geo[] = [];
+  const bark = '#5e4433';
+  parts.push(paint(at(new THREE.CylinderGeometry(0.14, 0.24, 1.6, 6), 0.1, 0.75, 0, 0, 0, 0.18), bark));
+  parts.push(paint(at(new THREE.CylinderGeometry(0.1, 0.15, 1.3, 6), -0.15, 1.9, 0.05, 0.1, 0, -0.35), bark));
+  const crowns = 3 + (variant % 2);
+  for (let i = 0; i < crowns; i++) {
+    const a = (i / crowns) * Math.PI * 2 + r() * 0.8;
+    const d = 0.55 + r() * 0.5;
+    const y = 2.2 + r() * 0.7;
+    const s = 0.75 + r() * 0.45;
+    parts.push(paint(at(new THREE.CylinderGeometry(0.05, 0.08, d * 1.3, 5), Math.cos(a) * d * 0.5, y - 0.35, Math.sin(a) * d * 0.5, Math.sin(a) * 0.9, 0, -Math.cos(a) * 0.9), bark));
+    parts.push(paint(at(blob(s, 1, 0.16, 610 + variant * 7 + i, 0.42), Math.cos(a) * d, y, Math.sin(a) * d), ['#7f9a4a', '#8fa857', '#6d8a3e'][(i + variant) % 3]!, 0.08, r));
+  }
+  return merge(parts);
+}
+
+/** Ipê in bloom (yellow, purple or pink by variant): a slim pale trunk, a round crown of flowers, petals on the ground. */
+export function ipeGeometry(variant: number): Geo {
+  const r = mulberry32(700 + variant);
+  const bloom = ['#f2c230', '#b5609f', '#f19bbd'][variant % 3]!;
+  const light = ['#f7d65a', '#cd7fbb', '#f6b9d0'][variant % 3]!;
+  const parts: Geo[] = [paint(at(new THREE.CylinderGeometry(0.15, 0.24, 3.4, 7), 0, 1.7, 0), '#a58566')];
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + 0.4;
+    parts.push(paint(at(new THREE.CylinderGeometry(0.06, 0.1, 1.5, 5), Math.cos(a) * 0.45, 3.4, Math.sin(a) * 0.45, Math.sin(a) * 0.7, 0, -Math.cos(a) * 0.7), '#8f7258'));
+  }
+  const blobs = 4;
+  for (let i = 0; i < blobs; i++) {
+    const a = (i / blobs) * Math.PI * 2 + r();
+    const rad = i === 0 ? 0 : 0.95;
+    parts.push(paint(at(blob(i === 0 ? 1.55 : 1.05, 1, 0.14, 720 + variant * 9 + i, 0.8), Math.cos(a) * rad, 4.2 + (i === 0 ? 0.35 : r() * 0.4), Math.sin(a) * rad), i % 2 ? light : bloom, 0.05, r));
+  }
+  // Fallen petals: a thin disc around the trunk.
+  parts.push(paint(at(new THREE.CylinderGeometry(1.9, 1.9, 0.03, 12), 0, 0.17, 0), light));
+  return merge(parts);
+}
+
+/** Jerivá palm: a slim curved trunk, drooping fronds, a cluster of orange coconuts. */
+export function palmGeometry(variant: number): Geo {
+  const r = mulberry32(800 + variant);
+  const parts: Geo[] = [];
+  const lean = (variant - 1) * 0.07;
+  let x = 0;
+  let y = 0;
+  for (let i = 0; i < 4; i++) {
+    const segH = 1.45;
+    parts.push(paint(at(new THREE.CylinderGeometry(0.15, 0.19, segH, 7), x, y + segH / 2, 0, 0, 0, -lean * (i + 1)), '#a58566'));
+    x += Math.sin(lean * (i + 1)) * segH;
+    y += Math.cos(lean * (i + 1)) * segH;
+  }
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + r() * 0.3;
+    const frond = new THREE.BoxGeometry(0.42, 0.04, 2.0);
+    frond.translate(0, 0, 1.0);
+    parts.push(paint(at(frond, x, y + 0.1, 0, 0.55 + r() * 0.25, a, 0), i % 2 ? '#5f9a48' : '#6faa52'));
+  }
+  for (let i = 0; i < 4; i++) parts.push(paint(at(new THREE.IcosahedronGeometry(0.13, 0), x + Math.cos(i * 1.6) * 0.25, y - 0.35, Math.sin(i * 1.6) * 0.25), '#e0962e'));
+  return merge(parts.map(faceted));
+}
+
+/** Canela-de-ema (Vellozia) of the campo rupestre: forked dark stems ending in green tufts, a purple flower. */
+export function canelaGeometry(variant: number): Geo {
+  const r = mulberry32(900 + variant);
+  const parts: Geo[] = [paint(at(new THREE.CylinderGeometry(0.05, 0.08, 0.7, 5), 0, 0.35, 0), '#4a4352')];
+  const forks = 2 + (variant % 2);
+  for (let i = 0; i < forks; i++) {
+    const a = (i / forks) * Math.PI * 2 + r();
+    parts.push(paint(at(new THREE.CylinderGeometry(0.035, 0.05, 0.55, 5), Math.cos(a) * 0.12, 0.88, Math.sin(a) * 0.12, Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5), '#4a4352'));
+    parts.push(paint(at(new THREE.ConeGeometry(0.2, 0.4, 6), Math.cos(a) * 0.28, 1.25, Math.sin(a) * 0.28), '#7f9a52'));
+  }
+  parts.push(paint(at(new THREE.ConeGeometry(0.06, 0.12, 5), 0, 1.5, 0), '#b5609f'));
+  return merge(parts.map(faceted));
+}
+
+/** Golden grass tuft (capim-dourado and the dry grass of the campos): a fan of thin blades. */
+export function capimGeometry(variant: number): Geo {
+  const r = mulberry32(950 + variant);
+  const parts: Geo[] = [];
+  for (let i = 0; i < 7; i++) {
+    const a = r() * Math.PI * 2;
+    const t = 0.15 + r() * 0.25;
+    const h = 0.55 + r() * 0.35;
+    parts.push(paint(at(new THREE.ConeGeometry(0.045, h, 3), Math.cos(a) * 0.08, h / 2, Math.sin(a) * 0.08, Math.sin(a) * t, 0, -Math.cos(a) * t), ['#d8c06a', '#c9a94e', '#e3cf84'][(i + variant) % 3]!));
+  }
+  return merge(parts);
 }
 
 export function rockGeometry(variant: number): Geo {

@@ -79,7 +79,7 @@ export function updatePassives(loadout: Loadout | readonly string[], runtime: Pa
   if (passive?.type !== 'shieldRegen' || !runtime.active || !Number.isFinite(dt) || dt <= 0) { runtime.shieldCarry = 0; return modifiers; }
   const cap = ATTRIBUTES.maxShield * (passive.ceiling ?? 0.5);
   if (vitals.shield >= cap) { runtime.active = false; runtime.shieldCarry = 0; return modifiers; }
-  runtime.shieldCarry += Math.min(dt, 0.25) * passive.factor;
+  runtime.shieldCarry += dt * passive.factor;
   const points = Math.floor(runtime.shieldCarry + 1e-8);
   runtime.shieldCarry -= points;
   vitals.shield = Math.min(cap, vitals.shield + points);

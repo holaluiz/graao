@@ -1,0 +1,145 @@
+{
+  "date": "2026-10-19T03:54:54.470Z",
+  "seconds": 150,
+  "creepCount": 16,
+  "report": [
+    {
+      "plan": "1+9",
+      "seconds": 140,
+      "creepCap": 16,
+      "creepsAliveMean": 2.3,
+      "tickMeanMs": 3.95,
+      "tickPeakMs": 87.7,
+      "creepAiMeanMs": 0.089,
+      "botBrainMeanMs": 0.995,
+      "respawnsDropped": 0,
+      "kbPerSecondPerClient": 10.9,
+      "punchDamage": 27,
+      "otherDamage": 1923,
+      "eliminations": 9,
+      "endedAtS": 140,
+      "botLevels": "1,1,1,1,1,1,1,1,1",
+      "bots": [
+        {
+          "name": "Bot 1",
+          "profile": "defensivo",
+          "alive": true,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [
+            "ak47"
+          ],
+          "chestsOpened": 1,
+          "weaponsPickedUp": 1,
+          "creepsDefeated": 0,
+          "kills": 5
+        },
+        {
+          "name": "Bot 2",
+          "profile": "magico",
+          "alive": false,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [],
+          "chestsOpened": 5,
+          "weaponsPickedUp": 2,
+          "creepsDefeated": 0,
+          "kills": 1
+        },
+        {
+          "name": "Bot 3",
+          "profile": "equilibrado",
+          "alive": false,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [],
+          "chestsOpened": 1,
+          "weaponsPickedUp": 1,
+          "creepsDefeated": 0,
+          "kills": 0
+        },
+        {
+          "name": "Bot 4",
+          "profile": "agressivo",
+          "alive": false,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [],
+          "chestsOpened": 1,
+          "weaponsPickedUp": 0,
+          "creepsDefeated": 0,
+          "kills": 0
+        },
+        {
+          "name": "Bot 5",
+          "profile": "defensivo",
+          "alive": false,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [],
+          "chestsOpened": 1,
+          "weaponsPickedUp": 1,
+          "creepsDefeated": 0,
+          "kills": 3
+        },
+        {
+          "name": "Bot 6",
+          "profile": "magico",
+          "alive": false,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [],
+          "chestsOpened": 0,
+          "weaponsPickedUp": 0,
+          "creepsDefeated": 0,
+          "kills": 0
+        },
+        {
+          "name": "Bot 7",
+          "profile": "equilibrado",
+          "alive": false,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [],
+          "chestsOpened": 0,
+          "weaponsPickedUp": 0,
+          "creepsDefeated": 0,
+          "kills": 0
+        },
+        {
+          "name": "Bot 8",
+          "profile": "agressivo",
+          "alive": false,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [],
+          "chestsOpened": 1,
+          "weaponsPickedUp": 0,
+          "creepsDefeated": 0,
+          "kills": 0
+        },
+        {
+          "name": "Bot 9",
+          "profile": "defensivo",
+          "alive": false,
+          "level": 1,
+          "pointsLeft": 0,
+          "spent": {},
+          "weapons": [],
+          "chestsOpened": 0,
+          "weaponsPickedUp": 0,
+          "creepsDefeated": 0,
+          "kills": 0
+        }
+      ]
+    }
+  ]
+}

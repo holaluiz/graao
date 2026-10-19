@@ -7,7 +7,7 @@ import { PLANET } from '@graao/game-data';
 import { regionPlane } from './author';
 
 const [lat, lon, heading = '0', half = '40', step = '2'] = process.argv.slice(2);
-const sink = { placements: [], chestSpots: [], waypoints: [] };
+const sink = { placements: [], chestSpots: [], waypoints: [], trails: [] };
 const plane = regionPlane(sink, 'x', { lat: Number(lat), lon: Number(lon) }, Number(heading));
 const H = Number(half);
 const S = Number(step);

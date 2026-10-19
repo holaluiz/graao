@@ -153,6 +153,7 @@ export class LocalPlayer {
     // The snapshot does not carry input edge state: rebuild it from the last acknowledged command.
     const s = cloneCharacterState(server);
     s.jumpHeld = acked ? (acked[7] & InputButton.JUMP) !== 0 : this.state.jumpHeld;
+    s.sprintHeld = acked ? (acked[7] & InputButton.SPRINT) !== 0 : this.state.sprintHeld;
     // Snapshots do not carry dash state: rebuild it from the dash's start command (whole steps, exact).
     const d = this.dash;
     if (d && seqLE(d.seq, ackSeq)) {

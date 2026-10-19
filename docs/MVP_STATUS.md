@@ -1,5 +1,68 @@
 # graao MVP status
 
+## 2026-10-19 — Vertical World & Traversal: escalada, planagem, vento, Serra do Mirante e ilhas
+
+Exploração vertical dentro do planeta de 100 m, no mesmo motor do cliente e do servidor
+([auditoria e resultado](gameplay/VERTICAL_TRAVERSAL_AUDIT.md)):
+
+- **Movimento:** agarrar e subir beiradas (telhados da vila pelos beirais), mantle de obstáculos baixos, escalada em
+  paredões marcados com stamina (100; 18/s subindo; recupera no chão), planagem universal com uma pipa (2,6 s,
+  queda 4,8 m/s), correntes ascendentes e ventos direcionais, teto radial de 42 m. Mãos ocupadas: sem tiro nem
+  magia pendurado/escalando; planando só magias de mobilidade.
+- **Mundo:** Serra do Mirante (maciço de três patamares, três rotas ao cume: trilha 12,2 s sem pulo, escalada 5,0 s,
+  corrente 4,3 s) e o Arquipélago dos Sinos (Ilha do Sino, do Oratório e da Torre; ponte suspensa, escada de pedras
+  flutuantes, dois sinos que acordam ventos por 24 s, três baús no alto).
+- **Rede:** protocolo 11 (stamina, temporizadores e beirada no snapshot; sino autoritativo). Testado com servidor
+  real + 2 clientes e no Chromium contra o servidor (correção ≤ 6 mm). O Graao Host 0.1.0 instalado não entra em
+  salas deste build até um instalador novo (publicar exige aprovação).
+- **Editor:** família VERTICAL, aba Ventos, colisores coloridos pela tag de travessia.
+- **Bots:** sobem a trilha; não escalam nem planam (ilhas fora do grafo deles).
+
+**Validação:** suíte 607/607 em 63 arquivos, typecheck completo. Pendente: input touch, partidas reais com combate
+vertical, latência simulada, redes externas, arte final ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)).
+
+## 2026-10-19 — Ability v2: regressão e validação integrada
+
+As 40 magias (30 básicas + 10 Supremos) estão implementadas. Esta rodada corrigiu dano duplicado do Meteoro
+durante eliminações, alinhou o volume visível/autoritativo da Nuvem de Giz e impediu rastros de jogadores parados
+no Eco dos Passos. O Draft agora usa duas cartas por página em telas com até 450 px de altura; a confirmação e os
+dez participantes foram conferidos em 844×390, além de desktop e celular em retrato.
+
+**Validação final desta rodada:** 158/158 testes focados em 16 arquivos, typecheck completo, build e ESLint passaram.
+Os testes reais de Colyseus cobrem 1 cliente + 9 bots e 2 clientes + 8 bots. Há coleta reproduzível de servidor/rede
+e stress separado dos dez Supremos no engine. A qualificação manual de todas as apresentações/áudio e confrontos
+entre máquinas permanece TESTING. Evidências e limites no [relatório de validação](qa/ABILITY_V2_VALIDATION_2026-10-19.md).
+
+## 2026-10-19 — Master Plan 2.0: M0 (auditoria) e M1 (estabilidade)
+
+O [Master Game Design 2.0](product/MASTER_GAME_DESIGN_2.md) passa a ser o contrato do produto; o
+[backlog](product/BACKLOG.md) ordena as frentes por marco e os [gates de release](qa/RELEASE_GATES.md) definem os
+estados e os critérios de teste. A [auditoria M0](qa/AUDIT_M0_2026-10-19.md) confrontou o relatório de engenharia
+com o código:
+
+- **Baseline real em `cc7962a`:** typecheck e build passam; suíte **541/542** (o relatório dizia 537/542). Das cinco
+  falhas citadas só uma existia; as de `paper_wall`, passiva/`clothesline` e `fx: slow` passam isoladas e na suíte.
+- **Falha classificada como teste incorreto:** os testes de suavidade multiplayer corriam o jogador na direção de uma
+  parede colonial que a edição do mapa pôs no caminho do spawn (o servidor estava certo em pará-lo). Agora o bloco
+  nasce num ponto aberto achado no mundo estático (`openSpot`/`clearWish`, opção dev `freeRoamSpawns`, sem creeps);
+  nenhum limite foi afrouxado.
+- **Bug latente corrigido:** o `MAP_HASH` era documentado como conferido no join, mas não era. Agora cliente e
+  servidor recusam mapas diferentes (`MAP_MISMATCH`, mensagem em português) — um Graao Host instalado antes de uma
+  edição do mapa não joga mais com colisões diferentes das do site. A verificação no navegador mostrou que o digest
+  precisava ser estável entre motores JS (Node × Chromium diferem no último bit de prefabs calculados): números
+  passam por uma grade binária antes do hash.
+- **Bug latente corrigido:** recusas em `onCreate`/`onAuth` (criar sala pela rede num Graao Host, bots inválidos,
+  login exigido) chegavam ao cliente como HTTP 500 sem motivo, porque usavam códigos de WebSocket numa resposta HTTP.
+- **Teste instável classificado:** o e2e do Graao Host exigia tiro dos bots em 12 s fixos; com o início desarmado o
+  primeiro tiro leva 5,9–13,1 s (5 medições). A fumaça agora espera o primeiro tiro com dano (com teto).
+- **F3:** além do que já tinha, creeps, colisores, bots, quedas de conexão e heap JS.
+- **Regressão final (Gate A):** typecheck e build passam; suíte completa **543/543** em 57 arquivos (259 s), sem o
+  ruído de `RangeError`; ESLint limpo nos arquivos alterados.
+
+Ainda **não** feito: nenhum teste entre redes (Gate B bloqueado por máquinas — roteiro em
+[HOST_VALIDATION.md](networking/HOST_VALIDATION.md)); as frentes M3–M11 seguem `NOT_STARTED`/`PARTIAL` conforme a
+matriz da auditoria.
+
 ## 2026-10-18 (noite) — Graao Host: hospedagem comunitária no PC do jogador
 
 Quem hospeda instala o **Graao Host** uma vez; o PC dessa pessoa roda o **mesmo** servidor Colyseus/`GraaoMatchRoom`
@@ -86,9 +149,9 @@ UFO, loot, Tormenta, networking and existing Supabase persistence.
   fallback is offered explicitly when signaling is configured; those rooms are not presented as public registry
   entries. Supabase signaling continues to negotiate those private connections, rather than inventing occupancy.
 - The draft keeps all four personal slots visible, separates local preview from confirmation, and shows persistent
-  ability details and participant status. Defaults are **45 s** to choose, **20 s** to repick and **1.6 s** to reveal.
-  The MVP catalog remains **8 basics + 3 ultimates**: when it cannot support global uniqueness, abilities may repeat
-  across players, never within the same player's build. This applies to both categories in a ten-player room.
+  ability details and participant status. The v2 catalog contains **30 basics + 10 ultimates**; each player selects
+  three basics (at most one passive) and one ultimate. Exclusivity is always individual, with shared choices across
+  players. Categories and viewport-aware pagination keep the catalogue on screen without scrolling.
 - Customization returns to the menu or lobby it came from. Existing `ProfileService` cloud persistence and
   localStorage fallback are preserved. Changing appearance in the lobby clears that participant's Ready state.
 
@@ -127,9 +190,9 @@ technical docs are English, while the redesign specifications in `docs/UX` are P
 | 1 · First visual | A customized graao character runs around a beautiful spherical world with Mixamo-compatible animation | TESTING | Built and seen in the browser (village, grass, houses, curved horizon, run/idle). Animation runs on `GRA_Rig_MixamoCompatible` via the retargeter (CC0 UAL clips). A real **Mixamo FBX** clip has not been loaded yet: no Mixamo animation files exist on this machine (see Blockers). |
 | 2 · Two players | Two customized characters run smoothly around the same world in two windows | TESTING | Two browser tabs in one room saw each other with nameplates and their own outfits; integration tests (two SDK clients) pass: join by code, replication, uniform motion, 60 Hz interpolation replay. Not yet tested on LAN / two machines. |
 | 3 · Shooting | A shoots B, server confirms, Shield/Health change, B dies, A wins | TESTING | Integration test "a complete 1v1 match (gate 3: A wins)" preserves the legacy development flow: ready → countdown (shots refused) → A's hitscan confirmed by the server → shield then health → elimination, no respawn in the match → RESULTS with winner A → warmup. Current competitive matches return to LOBBY, as covered by the pre-match flow tests. Earlier browser evidence (two tabs, own server on 2568): 17 predicted shots, 10 server-confirmed hits, 200 damage, elimination logged by the server, match end with winner; HUD, shield-break VFX, countdown and aim pose seen. Not yet played on two external machines. |
-| 4 · Abilities | Guns and magic | TESTING | 8 basics + 3 Ultimates from 8 primitives, executed by the server's GRAAbilitySystem. Integration test "abilities through the authoritative server" passes (ownership, phase, cooldown, Mana, server projectile hit, areas with warning → damage, slow, knockback, elimination by abilities only → A wins). In the browser against a bot: Orbe Solar hit confirmed (hitmarker with ability diamonds), Mana/cooldown sweep, Explosão de Pólen and Meteoro Solar ground warnings, Ultimate Marks on both players. Not yet played person vs person on two machines. |
+| 4 · Abilities | Guns and magic | TESTING | 30 basics + 10 Supremos, with server-authoritative movement, control, defense, information and automatic passives. Final focused regression: 158/158 tests, two independent SDK clients, legal ten-seat builds and bot casts. Browser Draft/OVNI/MATCH and responsive captures verified. Per-spell manual presentation/audio and play across machines remain pending; see the [v2 validation](qa/ABILITY_V2_VALIDATION_2026-10-19.md). |
 | 5 · Creator | Two visibly different avatars seen correctly by each other | TESTING | Full customization screen with category options, instant parts/colors, drag/zoom, explicit save and return to the menu or lobby origin. Appearance replicates on join and change; changing it in the lobby clears Ready. Existing `ProfileService` implements anonymous sign-in, `profiles` name/look/settings and own-row RLS, with localStorage fallback. The redesign preserves that implementation; live authenticated cloud-profile validation remains a separate check. See [screen specifications](UX/SCREEN_SPECIFICATIONS.md). |
-| 6 · Draft | Players enter with drafted abilities | TESTING | Core rules and client selection helpers are unit-tested (12 tests); integration covers hidden picks, priority conflicts and repicks, timeout, valid final loadouts and ownership enforcement. The browser flow now has local preview → Confirm / Change Selection, four persistent build slots, effects/range details, a ten-participant strip and 45/20/1.6 timings. Two browser clients exercised the local flow. The 8+3 catalog preserves shared ownership when needed for larger rooms. See [Ability Draft UX](UX/ABILITY_DRAFT.md). |
+| 6 · Draft | Players enter with drafted abilities | TESTING | 30+10 catalogue, individual exclusivity, max one passive, hidden picks, timeout and valid ownership tested. Preview → confirmation, persistent 3+1 slots, categories, paginated details and ten participants verified at 1366×768, 390×844 and 844×390. SDK integration completes 1+9 and 2+8 compositions. See [v2 validation](qa/ABILITY_V2_VALIDATION_2026-10-19.md). |
 | 7 · UFO | Lobby → draft → preparation → UFO → drop → combat as one flow | TESTING | Existing UFO integration covers route, jump window, shared dive timing, landing, combat gating and departure. New pre-match integration covers the host's explicit start and every human's preparation ACK before UFO. Two browser clients exercised the complete local flow; [UFO after draft](UX/screenshots/ufo-after-draft.png). Earlier deployment measurements and detailed mechanics remain in `docs/gameplay/UFO_DEPLOYMENT.md`. External two-machine testing remains pending. |
 | 8 · Complete match | Victory/Defeat/Lobby/summary | TESTING | Integration test "a complete match loop (gate 8)" passes: elimination → the same server-counted `MATCH_SUMMARY` for both (shots, hits and damage equal to the server's own events, placements, room score) → persisted once with the verified identity only (a forged token plays as a guest; only the signed-in player gets MATCH_SAVED) → RETURN_LOBBY waits for everyone, then returns at once with the room score kept. In the browser against the network bot (own server on 2570 with Supabase): lobby panel → ready → draft → UFO → landing → elimination → results card after 1.4 s (VITÓRIA!, 1:25, per-player table with loadout icons, "Placar da sala Luiz 1 × Beto 0") → VOLTAR AO LOBBY ("Esperando Beto (1/2)") → back in the lobby the moment the bot asked, ♛ 1 kept; both matches stored in Supabase (`matches` + `match_players`). Signed-in history not exercised live (anonymous sign-ins off). Not yet played person vs person on two machines. |
 | 9 · Public deploy | Public URL works | TODO | |
@@ -151,7 +214,7 @@ technical docs are English, while the redesign specifications in `docs/UX` are P
 | Character creator UI | DONE | Full customization screen, instant switches, save/discard and return to menu/lobby. Existing Supabase `ProfileService` persistence and localStorage fallback preserved; live authenticated cloud-profile check remains separate. |
 | GRAStylizedMaterial family | DONE | world / terrain / foliage / character + outline |
 | Sky, sun rig, water, grass | DONE | Local golden-hour sun; grass bends around the local player |
-| F3 dev overlay | DONE | FPS, frame ms, draw calls, triangles, character and weapon cost, active VFX, ping, KB/s, snapshot size, server tick |
+| F3 dev overlay | DONE | FPS, frame ms, draw calls, triangles, character and weapon cost, active VFX, ping, KB/s, snapshot size, server tick; since 2026-10-19 also creeps, world colliders, bots, connection drops and JS heap |
 | Colyseus room, codes, prediction, reconciliation, interpolation | DONE | Tested (integration) |
 | Weapons (Raio de Sol, Rajada de Pétalas), server hitscan, ammo, reload, switch | TESTING | Server rules tested; client prediction reconciles ammo by FIRE sequence (`shotSeq`); code-authored models on the hand bone |
 | Match flow (lobby → host start → draft → preparation → UFO → drop → combat → results → lobby) | TESTING | New competitive flow and legacy development path are integration-tested. Current flow waits for all human loading ACKs, freezes the roster on host start and closes on host departure. Two browser clients completed the local flow. See [pre-match flow](UX/PRE_MATCH_FLOW.md). |
@@ -161,7 +224,7 @@ technical docs are English, while the redesign specifications in `docs/UX` are P
 | GRAVFXSystem (beams + particles, 2 draw calls) | TESTING | Tracers, flashes, impacts, shield shards/ring, elimination burst |
 | GRAAudioManager (synthesized cues, buses, voice limits, LOW_HEALTH / POST_MATCH states) | TESTING | Audible check by a person still pending |
 | GRAAbilitySystem + Ultimate Marks | TESTING | See `docs/architecture/ABILITY_SYSTEM.md` |
-| Ability Draft (rules, server, screen) | TESTING | [UX](UX/ABILITY_DRAFT.md), [server rules/protocol](gameplay/ABILITY_DRAFT.md); local preview and explicit confirmation, persistent 3+1 build, 45 s choices / 20 s repicks, shared ownership across players when the 8+3 catalog requires it. Server bots draft too. |
+| Ability Draft (rules, server, screen) | TESTING | [UX](UX/ABILITY_DRAFT.md), [server rules/protocol](gameplay/ABILITY_DRAFT.md); preview/confirmation, 3+1 build from 30+10, max one passive and individual exclusivity. Categories/pagination adapt to short screens. Server bots draft and cast their own builds. [Validation](qa/ABILITY_V2_VALIDATION_2026-10-19.md). |
 | Camera obstruction near the camera | DONE | Props within 1.1 m of the camera fade (Rapier ball query), measured: 0.9 m → fades, 3 m → not |
 | UFO deployment (route, ride, jump, skydive, landing, reveal) | TESTING | Shared `deploy.ts` (9 unit tests) + room UFO phase (5 integration tests); client `DeployDirector`, code-authored `UfoModel`, dotted route, landmark labels, speed lines, orbit sky by altitude. Measured: reveal 79 draw calls / 313 k tris |
 | Tormenta (shrinking safe region: server phases and damage, world pigment, curtain, audio, HUD card, planet map) | TESTING | Shared `tormenta.ts` (9 unit tests: geodesic inside/outside, nesting, walkable final, reachability, one pulse per interval) + integration test with two players on opposite sides of the planet (only the one outside is hurt, Health only; death by the Tormenta hands the win). In the browser against the network bot: card, map, way back, bleached world, `INSIDE_TORMENTA`, "ELIMINADO · pela Tormenta", DERROTA for the one outside; client and server flip inside/outside 50 ms apart. Measured: +0.02 ms GPU inside, +0.33 ms on the boundary, ≤ +0.25 ms fully outside at ≈ 2 MPx (RX 570). See `docs/gameplay/TORMENTA.md` |

@@ -1,6 +1,9 @@
 # graao docs
 
 - [MVP status](MVP_STATUS.md): gates, systems, blockers
+- Produto (Master Plan 2.0): [Master Game Design 2.0](product/MASTER_GAME_DESIGN_2.md) · [backlog](product/BACKLOG.md)
+- QA: [gates de release e critérios de teste](qa/RELEASE_GATES.md) · [auditoria M0 (19/10/2026)](qa/AUDIT_M0_2026-10-19.md) ·
+  [validação do Graao Host em redes reais](networking/HOST_VALIDATION.md)
 - Architecture: [overview](architecture/OVERVIEW.md) · [client](architecture/CLIENT.md) · [server](architecture/SERVER.md) ·
   [networking](architecture/NETWORKING.md) · [browser-hosted rooms](architecture/BROWSER_HOSTED_ROOMS.md) · [spherical world](architecture/SPHERICAL_WORLD.md) ·
   [character system](architecture/CHARACTER_SYSTEM.md) · [Mixamo pipeline](architecture/MIXAMO_PIPELINE.md) ·

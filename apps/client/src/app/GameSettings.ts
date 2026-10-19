@@ -11,6 +11,8 @@ export interface GameSettings {
   sensitivity: number;
   invertY: boolean;
   shakeIntensity: number;
+  /** Comfort: no field-of-view changes (dive, glide) and no camera pull-back on ledges and walls. */
+  reducedCameraMotion: boolean;
   keyBindings: KeyBindings;
 }
 
@@ -28,6 +30,7 @@ export function normalizeGameSettings(value: unknown): GameSettings {
     sensitivity: number('sensitivity', .0022, .0005, .005),
     invertY: v.invertY === true,
     shakeIntensity: number('shakeIntensity', 1, 0, 1),
+    reducedCameraMotion: v.reducedCameraMotion === true,
     keyBindings: normalizeBindings(v.keyBindings),
   };
 }

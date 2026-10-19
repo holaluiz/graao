@@ -5,7 +5,8 @@
  * Layers (manual weights, smoothed every frame):
  *   - Locomotion LOWER (hips + legs): idle / walk / run / sprint / air / fall — always full weight.
  *   - Locomotion UPPER (spine, arms, head): same clips × (1 − upper action weight).
- *   - Upper actions: aim (pitch blend up/neutral/down), fire, reload, cast, castEnter, castHold (channel), throw.
+ *   - Upper actions: aim (pitch blend up/neutral/down), fire, reload, cast, castEnter, castHold (channel), throw,
+ *     punchL / punchR (empty hands; upper body only, so a punch never moves the feet: no root motion).
  *   - Full-body one-shots: jump start, land, hit, death, dash, victory (override both locomotion halves).
  */
 import * as THREE from 'three';
@@ -23,7 +24,9 @@ function split(clip: THREE.AnimationClip): { lower: THREE.AnimationClip; upper: 
   };
 }
 
-const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall', 'skydive', 'swim', 'swimIdle'];
+const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall', 'skydive', 'swim', 'swimIdle', 'hang', 'climb', 'glide'];
+/** Climbing speed (m/s along the wall) at which the climb cycle plays at timeScale 1. */
+const CLIMB_NATIVE = 1.5;
 /** Ground speed (m/s) at which each locomotion clip plays at timeScale 1 (tuned by eye). */
 const NATIVE_SPEED: Partial<Record<ClipName, number>> = { walk: 1.5, run: 4.6, sprint: 7.2, swim: 3.1 };
 
@@ -49,6 +52,8 @@ export interface AnimInput {
   groundDist?: number;
   /** How deep the feet are under the sea surface (m, negative above it): wading, swimming, drying off afterwards. */
   waterDepth?: number;
+  /** Speed along local up (m/s): the climb cycle runs forward going up, backward going down. */
+  vertical?: number;
 }
 
 export class CharacterAnimationController {
@@ -63,6 +68,10 @@ export class CharacterAnimationController {
   private upperShot: { name: ClipName; until: number } | null = null;
   private time = 0;
   private dead = false;
+  /** Footsteps (audio/Footsteps.ts): the feet left the ground for a jump; they touched it after this long in the air. */
+  private jumpPending = false;
+  private landPending = 0;
+  private lastMove: MovementState = MovementState.IDLE;
 
   constructor(root: THREE.Object3D, private readonly lib: GRAAnimationLibrary) {
     this.mixer = new THREE.AnimationMixer(root);
@@ -73,13 +82,13 @@ export class CharacterAnimationController {
       this.lower.set(name, this.layer(lower, THREE.LoopRepeat));
       this.upper.set(name, this.layer(upper, THREE.LoopRepeat));
     }
-    for (const name of ['aim', 'aimUp', 'aimDown', 'fire', 'reload', 'cast', 'castEnter', 'castHold', 'throw'] as ClipName[]) {
+    for (const name of ['aim', 'aimUp', 'aimDown', 'fire', 'reload', 'cast', 'castEnter', 'castHold', 'throw', 'punchL', 'punchR'] as ClipName[]) {
       const clip = lib.get(name);
       if (!clip) continue;
       const loop = name === 'aim' || name === 'aimUp' || name === 'aimDown' || name === 'castHold' ? THREE.LoopRepeat : THREE.LoopOnce;
       this.upperActions.set(name, this.layer(split(clip).upper, loop));
     }
-    for (const name of ['jumpStart', 'land', 'hit', 'hitHeavy', 'death', 'dash', 'victory', 'cheer', 'emote', 'throw'] as ClipName[]) {
+    for (const name of ['jumpStart', 'land', 'hit', 'hitHeavy', 'death', 'dash', 'victory', 'cheer', 'emote', 'throw', 'mantle'] as ClipName[]) {
       const clip = lib.get(name);
       if (!clip) continue;
       const loop = name === 'victory' || name === 'emote' ? THREE.LoopRepeat : THREE.LoopOnce;
@@ -142,11 +151,22 @@ export class CharacterAnimationController {
       this.oneShot = null;
     }
 
-    // Jump / land transitions (the water carries a swimmer: wading out of it is not a landing).
+    // Jump / land transitions (the water carries a swimmer: wading out of it is not a landing; neither is stepping off
+    // a ledge or a wall after a pull-up or a climb down).
     const swimming = s.moveState === MovementState.SWIM;
-    if (!s.grounded) this.airTime += dt;
-    if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP && !s.diving) this.playOneShot('jumpStart', { speed: 1.6 });
+    const onWall = s.moveState === MovementState.LEDGE_HANG || s.moveState === MovementState.CLIMB || s.moveState === MovementState.MANTLE;
+    if (onWall) this.airTime = 0;
+    // Hands on a ledge, a wall or the glider: a jump or landing one-shot still playing would bury the pose.
+    if ((onWall || s.moveState === MovementState.GLIDE) && this.oneShot && (this.oneShot.name === 'jumpStart' || this.oneShot.name === 'land')) this.oneShot = null;
+    if (s.moveState === MovementState.MANTLE && this.lastMove !== MovementState.MANTLE) this.playOneShot('mantle', { speed: 1.25 });
+    this.lastMove = s.moveState;
+    if (!s.grounded && !onWall) this.airTime += dt;
+    if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP && !s.diving) {
+      this.playOneShot('jumpStart', { speed: 1.6 });
+      this.jumpPending = true;
+    }
     if (!this.wasGrounded && s.grounded && this.airTime > 0.35) this.playOneShot('land', { speed: 2.2 });
+    if (!this.wasGrounded && s.grounded && !swimming) this.landPending = this.airTime;
     if (s.grounded || swimming) this.airTime = 0;
     this.wasGrounded = s.grounded;
 
@@ -171,11 +191,25 @@ export class CharacterAnimationController {
       case MovementState.SWIM:
         loco = s.speed > 0.7 ? 'swim' : 'swimIdle';
         break;
+      case MovementState.LEDGE_HANG:
+        loco = 'hang';
+        break;
+      case MovementState.CLIMB:
+      case MovementState.MANTLE:
+        loco = 'climb';
+        break;
+      case MovementState.GLIDE:
+        loco = 'glide';
+        break;
     }
     if (s.diving) loco = 'skydive';
     for (const [name, l] of this.lower) l.target = name === loco ? 1 : 0;
     const native = NATIVE_SPEED[loco];
-    const scale = native ? THREE.MathUtils.clamp(s.speed / native, 0.65, 1.45) : 1;
+    // The climb cycle follows the climb: forward up the wall, backward down it, still when holding on.
+    const climbRate = Math.hypot(s.speed, s.vertical ?? 0) * Math.sign((s.vertical ?? 0) || 1);
+    const scale = loco === 'climb'
+      ? s.moveState === MovementState.MANTLE ? 1.2 : THREE.MathUtils.clamp(climbRate / CLIMB_NATIVE, -1.3, 1.3) * (Math.abs(climbRate) < 0.15 ? 0 : 1)
+      : native ? THREE.MathUtils.clamp(s.speed / native, 0.65, 1.45) : 1;
     for (const map of [this.lower, this.upper]) {
       const l = map.get(loco);
       if (l) l.action.timeScale = scale;
@@ -205,7 +239,7 @@ export class CharacterAnimationController {
         this.full.get(this.oneShot.name)!.target = 1;
         // Land, jump-start and hit reactions blend partially so locomotion (and aiming) keeps reading.
         const n = this.oneShot.name;
-        fullW = n === 'land' ? 0.55 : n === 'jumpStart' ? 0.7 : n === 'hit' ? 0.45 : 1;
+        fullW = n === 'land' ? 0.55 : n === 'jumpStart' ? 0.7 : n === 'hit' ? 0.45 : n === 'mantle' ? 0.85 : 1;
         this.full.get(this.oneShot.name)!.target = fullW;
       } else this.oneShot = null;
     }
@@ -221,6 +255,20 @@ export class CharacterAnimationController {
     for (const l of this.upperActions.values()) this.blend(l, kFast);
     for (const l of this.full.values()) this.blend(l, kFast);
     this.mixer.update(dt);
+  }
+
+  /** True once after the feet left the ground for a jump. */
+  consumeJump(): boolean {
+    const j = this.jumpPending;
+    this.jumpPending = false;
+    return j;
+  }
+
+  /** Seconds the body was in the air before its feet touched the ground, once (0 when they did not this frame). */
+  consumeLanding(): number {
+    const l = this.landPending;
+    this.landPending = 0;
+    return l;
   }
 
   private blend(l: Layer, k: number): void {

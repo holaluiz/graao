@@ -1,0 +1,248 @@
+{
+  "date": "2026-10-19T02:33:07.637Z",
+  "url": "http://localhost:5183",
+  "gpu": "ANGLE (AMD, Radeon RX 570 Series (0x000067DF) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "size": "1280x720",
+  "views": {
+    "vila-largo": {
+      "cpuMs": {
+        "p50": 3.8,
+        "p95": 6.6
+      },
+      "cpuGpuMs": {
+        "p50": 10.3,
+        "p95": 16
+      },
+      "drawCalls": 199,
+      "triangles": 1452873,
+      "geometries": 98,
+      "textures": 7,
+      "jsHeapMB": 138.5
+    },
+    "vila-ladeira": {
+      "cpuMs": {
+        "p50": 3.2,
+        "p95": 5.7
+      },
+      "cpuGpuMs": {
+        "p50": 9.6,
+        "p95": 14.7
+      },
+      "drawCalls": 177,
+      "triangles": 1283138,
+      "geometries": 98,
+      "textures": 7,
+      "jsHeapMB": 166.3
+    },
+    "vila-capela": {
+      "cpuMs": {
+        "p50": 3.2,
+        "p95": 5.7
+      },
+      "cpuGpuMs": {
+        "p50": 9.3,
+        "p95": 14.7
+      },
+      "drawCalls": 174,
+      "triangles": 1308057,
+      "geometries": 98,
+      "textures": 7,
+      "jsHeapMB": 161.8
+    },
+    "vila-ponte": {
+      "cpuMs": {
+        "p50": 3,
+        "p95": 5.1
+      },
+      "cpuGpuMs": {
+        "p50": 9.6,
+        "p95": 16.4
+      },
+      "drawCalls": 195,
+      "triangles": 1465333,
+      "geometries": 102,
+      "textures": 7,
+      "jsHeapMB": 162.2
+    },
+    "vila-quintais": {
+      "cpuMs": {
+        "p50": 4.6,
+        "p95": 6.8
+      },
+      "cpuGpuMs": {
+        "p50": 12.3,
+        "p95": 17.5
+      },
+      "drawCalls": 203,
+      "triangles": 1484439,
+      "geometries": 106,
+      "textures": 7,
+      "jsHeapMB": 165.1
+    },
+    "bairro-viaduto": {
+      "cpuMs": {
+        "p50": 3.2,
+        "p95": 5.1
+      },
+      "cpuGpuMs": {
+        "p50": 9.4,
+        "p95": 14.5
+      },
+      "drawCalls": 194,
+      "triangles": 1451914,
+      "geometries": 107,
+      "textures": 7,
+      "jsHeapMB": 162.9
+    },
+    "bairro-bares": {
+      "cpuMs": {
+        "p50": 5.8,
+        "p95": 7.9
+      },
+      "cpuGpuMs": {
+        "p50": 16.1,
+        "p95": 18.2
+      },
+      "drawCalls": 181,
+      "triangles": 1379498,
+      "geometries": 108,
+      "textures": 7,
+      "jsHeapMB": 136.9
+    },
+    "bairro-mercado": {
+      "cpuMs": {
+        "p50": 2.8,
+        "p95": 4.3
+      },
+      "cpuGpuMs": {
+        "p50": 9.1,
+        "p95": 13.1
+      },
+      "drawCalls": 183,
+      "triangles": 1380483,
+      "geometries": 108,
+      "textures": 7,
+      "jsHeapMB": 162.9
+    },
+    "lago-orla": {
+      "cpuMs": {
+        "p50": 3,
+        "p95": 6
+      },
+      "cpuGpuMs": {
+        "p50": 9.1,
+        "p95": 15.5
+      },
+      "drawCalls": 183,
+      "triangles": 1346552,
+      "geometries": 109,
+      "textures": 7,
+      "jsHeapMB": 162.2
+    },
+    "lago-ilha": {
+      "cpuMs": {
+        "p50": 3.1,
+        "p95": 5.6
+      },
+      "cpuGpuMs": {
+        "p50": 8.9,
+        "p95": 14.5
+      },
+      "drawCalls": 172,
+      "triangles": 1345864,
+      "geometries": 109,
+      "textures": 7,
+      "jsHeapMB": 155.5
+    },
+    "lago-pilotis": {
+      "cpuMs": {
+        "p50": 3.1,
+        "p95": 5.1
+      },
+      "cpuGpuMs": {
+        "p50": 8.7,
+        "p95": 14.2
+      },
+      "drawCalls": 194,
+      "triangles": 1325912,
+      "geometries": 111,
+      "textures": 7,
+      "jsHeapMB": 160.2
+    },
+    "planalto": {
+      "cpuMs": {
+        "p50": 3.5,
+        "p95": 6.1
+      },
+      "cpuGpuMs": {
+        "p50": 9.2,
+        "p95": 13.9
+      },
+      "drawCalls": 180,
+      "triangles": 1339749,
+      "geometries": 111,
+      "textures": 7,
+      "jsHeapMB": 160.2
+    },
+    "serra": {
+      "cpuMs": {
+        "p50": 3.4,
+        "p95": 7.6
+      },
+      "cpuGpuMs": {
+        "p50": 9.1,
+        "p95": 15.2
+      },
+      "drawCalls": 192,
+      "triangles": 1367936,
+      "geometries": 111,
+      "textures": 7,
+      "jsHeapMB": 160.1
+    },
+    "fenda": {
+      "cpuMs": {
+        "p50": 3.7,
+        "p95": 6.2
+      },
+      "cpuGpuMs": {
+        "p50": 9.5,
+        "p95": 15.7
+      },
+      "drawCalls": 198,
+      "triangles": 1476189,
+      "geometries": 114,
+      "textures": 7,
+      "jsHeapMB": 153.5
+    },
+    "bosque-cachoeira": {
+      "cpuMs": {
+        "p50": 3.6,
+        "p95": 6
+      },
+      "cpuGpuMs": {
+        "p50": 9.2,
+        "p95": 14
+      },
+      "drawCalls": 178,
+      "triangles": 1274319,
+      "geometries": 114,
+      "textures": 7,
+      "jsHeapMB": 146.5
+    },
+    "bosque-sitio": {
+      "cpuMs": {
+        "p50": 3.8,
+        "p95": 7.3
+      },
+      "cpuGpuMs": {
+        "p50": 9.6,
+        "p95": 15
+      },
+      "drawCalls": 184,
+      "triangles": 1405560,
+      "geometries": 115,
+      "textures": 7,
+      "jsHeapMB": 139.6
+    }
+  }
+}

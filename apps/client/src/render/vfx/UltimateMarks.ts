@@ -80,7 +80,68 @@ function dawnLance(): Shape {
   return { body: mergeGeometries(pieces, false)!, ink: inkShell(pieces, 0.012), height: 2.4 };
 }
 
-const BUILDERS: Record<UltimateMarkId, () => Shape> = { sun_crown: sunCrown, petal_orbit: petalOrbit, dawn_lance: dawnLance };
+const finish = (pieces: Geo[], height = 2.4): Shape => ({ body: mergeGeometries(pieces, false)!, ink: inkShell(pieces, .012), height });
+
+function winterBranch(): Shape {
+  const pieces = [prep(at(new THREE.CylinderGeometry(.025, .04, .5, 5), 0, 0, 0), '#476b5d')];
+  for (const sign of [-1, 1]) for (let i = 0; i < 2; i++) {
+    pieces.push(prep(at(new THREE.ConeGeometry(.09, .3, 3), sign * (.08 + i * .05), i * .15 - .07, 0, 0, 0, -sign * .9), i % 2 ? '#d9f7ee' : '#8fccb1'));
+  }
+  return finish(pieces);
+}
+
+function paperKite(): Shape {
+  const pieces = [prep(at(new THREE.OctahedronGeometry(1), 0, .05, 0, 0, 0, 0, [.22, .3, .055]), '#f3be49')];
+  for (let i = 0; i < 3; i++) pieces.push(prep(at(new THREE.OctahedronGeometry(.045), Math.sin(i * 1.6) * .06, -.3 - i * .09, 0), i % 2 ? '#ed7fa1' : '#72bfd0'));
+  return finish(pieces, 2.55);
+}
+
+function paperCity(): Shape {
+  const pieces: Geo[] = [];
+  for (let i = 0; i < 3; i++) {
+    const height = i === 1 ? .4 : .26;
+    pieces.push(prep(at(new THREE.BoxGeometry(.13, height, .13), (i - 1) * .17, 0, 0), i === 1 ? '#ffcf77' : '#f4e2c1'));
+    pieces.push(prep(at(new THREE.ConeGeometry(.105, .12, 4), (i - 1) * .17, height / 2 + .05, 0, 0, Math.PI / 4), '#dc8d83'));
+  }
+  return finish(pieces);
+}
+
+function fireflyLantern(): Shape {
+  return finish([
+    prep(new THREE.OctahedronGeometry(.21), '#ffef8b'),
+    prep(at(new THREE.TorusGeometry(.23, .025, 5, 18), 0, 0, 0, Math.PI / 2), '#637b64'),
+    prep(at(new THREE.TorusGeometry(.1, .023, 5, 14), 0, .25, 0), '#637b64'),
+    prep(at(new THREE.ConeGeometry(.23, .12, 6), 0, .18, 0), '#a6c99b'),
+  ]);
+}
+
+function inkWave(): Shape {
+  return finish([
+    prep(at(new THREE.TorusGeometry(.21, .075, 6, 23, Math.PI * 1.6), 0, 0, 0, 0, 0, -.3), '#647dca'),
+    prep(at(new THREE.SphereGeometry(.09, 8, 6), .09, .04, 0), '#a9dbed'),
+    prep(at(new THREE.BoxGeometry(.5, .035, .13), 0, -.23, 0), '#647dca'),
+  ]);
+}
+
+function confettiRing(): Shape {
+  const pieces = [prep(new THREE.TorusGeometry(.23, .025, 5, 24), '#ffe7a5')];
+  const colors = ['#e993b8', '#72c6ca', '#9dd18b', '#ffcc67'];
+  for (let i = 0; i < 4; i++) pieces.push(prep(at(new THREE.BoxGeometry(.09, .09, .025), Math.cos(i * Math.PI / 2) * .3, Math.sin(i * Math.PI / 2) * .3, 0, 0, 0, .3 + i), colors[i]!));
+  return finish(pieces);
+}
+
+function chalkGate(): Shape {
+  return finish([
+    prep(at(new THREE.TorusGeometry(.16, .035, 5, 22), -.15, 0, 0, 0, .3, 0, [.7, 1.35, 1]), '#9fd3df'),
+    prep(at(new THREE.TorusGeometry(.16, .035, 5, 22), .15, 0, 0, 0, -.3, 0, [.7, 1.35, 1]), '#efb4c9'),
+  ]);
+}
+
+const BUILDERS: Record<UltimateMarkId, () => Shape> = {
+  sun_crown: sunCrown, petal_orbit: petalOrbit, dawn_lance: dawnLance,
+  winter_branch: winterBranch, paper_kite: paperKite, paper_city: paperCity, firefly_lantern: fireflyLantern,
+  ink_wave: inkWave, confetti_ring: confettiRing, chalk_gate: chalkGate,
+};
 const cache = new Map<UltimateMarkId, Shape>();
 let bodyMat: THREE.MeshBasicMaterial | null = null;
 let inkMat: THREE.MeshBasicMaterial | null = null;
@@ -130,6 +191,10 @@ export class UltimateMark {
       case 'dawn_lance':
         this.spin.rotation.set(0, t * 2.2, 0.12 * Math.sin(t * 1.1));
         this.spin.position.y = Math.sin(t * 2.8) * 0.07;
+        break;
+      default:
+        this.spin.rotation.set(0, t * .8, .06 * Math.sin(t));
+        this.spin.position.y = Math.sin(t * 1.7) * .035;
         break;
     }
   }

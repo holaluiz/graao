@@ -1,0 +1,782 @@
+{
+  "measuredAtUtc": "2026-10-19T14:10:18.641Z",
+  "gitHead": "1b23c2678c7772c3a8b1604c5b23a1a2977cde53",
+  "node": "v24.14.0",
+  "protocol": 10,
+  "config": {
+    "sdkClients": 2,
+    "bots": 8,
+    "draftPickMs": 100,
+    "draftRevealMs": 20,
+    "countdownMs": 0,
+    "skipUfo": true,
+    "tormentaOff": true,
+    "creepCount": 0,
+    "lootSeed": 7,
+    "closeSpawns": true,
+    "secondsRequested": 12
+  },
+  "durationMs": 12019.19,
+  "finalPhase": "MATCH",
+  "builds": [
+    {
+      "index": 0,
+      "name": "Metrics A",
+      "loadout": [
+        "firefly_scout",
+        "paper_wall",
+        "steady_hand",
+        "sun_meteor"
+      ],
+      "legal": true,
+      "passives": 1
+    },
+    {
+      "index": 1,
+      "name": "Metrics B",
+      "loadout": [
+        "sap_snare",
+        "leaf_shell",
+        "anti_glue",
+        "firefly_beacon"
+      ],
+      "legal": true,
+      "passives": 1
+    },
+    {
+      "index": 2,
+      "name": "Bot 1",
+      "bot": true,
+      "loadout": [
+        "pollen_burst",
+        "thorn_seed",
+        "sap_snare",
+        "paper_city"
+      ],
+      "legal": true,
+      "passives": 0
+    },
+    {
+      "index": 3,
+      "name": "Bot 2",
+      "bot": true,
+      "loadout": [
+        "leaf_shell",
+        "gust_ring",
+        "bloom",
+        "firefly_beacon"
+      ],
+      "legal": true,
+      "passives": 0
+    },
+    {
+      "index": 4,
+      "name": "Bot 3",
+      "bot": true,
+      "loadout": [
+        "thorn_seed",
+        "sap_snare",
+        "steady_hand",
+        "ink_tide"
+      ],
+      "legal": true,
+      "passives": 1
+    },
+    {
+      "index": 5,
+      "name": "Bot 4",
+      "bot": true,
+      "loadout": [
+        "gust_ring",
+        "bloom",
+        "firefly_scout",
+        "confetti_wheel"
+      ],
+      "legal": true,
+      "passives": 0
+    },
+    {
+      "index": 6,
+      "name": "Bot 5",
+      "bot": true,
+      "loadout": [
+        "sap_snare",
+        "steady_hand",
+        "kite_jump",
+        "chalk_shortcut"
+      ],
+      "legal": true,
+      "passives": 1
+    },
+    {
+      "index": 7,
+      "name": "Bot 6",
+      "bot": true,
+      "loadout": [
+        "bloom",
+        "firefly_scout",
+        "clothesline",
+        "sun_meteor"
+      ],
+      "legal": true,
+      "passives": 0
+    },
+    {
+      "index": 8,
+      "name": "Bot 7",
+      "bot": true,
+      "loadout": [
+        "steady_hand",
+        "kite_jump",
+        "slide",
+        "petal_cyclone"
+      ],
+      "legal": true,
+      "passives": 1
+    },
+    {
+      "index": 9,
+      "name": "Bot 8",
+      "bot": true,
+      "loadout": [
+        "firefly_scout",
+        "clothesline",
+        "paper_wings",
+        "dawn_lance"
+      ],
+      "legal": true,
+      "passives": 0
+    }
+  ],
+  "initialPositions": [
+    {
+      "index": 0,
+      "pos": {
+        "x": 2.4395799280001893,
+        "y": 11.280655939280138,
+        "z": 100.53971976962379
+      }
+    },
+    {
+      "index": 1,
+      "pos": {
+        "x": 3.4409290228770697,
+        "y": 14.905904191753596,
+        "z": 100.037063269999
+      }
+    },
+    {
+      "index": 2,
+      "pos": {
+        "x": -2.890004594007548,
+        "y": 12.946531311726401,
+        "z": 100.326841874152
+      }
+    },
+    {
+      "index": 3,
+      "pos": {
+        "x": 46.96832063723302,
+        "y": 37.95286664175353,
+        "z": 81.35151768987343
+      }
+    },
+    {
+      "index": 4,
+      "pos": {
+        "x": 98.83478991868792,
+        "y": -17.493809321310696,
+        "z": -8.64692367985148
+      }
+    },
+    {
+      "index": 5,
+      "pos": {
+        "x": -75.42801725875896,
+        "y": 50.28534483917262,
+        "z": 43.54838606878423
+      }
+    },
+    {
+      "index": 6,
+      "pos": {
+        "x": -49.042787175608986,
+        "y": -26.2819504365517,
+        "z": -84.94459913294213
+      }
+    },
+    {
+      "index": 7,
+      "pos": {
+        "x": -3.523225708196716,
+        "y": 7.05935514290548,
+        "z": 100.89198375280085
+      }
+    },
+    {
+      "index": 8,
+      "pos": {
+        "x": -2.2176646804454805,
+        "y": 19.639189696120702,
+        "z": 99.25131833605481
+      }
+    },
+    {
+      "index": 9,
+      "pos": {
+        "x": 6.992865146999608,
+        "y": 13.856900845021007,
+        "z": 100.00263064543417
+      }
+    }
+  ],
+  "humanCastIntents": [
+    {
+      "human": 0,
+      "id": "firefly_scout",
+      "atMs": 172.79
+    },
+    {
+      "human": 1,
+      "id": "leaf_shell",
+      "atMs": 617.22
+    },
+    {
+      "human": 0,
+      "id": "paper_wall",
+      "atMs": 1112.11
+    },
+    {
+      "human": 1,
+      "id": "sap_snare",
+      "atMs": 1622.87
+    },
+    {
+      "human": 0,
+      "id": "sun_meteor",
+      "atMs": 2529.47
+    },
+    {
+      "human": 1,
+      "id": "firefly_beacon",
+      "atMs": 3200.8
+    }
+  ],
+  "clients": [
+    {
+      "human": 0,
+      "index": 0,
+      "phasesSeen": [
+        "LOBBY",
+        "ABILITY_DRAFT",
+        "PREPARATION",
+        "MATCH"
+      ],
+      "pickedRounds": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "traffic": {
+        "SELF": {
+          "count": 25,
+          "logicalJsonBytes": 15005,
+          "logicalJsonKiBPerSecond": 1.219,
+          "payloadBytes": {
+            "samples": 25,
+            "min": 571,
+            "mean": 600.2,
+            "p95": 603,
+            "max": 604
+          }
+        },
+        "EVENTS": {
+          "count": 94,
+          "logicalJsonBytes": 20761,
+          "logicalJsonKiBPerSecond": 1.687,
+          "payloadBytes": {
+            "samples": 94,
+            "min": 61,
+            "mean": 220.8617,
+            "p95": 538,
+            "max": 1165
+          }
+        },
+        "SNAPSHOT": {
+          "count": 189,
+          "logicalJsonBytes": 146227,
+          "logicalJsonKiBPerSecond": 11.881,
+          "payloadBytes": {
+            "samples": 189,
+            "min": 744,
+            "mean": 773.6878,
+            "p95": 782,
+            "max": 786
+          }
+        },
+        "ABILITY_RESULT": {
+          "count": 3,
+          "logicalJsonBytes": 88,
+          "logicalJsonKiBPerSecond": 0.007,
+          "payloadBytes": {
+            "samples": 3,
+            "min": 29,
+            "mean": 29.3333,
+            "p95": 29,
+            "max": 30
+          }
+        },
+        "PONG": {
+          "count": 46,
+          "logicalJsonBytes": 2252,
+          "logicalJsonKiBPerSecond": 0.183,
+          "payloadBytes": {
+            "samples": 46,
+            "min": 48,
+            "mean": 48.9565,
+            "p95": 49,
+            "max": 49
+          }
+        },
+        "ABILITY_REVEAL": {
+          "count": 1,
+          "logicalJsonBytes": 173,
+          "logicalJsonKiBPerSecond": 0.014,
+          "payloadBytes": {
+            "samples": 1,
+            "min": 173,
+            "mean": 173,
+            "p95": 173,
+            "max": 173
+          }
+        },
+        "ROOM_STATE": {
+          "count": 13,
+          "logicalJsonBytes": 96340,
+          "logicalJsonKiBPerSecond": 7.828,
+          "payloadBytes": {
+            "samples": 13,
+            "min": 7395,
+            "mean": 7410.7692,
+            "p95": 7421,
+            "max": 7421
+          }
+        }
+      },
+      "allTraffic": {
+        "count": 371,
+        "logicalJsonBytes": 280846
+      },
+      "pongSmoothedTickMs": {
+        "samples": 46,
+        "min": 4.28,
+        "mean": 6.5748,
+        "p95": 9.05,
+        "max": 9.63
+      },
+      "abilityResults": [
+        {
+          "s": 1,
+          "k": 0,
+          "ok": true,
+          "r": 0,
+          "reason": "OK"
+        },
+        {
+          "s": 2,
+          "k": 1,
+          "ok": false,
+          "r": 8,
+          "reason": "BAD_TARGET"
+        },
+        {
+          "s": 3,
+          "k": 3,
+          "ok": true,
+          "r": 0,
+          "reason": "OK"
+        }
+      ],
+      "eventTypes": {
+        "abilityEntity": 19,
+        "abilityEntityEnd": 7,
+        "area": 76,
+        "cast": 23,
+        "chest": 23,
+        "dmg": 9,
+        "door": 1,
+        "fx": 55,
+        "items": 8,
+        "respawn": 10,
+        "shot": 8,
+        "take": 18
+      },
+      "privateReveals": {
+        "count": 1,
+        "byKind": {
+          "loot": 1
+        },
+        "authorizedOnly": true
+      }
+    },
+    {
+      "human": 1,
+      "index": 1,
+      "phasesSeen": [
+        "LOBBY",
+        "ABILITY_DRAFT",
+        "PREPARATION",
+        "MATCH"
+      ],
+      "pickedRounds": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "traffic": {
+        "SELF": {
+          "count": 6,
+          "logicalJsonBytes": 3634,
+          "logicalJsonKiBPerSecond": 0.295,
+          "payloadBytes": {
+            "samples": 6,
+            "min": 571,
+            "mean": 605.6667,
+            "p95": 617,
+            "max": 618
+          }
+        },
+        "EVENTS": {
+          "count": 94,
+          "logicalJsonBytes": 20761,
+          "logicalJsonKiBPerSecond": 1.687,
+          "payloadBytes": {
+            "samples": 94,
+            "min": 61,
+            "mean": 220.8617,
+            "p95": 538,
+            "max": 1165
+          }
+        },
+        "SNAPSHOT": {
+          "count": 189,
+          "logicalJsonBytes": 146227,
+          "logicalJsonKiBPerSecond": 11.881,
+          "payloadBytes": {
+            "samples": 189,
+            "min": 744,
+            "mean": 773.6878,
+            "p95": 782,
+            "max": 786
+          }
+        },
+        "PONG": {
+          "count": 46,
+          "logicalJsonBytes": 2252,
+          "logicalJsonKiBPerSecond": 0.183,
+          "payloadBytes": {
+            "samples": 46,
+            "min": 48,
+            "mean": 48.9565,
+            "p95": 49,
+            "max": 49
+          }
+        },
+        "ABILITY_RESULT": {
+          "count": 3,
+          "logicalJsonBytes": 87,
+          "logicalJsonKiBPerSecond": 0.007,
+          "payloadBytes": {
+            "samples": 3,
+            "min": 29,
+            "mean": 29,
+            "p95": 29,
+            "max": 29
+          }
+        },
+        "ROOM_STATE": {
+          "count": 13,
+          "logicalJsonBytes": 96340,
+          "logicalJsonKiBPerSecond": 7.828,
+          "payloadBytes": {
+            "samples": 13,
+            "min": 7395,
+            "mean": 7410.7692,
+            "p95": 7421,
+            "max": 7421
+          }
+        },
+        "ABILITY_REVEAL": {
+          "count": 5,
+          "logicalJsonBytes": 1481,
+          "logicalJsonKiBPerSecond": 0.12,
+          "payloadBytes": {
+            "samples": 5,
+            "min": 260,
+            "mean": 296.2,
+            "p95": 306,
+            "max": 306
+          }
+        }
+      },
+      "allTraffic": {
+        "count": 356,
+        "logicalJsonBytes": 270782
+      },
+      "pongSmoothedTickMs": {
+        "samples": 46,
+        "min": 4.28,
+        "mean": 6.5748,
+        "p95": 9.05,
+        "max": 9.63
+      },
+      "abilityResults": [
+        {
+          "s": 1,
+          "k": 1,
+          "ok": true,
+          "r": 0,
+          "reason": "OK"
+        },
+        {
+          "s": 2,
+          "k": 0,
+          "ok": true,
+          "r": 0,
+          "reason": "OK"
+        },
+        {
+          "s": 3,
+          "k": 3,
+          "ok": true,
+          "r": 0,
+          "reason": "OK"
+        }
+      ],
+      "eventTypes": {
+        "abilityEntity": 19,
+        "abilityEntityEnd": 7,
+        "area": 76,
+        "cast": 23,
+        "chest": 23,
+        "dmg": 9,
+        "door": 1,
+        "fx": 55,
+        "items": 8,
+        "respawn": 10,
+        "shot": 8,
+        "take": 18
+      },
+      "privateReveals": {
+        "count": 5,
+        "byKind": {
+          "bearing": 5
+        },
+        "authorizedOnly": true
+      }
+    }
+  ],
+  "abilityUpdateMs": {
+    "samples": 194,
+    "min": 0.024900000000343425,
+    "mean": 0.1727,
+    "p95": 0.5585,
+    "max": 7.779599999999846
+  },
+  "serverPeakTickMs": 32.8648,
+  "botBrainSmoothedMs": {
+    "samples": 366,
+    "min": 0.6192446435881437,
+    "mean": 1.2021,
+    "p95": 2.0208,
+    "max": 2.6887124007832126
+  },
+  "activeGameplayObjects": {
+    "persistentEntities": {
+      "samples": 194,
+      "min": 0,
+      "mean": 6.7062,
+      "p95": 10,
+      "max": 10
+    },
+    "pendingCastsAndAreas": {
+      "samples": 194,
+      "min": 0,
+      "mean": 2.0412,
+      "p95": 4,
+      "max": 5
+    },
+    "projectiles": {
+      "samples": 194,
+      "min": 0,
+      "mean": 0,
+      "p95": 0,
+      "max": 0
+    }
+  },
+  "acceptedCasts": {
+    "humans": {
+      "firefly_beacon": 1,
+      "firefly_scout": 1,
+      "leaf_shell": 1,
+      "sap_snare": 1,
+      "sun_meteor": 1
+    },
+    "bots": {
+      "chalk_shortcut": 1,
+      "clothesline": 2,
+      "confetti_wheel": 1,
+      "dawn_lance": 1,
+      "firefly_scout": 3,
+      "kite_jump": 1,
+      "leaf_shell": 1,
+      "paper_city": 1,
+      "paper_wings": 1,
+      "petal_cyclone": 1,
+      "pollen_burst": 1,
+      "sap_snare": 1,
+      "slide": 1,
+      "sun_meteor": 1,
+      "thorn_seed": 1
+    },
+    "botsByIndex": {
+      "2": 4,
+      "3": 1,
+      "5": 2,
+      "6": 2,
+      "7": 3,
+      "8": 2,
+      "9": 4
+    }
+  },
+  "concurrentUltimates": {
+    "config": {
+      "actors": 10,
+      "uniqueUltimates": 10,
+      "sameRequestTimeMs": 1000,
+      "simulatedSeconds": 15,
+      "steps": 900,
+      "simulatedHz": 60
+    },
+    "requests": [
+      {
+        "id": "sun_meteor",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "petal_cyclone",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "dawn_lance",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "winter_garden",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "kite_flight",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "paper_city",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "firefly_beacon",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "ink_tide",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "confetti_wheel",
+        "accepted": true,
+        "reason": "OK"
+      },
+      {
+        "id": "chalk_shortcut",
+        "accepted": true,
+        "reason": "OK"
+      }
+    ],
+    "allTenAccepted": true,
+    "requestBatchMs": 1.267,
+    "abilityUpdateMs": {
+      "samples": 900,
+      "min": 0.002299999996466795,
+      "mean": 0.016,
+      "p95": 0.0544,
+      "max": 1.4253000000026077
+    },
+    "abilityAndRapierStepMs": {
+      "samples": 900,
+      "min": 0.007700000001932494,
+      "mean": 0.0302,
+      "p95": 0.076,
+      "max": 1.6913000000022294
+    },
+    "activeGameplayObjects": {
+      "persistentEntities": {
+        "samples": 900,
+        "min": 0,
+        "mean": 7.1144,
+        "p95": 12,
+        "max": 12
+      },
+      "pendingCastsAndAreas": {
+        "samples": 900,
+        "min": 0,
+        "mean": 1.5867,
+        "p95": 3,
+        "max": 9
+      },
+      "projectiles": {
+        "samples": 900,
+        "min": 0,
+        "mean": 0,
+        "p95": 0,
+        "max": 0
+      }
+    },
+    "eventCount": 131,
+    "privateRevealCount": 5,
+    "barriersBeforeClear": 0,
+    "cleanup": {
+      "persistentEntities": 0,
+      "pending": 0,
+      "projectiles": 0,
+      "colliders": 0
+    },
+    "limits": [
+      "Separate deterministic microbenchmark: all ten different Ultimates requested at the same simulated timestamp.",
+      "Real Rapier terrain plane and real ability barrier colliders, not the production map.",
+      "Authoritative effect engine + Rapier world.step only. No CharacterMotor/AI/network/renderer; flight state exists but is not physically integrated.",
+      "No warmup/repeated runs; a single short timing sample can include JIT/GC or shared-machine scheduling noise.",
+      "Does not establish ten-player synchronized browser performance or wire traffic."
+    ]
+  },
+  "limits": [
+    "Two independent headless SDK clients and eight server bots; no ten-human claim.",
+    "UTF-8 JSON.stringify of decoded S2C payloads; excludes MessagePack encoding, WebSocket/TCP/TLS headers and retransmissions.",
+    "Sample begins on MATCH after real draft and PREPARED acknowledgements; excludes join/world loading and draft traffic.",
+    "PONG tick is the room exponential moving average, not an independent per-tick duration sample. serverPeakTickMs is the actual peak room update during the window.",
+    "Ability update uses instance-local timing; observers allocate entity views and add small overhead to this isolated process.",
+    "Bot draft/AI use production random behavior. Config is reproducible; exact draft, casts and timings can vary.",
+    "Network sample is a short idle-human match, not a sustained combat soak. Synchronized ten-Ultimate stress is a separate engine/Rapier microbenchmark.",
+    "No renderer: FPS, GPU frame time, draw calls, VFX particles and LOW/HIGH browser presentation are not measured here.",
+    "No Supabase, authentication service or R2 dependency; private loopback test server is disposed after sampling."
+  ]
+}

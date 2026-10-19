@@ -7,7 +7,8 @@
  */
 import * as THREE from 'three';
 import { Client } from '@colyseus/sdk';
-import { createCharacterState, type CharacterState, type PlayerHitTarget } from '@graao/game-core';
+import { createCharacterState, traversalOfMoveState, unpackTraversal, type CharacterState, type PlayerHitTarget } from '@graao/game-core';
+import { MAP_HASH } from '@graao/game-data';
 import {
   type ActionState,
   MovementState,
@@ -19,6 +20,7 @@ import {
   NoticeCode,
   PITCH_SCALE,
   POS_SCALE,
+  STAMINA_SCALE,
   PROTOCOL_VERSION,
   ROOM_NAME,
   S2C,
@@ -26,9 +28,13 @@ import {
   VEL_SCALE,
   type AbilityRequestMsg,
   type AbilityResultMsg,
+  type AbilityStateMsg,
+  type AbilityRevealMsg,
   type CharacterAppearance,
   type DevLootMsg,
   type InteractMsg,
+  type MeleeMsg,
+  type ProgressMsg,
   type LootDevMsg,
   type LootResultMsg,
   type LootStateMsg,
@@ -45,9 +51,12 @@ import {
   type SelfStatusMsg,
   type SnapshotMsg,
   type WelcomeMsg,
+  type WorldStateMsg,
+  type WorldUseMsg,
 } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import { RemotePlayer } from './RemotePlayer';
+import { AbilityStateCache } from './AbilityStateCache';
 import { LinkClose, type RoomLink } from './RoomLink';
 import { PeerLink } from './host/PeerLink';
 import { RoomHost } from './host/RoomHost';
@@ -67,6 +76,9 @@ export interface RoomConnectOptions {
 
 function friendlyError(e: unknown, hosted = false): Error {
   const msg = (e as Error)?.message ?? String(e);
+  if (msg.includes(JoinError.MAP_MISMATCH)) {
+    return new Error(hosted ? 'Quem criou a sala está com outra versão do mapa do graao. Atualizem o graao (e o Graao Host) e tentem de novo.' : 'Este servidor roda outra versão do mapa do graao. Recarregue a página.');
+  }
   if (msg.includes(JoinError.VERSION_MISMATCH)) {
     return new Error(hosted ? 'Quem criou a sala está com outra versão do graao. Recarreguem a página.' : 'Este servidor roda outra versão do graao. Recarregue a página.');
   }
@@ -107,6 +119,8 @@ export class NetSession {
   private serverTick = 0;
   private lastServerTickMs = 0;
   private left = false;
+  /** Socket drops in this session (each one the SDK tried to recover), for the F3 overlay. */
+  private drops = 0;
   private closeReason = '';
   private active = false;
   private presentation = false;
@@ -114,6 +128,8 @@ export class NetSession {
   private latestSelf: SelfStatusMsg | null = null;
   private latestDraft: DraftStateMsg | null = null;
   private latestLoot: LootStateMsg | null = null;
+  private readonly abilityCache = new AbilityStateCache();
+  private latestWorld: WorldStateMsg | null = null;
 
   private constructor(
     private readonly app: GraaoApp,
@@ -139,6 +155,11 @@ export class NetSession {
   }
 
   /** Smoothed round-trip time (ms). */
+  /** The last private status the server sent (what is in each weapon slot, fists, progression...). */
+  get lastSelf(): SelfStatusMsg | null {
+    return this.latestSelf;
+  }
+
   get rtt(): number {
     return this.rtt_;
   }
@@ -164,12 +185,12 @@ export class NetSession {
     let useDedicated = !settings.endpoint && !settings.hosted && (settings.forceDedicated || dedicatedServer());
     if (settings.endpoint) {
       // A Graao Host room runs on another player's PC: no identity token goes there, only a name (and the owner key).
-      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(settings.hostKey ? { hostKey: settings.hostKey } : {}) };
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, map: MAP_HASH, name, appearance: app.appearance, ...(settings.hostKey ? { hostKey: settings.hostKey } : {}) };
       try {
         room = await new Client(settings.endpoint).joinById(code.toUpperCase(), options);
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e);
-        throw /fetch|network|ECONN|timeout|failed/i.test(msg) && !/full|locked|VERSION|IN_PROGRESS/i.test(msg)
+        throw /fetch|network|ECONN|timeout|failed/i.test(msg) && !/full|locked|VERSION|MAP_MISMATCH|IN_PROGRESS/i.test(msg)
           ? new Error('Não foi possível conectar ao PC que hospeda essa sala. A hospedagem pode ter sido encerrada.')
           : friendlyError(e, true);
       }
@@ -180,18 +201,18 @@ export class NetSession {
       // A signed-in player proves who they are with the Supabase access token (the server verifies it); else a guest.
       // Only the build's own server ever receives it (a ?server= link plays as a guest).
       const token = target.official ? await app.profile.accessToken() : null;
-      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(token ? { token } : {}), ...roomOptions };
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, map: MAP_HASH, name, appearance: app.appearance, ...(token ? { token } : {}), ...roomOptions };
       try {
         room = kind === 'join' ? await client.joinById(code.toUpperCase(), options) : await client.create(ROOM_NAME, options);
       } catch (e) {
         const message = (e as Error).message || String(e);
-        if (kind === 'join' && settings.fallbackHosted && signalingConfigured() && !/VERSION_MISMATCH|ROOM_FULL|IN_PROGRESS|AUTH_FAILED|BAD_APPEARANCE|full|locked/i.test(message)) useDedicated = false;
+        if (kind === 'join' && settings.fallbackHosted && signalingConfigured() && !/VERSION_MISMATCH|MAP_MISMATCH|ROOM_FULL|IN_PROGRESS|AUTH_FAILED|BAD_APPEARANCE|full|locked/i.test(message)) useDedicated = false;
         else throw friendlyError(e);
       }
     }
     if (!useDedicated && !settings.endpoint) {
       // Hosted by a player: no identity token leaves this browser (the host is just another player).
-      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...roomOptions };
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, map: MAP_HASH, name, appearance: app.appearance, ...roomOptions };
       try {
         if (kind === 'join') room = await PeerLink.connect(code.toUpperCase(), options);
         else {
@@ -223,6 +244,11 @@ export class NetSession {
       const timeout = setTimeout(() => reject(new Error('O servidor não respondeu.')), 8000);
       room.onMessage(S2C.WELCOME, (m: WelcomeMsg & { spawn: [number, number, number] }) => {
         clearTimeout(timeout);
+        // The server checks the map on join; this covers the other direction (a newer server, an older page).
+        if (m.map && m.map !== MAP_HASH) {
+          reject(new Error('Esta sala roda outra versão do mapa do graao. Recarregue a página.'));
+          return;
+        }
         this.code = m.code;
         this.myIndex = m.index;
         this.clockOffset = m.serverTime - Date.now();
@@ -237,13 +263,31 @@ export class NetSession {
       room.onMessage(S2C.SNAPSHOT, (m: SnapshotMsg) => this.onSnapshot(m));
       room.onMessage(S2C.PONG, (m: PongMsg) => this.onPong(m));
       room.onMessage(S2C.EVENTS, (m: EventsMsg) => {
-        if (this.active) this.app.combat.onEvents(m.ev);
+        this.abilityCache.onEvents(m.ev);
+        if (!this.active) return;
+        this.app.interactives.onEvents(m.ev);
+        this.app.combat.onEvents(m.ev);
+      });
+      room.onMessage(S2C.WORLD_STATE, (m: WorldStateMsg) => {
+        this.latestWorld = m;
+        if (this.active) this.app.interactives.onState(m);
       });
       room.onMessage(S2C.SELF, (m: SelfStatusMsg) => {
         this.latestSelf = m;
         if (this.active) this.app.combat.onSelf(m);
       });
       room.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => this.app.combat.abilities.onResult(m));
+      room.onMessage(S2C.ABILITY_STATE, (m: AbilityStateMsg) => {
+        this.abilityCache.setState(m);
+        if (this.active) this.app.combat.abilities.setAbilityState(m);
+      });
+      room.onMessage(S2C.ABILITY_REVEAL, (m: AbilityRevealMsg) => {
+        this.abilityCache.onReveal(m);
+        if (this.active) this.app.combat.abilities.onReveal(m);
+      });
+      room.onMessage(S2C.PROGRESS, (m: ProgressMsg) => {
+        if (this.active) this.app.progression.onProgress(m);
+      });
       room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => {
         this.latestDraft = m;
         if (this.active) this.app.onDraftState(m);
@@ -262,6 +306,7 @@ export class NetSession {
       });
       // A dropped socket is not the end: the SDK reconnects on its own and the server keeps the seat for a while.
       room.onDrop(() => {
+        this.drops++;
         if (!this.left) this.app.onConnectionDrop(true);
       });
       room.onReconnect(() => {
@@ -391,12 +436,17 @@ export class NetSession {
     if (this.latestSelf) this.app.combat.onSelf(this.latestSelf);
     if (this.latestDraft) this.app.onDraftState(this.latestDraft);
     if (this.latestLoot) this.app.loot.onState(this.latestLoot);
+    this.app.combat.abilities.setAbilityState(this.abilityCache.state(this.serverNow()));
+    for (const reveal of this.abilityCache.privateReveals(this.serverNow())) this.app.combat.abilities.onReveal(reveal);
+    if (this.latestWorld) this.app.interactives.onState(this.latestWorld);
   }
 
   private onSnapshot(m: SnapshotMsg): void {
     if (!this.active) return;
     this.snapshots++;
     this.serverTick = m.k;
+    // Creeps ride every other snapshot (10 Hz), with the server clock of that snapshot.
+    if (m.c) this.app.creeps.onSnapshot(m.t, m.c);
     for (const s of m.p) {
       const [index, px, py, pz, vx, vy, vz, fx, fy, fz, pitch, move, action, flags, ack, health, shield, mana, weapon] = s;
       const simDt = s[19] ?? 0;
@@ -419,7 +469,18 @@ export class NetSession {
         st.airTime = st.grounded ? 0 : 1;
         st.moveState = move as CharacterState['moveState'];
         st.swimming = move === MovementState.SWIM;
+        // Traversal: the mode rides on moveState, stamina and the step timers on their own fields (older servers: none).
+        st.traversal = traversalOfMoveState(move);
+        if (s[20] !== undefined) st.stamina = s[20] / STAMINA_SCALE;
+        if (s[21] !== undefined) unpackTraversal(s[21], st);
+        if (s[22] !== undefined) st.ledgeR = s[22] / POS_SCALE;
         st.aim = { ...this.app.local.state.aim };
+        const localAbility = this.app.local.state;
+        st.rooted = localAbility.rooted;
+        st.noSprint = localAbility.noSprint;
+        st.airControl = localAbility.airControl;
+        st.sprintSpeed = localAbility.sprintSpeed;
+        if (localAbility.abilityMovement) st.abilityMovement = { ...localAbility.abilityMovement, ...(localAbility.abilityMovement.anchor ? { anchor: { ...localAbility.abilityMovement.anchor } } : {}) };
         if (this.app.combat.consumeSnap()) {
           // Respawn / match start: the server moved us; teleport instead of reconciling across the planet.
           this.app.local.teleport(st.pos, st.facing);
@@ -495,6 +556,10 @@ export class NetSession {
     if (!this.left) this.room.send(C2S.USE_ITEM, m);
   }
 
+  sendWorldUse(m: WorldUseMsg): void {
+    if (!this.left) this.room.send(C2S.WORLD_USE, m);
+  }
+
   /** Dev builds only (the server ignores it in production). */
   sendDevLoot(m: DevLootMsg): void {
     if (!this.left && import.meta.env.DEV) this.room.send(C2S.DEV_LOOT, m);
@@ -504,8 +569,19 @@ export class NetSession {
     if (!this.left) this.room.send(C2S.RELOAD, {});
   }
 
+  /** SWITCH_WEAPON: 0 (E), 1 (Q) or FISTS_SLOT (weapons put away, punches). */
   sendSwitch(slot: number): void {
     if (!this.left) this.room.send(C2S.SWITCH_WEAPON, { w: slot });
+  }
+
+  /** A punch with empty hands (the server picks the target, if any). */
+  sendMelee(m: MeleeMsg): void {
+    if (!this.left) this.room.send(C2S.MELEE, m);
+  }
+
+  /** Spend one attribute point (STAT_IDS index); SELF brings the result. */
+  sendAllocate(seq: number, k: number): void {
+    if (!this.left) this.room.send(C2S.ALLOCATE_STAT, { s: seq, k });
   }
 
   sendDraftPick(round: number, id: string): void {
@@ -531,6 +607,7 @@ export class NetSession {
   leave(): void {
     if (this.left) return;
     this.left = true;
+    this.app.combat.abilities.clearWorld();
     void this.room.leave(true).catch(() => {});
     for (const r of this.remotes.values()) r.dispose();
     this.remotes.clear();
@@ -546,6 +623,8 @@ export class NetSession {
       'rede entra/sai': `${(this.rateIn / 1024).toFixed(2)} / ${(this.rateOut / 1024).toFixed(2)} KB/s`,
       snapshot: `${this.lastSnapshotBytes} B (#${this.snapshots}, tick ${this.serverTick})`,
       entidades: this.remotes.size + 1,
+      bots: this.latestRoom?.players.filter((p) => p.bot).length ?? 0,
+      'quedas conexão': this.drops,
       'tick servidor': `${this.lastServerTickMs.toFixed(2)} ms`,
       reconciliação: `reexecutados ${this.app.local.stats.replayed} · erro ${(this.app.local.stats.lastCorrection * 100).toFixed(1)} cm`,
       'extrap. remoto': `${extrap.toFixed(0)} ms`,

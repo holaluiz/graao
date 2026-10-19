@@ -103,11 +103,14 @@ export class SettingsPanel {
     else if (this.current === 'Controles') {
       const invert = node('input'); invert.type = 'checkbox'; invert.checked = this.state.invertY;
       invert.addEventListener('change', () => { this.state.invertY = invert.checked; this.emit(); });
+      const calm = node('input'); calm.type = 'checkbox'; calm.checked = this.state.reducedCameraMotion;
+      calm.addEventListener('change', () => { this.state.reducedCameraMotion = calm.checked; this.emit(); });
       this.content.append(
         this.slider('Sensibilidade do mouse', .0005, .005, .0001, this.state.sensitivity, (v) => { this.state.sensitivity = v; }, (v) => v.toFixed(4).replace('.', ',')),
         field('Inverter eixo vertical', invert),
         this.slider('Intensidade do tremor', 0, 1, .1, this.state.shakeIntensity, (v) => { this.state.shakeIntensity = v; }, (v) => v === 0 ? 'Desligado' : `${Math.round(v * 100)}%`),
-        node('p', 'settings-help', 'Ajuste as vibrações de impactos e pousos. Na aba Teclas, escolha seus atalhos.'),
+        field('Reduzir movimentos de câmera', calm),
+        node('p', 'settings-help', 'Ajuste as vibrações de impactos e pousos; reduzir movimentos tira as mudanças de campo de visão em quedas e planagens. Na aba Teclas, escolha seus atalhos.'),
       );
     } else this.renderBindings();
   }

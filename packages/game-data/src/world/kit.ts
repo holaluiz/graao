@@ -2,13 +2,14 @@
  * GRAAO world kit: every modular piece the planet's regions are built from, by family (docs/world/MG_ARCHITECTURE_KITS.md).
  * The core (types, palette, dimensions, builders) is kitCore.ts; each family registers its prefabs and buildings when
  * imported: kitProps (props brasileiros), kitUrbano (URBANO_BH), kitColonial (COLONIAL), kitModernista (MODERNISTA),
- * kitNatural (SERRA, BOSQUE).
+ * kitNatural (SERRA, BOSQUE), kitVertical (VERTICAL: climbable faces, floating islands, the Serra do Mirante massif).
  */
 import './kitProps';
 import './kitUrbano';
 import './kitColonial';
 import './kitModernista';
 import './kitNatural';
+import './kitVertical';
 import { buildingRegistry, checkBuildings, prefabRegistry, type KitBuilding, type KitPrefab } from './kitCore';
 
 export * from './kitCore';

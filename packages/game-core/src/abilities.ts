@@ -30,16 +30,17 @@ import {
 import type { CharacterState } from './character';
 import { applyDamage, HITBOX, rayPlayers, type DamageResult, type PlayerHitTarget, type Vitals } from './combat';
 import { GROUPS_WORLD_QUERY, type GamePhysics } from './physics';
+import { releaseTraversal } from './traversal';
 
 /** The part of GamePhysics ability rules need (lets unit tests pass a fake world). */
-export type RayCaster = Pick<GamePhysics, 'castRay'>;
+export type RayCaster = Pick<GamePhysics, 'castRay'> & Partial<Pick<GamePhysics, 'castRayNormal'>>;
 
 // ------------------------------------------------------------------------------------------------ mana
 
 /** Regenerates Mana while alive, capped at the maximum. Mana is fractional on the server; players see the floor. */
 export function regenMana(v: Vitals, dt: number, rate: number = ABILITY_RULES.manaRegen): void {
   if (!v.alive || dt <= 0) return;
-  v.mana = Math.min(ATTRIBUTES.maxMana, v.mana + rate * dt);
+  v.mana = Math.min(v.maxMana ?? ATTRIBUTES.maxMana, v.mana + rate * (v.manaRegen ?? 1) * dt);
 }
 
 /** What the HUD and the network show (integer); the same number the cost check effectively compares against. */
@@ -88,7 +89,8 @@ export function checkCast(c: CastState, slot: number, abilityId: string, now: nu
   if (slot < 0 || slot >= LOADOUT_SLOTS || c.loadout[slot] !== abilityId || !isAbilityId(abilityId)) return AbilityReject.NOT_OWNED;
   if (!c.canFight) return AbilityReject.PHASE;
   if (ABILITIES[abilityId].kind === 'passive') return AbilityReject.PASSIVE;
-  if (c.silenced) return AbilityReject.SILENCED;
+  const canCleanseSilence = ABILITIES[abilityId].effects.some((effect) => effect.kind === 'cleanse' && effect.statuses.includes('silence'));
+  if (c.silenced && !canCleanseSilence) return AbilityReject.SILENCED;
   if (c.blocked) return AbilityReject.BLOCKED;
   if (now < c.castUntil) return AbilityReject.BUSY;
   if (now < (c.cooldownEnds[slot] ?? 0)) return AbilityReject.COOLDOWN;
@@ -164,7 +166,10 @@ export function validateTargetPoint(physics: RayCaster, feet: Vec3, point: Vec3,
   // On a surface: a short ray down along local up must find ground or a prop just below the point.
   const up = v3normalize(point);
   const above = v3addScaled(point, up, 1.0);
-  const down = physics.castRay(above, { x: -up.x, y: -up.y, z: -up.z }, 2.6, GROUPS_WORLD_QUERY);
+  // Visibility volumes can stop castRay without being a physical surface (chalk clouds, for example).
+  const down = physics.castRayNormal
+    ? physics.castRayNormal(above, { x: -up.x, y: -up.y, z: -up.z }, 2.6, GROUPS_WORLD_QUERY)
+    : physics.castRay(above, { x: -up.x, y: -up.y, z: -up.z }, 2.6, GROUPS_WORLD_QUERY);
   if (!down) return AbilityReject.BAD_TARGET;
   if (sightBlock(physics, feet, point)) return AbilityReject.BLOCKED;
   return AbilityReject.OK;
@@ -209,7 +214,7 @@ function groundBelow(physics: RayCaster, terrain: { surfaceAt(dir: Vec3, out?: V
   const up = v3normalize(p);
   const from = v3addScaled(p, up, lift);
   const down = { x: -up.x, y: -up.y, z: -up.z };
-  const hit = physics.castRay(from, down, lift + 8, GROUPS_WORLD_QUERY);
+  const hit = physics.castRayNormal ? physics.castRayNormal(from, down, lift + 8, GROUPS_WORLD_QUERY) : physics.castRay(from, down, lift + 8, GROUPS_WORLD_QUERY);
   return hit ? v3addScaled(from, down, hit.toi) : terrain.surfaceAt(up);
 }
 
@@ -234,7 +239,7 @@ export function applyShield(v: Vitals, amount: number): number {
 export function applyHeal(v: Vitals, amount: number): number {
   if (!v.alive) return 0;
   const before = v.health;
-  v.health = Math.min(ATTRIBUTES.maxHealth, v.health + Math.round(amount));
+  v.health = Math.min(v.maxHealth ?? ATTRIBUTES.maxHealth, v.health + Math.round(amount));
   return v.health - before;
 }
 
@@ -278,6 +283,8 @@ export function applyKnockback(s: CharacterState, from: Vec3 | null, strength: n
   const newUp = Math.max(vUp, 0) + lift;
   v3set(s.vel, keep.x + push.x * strength + up.x * newUp, keep.y + push.y * strength + up.y * newUp, keep.z + push.z * strength + up.z * newUp);
   s.dashSteps = 0;
+  // A push tears the character off a ledge or a wall and folds the glider (the regrab cooldown leaves a moment to react).
+  releaseTraversal(s);
   if (lift > 0) {
     s.grounded = false;
     s.airTime = 1;

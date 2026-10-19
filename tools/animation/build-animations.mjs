@@ -20,12 +20,18 @@ const PACKS = [
       'Pistol_Idle_Loop', 'Pistol_Aim_Neutral', 'Pistol_Aim_Up', 'Pistol_Aim_Down', 'Pistol_Shoot', 'Pistol_Reload',
       'Hit_Chest', 'Hit_Head', 'Death01', 'Spell_Simple_Enter', 'Spell_Simple_Shoot', 'Spell_Simple_Idle_Loop', 'Roll',
       'Dance_Loop', 'Idle_Talking_Loop', 'Interact', 'Crouch_Idle_Loop', 'Swim_Fwd_Loop', 'Swim_Idle_Loop',
+      // Unarmed combat: a left jab and a right cross, alternated (upper body only, so no root motion reaches the feet).
+      'Punch_Jab', 'Punch_Cross',
     ],
   },
   {
     src: 'assets/animations/quaternius/UAL2_Standard.glb',
     out: `${OUT}/ual2-clips.glb`,
-    clips: ['A_TPose', 'Hit_Knockback', 'Idle_Shield_Loop', 'Idle_Shield_Break', 'OverhandThrow', 'Shield_Dash', 'NinjaJump_Idle_Loop', 'NinjaJump_Land', 'Yes', 'Idle_FoldArms_Loop', 'Shield_OneShot'],
+    clips: [
+      'A_TPose', 'Hit_Knockback', 'Idle_Shield_Loop', 'Idle_Shield_Break', 'OverhandThrow', 'Shield_Dash', 'NinjaJump_Idle_Loop', 'NinjaJump_Land', 'Yes', 'Idle_FoldArms_Loop', 'Shield_OneShot',
+      // Vertical traversal: an in-place pull-up cycle (mantle, and the climbing loop).
+      'ClimbUp_1m',
+    ],
   },
 ];
 

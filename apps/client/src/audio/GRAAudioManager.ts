@@ -5,8 +5,14 @@
  * when a category is full the oldest voice is cut. Priority comes from routing: enemy threat sits on its own bus that
  * the LOW_HEALTH state never muffles, while the "world" buses (weapons, environment, music) get a low-pass.
  *
- * MVP sounds are synthesized (oscillators + filtered noise), so the game ships zero audio files for now and every
- * cue is tweakable in code. Recorded assets can replace any cue later behind the same names.
+ * Most cues are synthesized (oscillators + filtered noise), so every one is tweakable in code. A few play a file instead
+ * (SAMPLES: the game-feel sounds of tools/audio/gamefeel_sons.py, synthesized offline with more layers than a cue here
+ * affords); until the file is decoded, or if it fails, the synthesized cue of the same name plays.
+ *
+ * Footsteps (`step.<surface>`, played with the step's action: walk, run, sprint, jump, land) are ours on the movement
+ * path (foley); everybody else's go to their own clear bus, so a crowd of feet never steals a threat's voice and low
+ * health never muffles them. A shot heard from afar (`playShot`) crosses from the shot itself to a distant report with
+ * its echo, late by the speed of sound.
  *
  * INSIDE_TORMENTA (the local player outside the safe region): the world loses its colour and its sound. Only the
  * environment and music are ducked and filtered (birds, wind, water); threats, weapons, abilities and match cues stay
@@ -14,7 +20,11 @@
  */
 import { Ambience } from './Ambience';
 
-export type AudioCategory = 'threat' | 'weapons' | 'abilities' | 'match' | 'ui' | 'music' | 'environment' | 'loot';
+export type AudioCategory = 'threat' | 'weapons' | 'abilities' | 'match' | 'ui' | 'music' | 'environment' | 'loot' | 'footsteps';
+/** What a foot lands on (audio/Footsteps.ts reads it from the ground under the feet). */
+export type StepSurface = 'grass' | 'dirt' | 'sand' | 'stone' | 'wood' | 'metal';
+/** How the foot lands: a stride at each gait, the push-off of a jump, a landing. */
+export type StepAction = 'walk' | 'run' | 'sprint' | 'jump' | 'land';
 export type AudioState = 'NORMAL' | 'LOW_HEALTH' | 'UFO' | 'POST_MATCH' | 'INSIDE_TORMENTA';
 
 export type Cue =
@@ -86,6 +96,11 @@ export type Cue =
   | 'tormenta.exit'
   | 'tormenta.hurt'
   | 'fire.heavy'
+  // Firearms (pistol, SMG, rifle): a dry gunpowder crack. A shot far away: the low report and its echo (playShot).
+  | 'fire.light'
+  | 'fire.far'
+  // A foot on each surface (PlayOptions.step says how).
+  | `step.${StepSurface}`
   | 'loot.near'
   | 'loot.open'
   | 'loot.reveal'
@@ -94,13 +109,45 @@ export type Cue =
   | 'loot.equip'
   | 'loot.use'
   | 'loot.useDone'
-  | 'loot.full';
+  | 'loot.full'
+  // Empty hands: the swing through the air, a punch landing (on a body, on a wall).
+  | 'melee.swing'
+  | 'melee.hit'
+  | 'melee.wall'
+  // Creeps: a wind-up (the telegraph), a creep hurt, a creep defeated; XP earned and a level gained.
+  | 'creep.windup'
+  | 'creep.hit'
+  | 'creep.die'
+  | 'xp'
+  | 'levelup';
 
 /** Continuous layers driven every frame by a level (0 = silent): the dive's wind, the UFO's hum, the Tormenta's drone. */
 export type AudioLoop = 'wind' | 'hum' | 'tormenta';
 
-const VOICE_LIMIT: Record<AudioCategory, number> = { threat: 8, weapons: 10, abilities: 8, match: 4, ui: 4, music: 2, environment: 6, loot: 5 };
-const CATEGORY_GAIN: Record<AudioCategory, number> = { threat: 0.9, weapons: 0.75, abilities: 0.8, match: 0.9, ui: 0.55, music: 0.5, environment: 0.5, loot: 0.7 };
+const VOICE_LIMIT: Record<AudioCategory, number> = { threat: 8, weapons: 10, abilities: 8, match: 4, ui: 4, music: 2, environment: 6, loot: 5, footsteps: 6 };
+const CATEGORY_GAIN: Record<AudioCategory, number> = { threat: 0.9, weapons: 0.75, abilities: 0.8, match: 0.9, ui: 0.55, music: 0.5, environment: 0.5, loot: 0.7, footsteps: 0.85 };
+
+/**
+ * Cues played from a file in /assets/v1/audio/sfx (tools/audio/gamefeel_sons.py), with its level against the
+ * synthesized cues. Each replaced a thinner cue of the same role: the firearms had the energy weapon's zap, the swing an
+ * abrupt noise burst, the switch a noise and a beep, the shield break four tones where the file bursts into shards.
+ */
+const SAMPLES: Partial<Record<Cue, { file: string; gain: number }>> = {
+  'fire.light': { file: 'SFX_GF_Tiro_Leve.wav', gain: 0.55 },
+  'fire.heavy': { file: 'SFX_GF_Tiro_Pesado.wav', gain: 0.7 },
+  'fire.sunbeam': { file: 'SFX_GF_Tiro_Especial.wav', gain: 0.5 },
+  'melee.swing': { file: 'SFX_GF_Golpe.wav', gain: 0.45 },
+  switch: { file: 'SFX_GF_Troca.wav', gain: 0.5 },
+  'hit.shieldBreak': { file: 'SFX_GF_Escudo_Quebra.wav', gain: 0.6 },
+  'hurt.shieldBreak': { file: 'SFX_GF_Escudo_Quebra.wav', gain: 0.65 },
+};
+
+/** Loudness of a step per action: the same foot, lighter walking, heavier landing. */
+const STEP_INTENSITY: Record<StepAction, number> = { walk: 0.5, run: 0.72, sprint: 0.9, jump: 0.55, land: 1 };
+/** Distances (m) over which a shot heard from afar stops being the shot itself, and over which its report comes in. */
+const SHOT_NEAR = [18, 70] as const;
+const SHOT_FAR = [12, 55] as const;
+const SPEED_OF_SOUND = 343;
 
 const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   'fire.sunbeam': 'weapons',
@@ -162,6 +209,14 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   'tormenta.exit': 'ui',
   'tormenta.hurt': 'threat',
   'fire.heavy': 'weapons',
+  'fire.light': 'weapons',
+  'fire.far': 'weapons',
+  'step.grass': 'environment',
+  'step.dirt': 'environment',
+  'step.sand': 'environment',
+  'step.stone': 'environment',
+  'step.wood': 'environment',
+  'step.metal': 'environment',
   'loot.near': 'loot',
   'loot.open': 'loot',
   'loot.reveal': 'loot',
@@ -171,6 +226,14 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   'loot.use': 'loot',
   'loot.useDone': 'loot',
   'loot.full': 'ui',
+  'melee.swing': 'weapons',
+  'melee.hit': 'weapons',
+  'melee.wall': 'weapons',
+  'creep.windup': 'threat',
+  'creep.hit': 'weapons',
+  'creep.die': 'match',
+  xp: 'ui',
+  levelup: 'match',
 };
 
 export interface PlayOptions {
@@ -184,6 +247,10 @@ export interface PlayOptions {
   pitch?: number;
   /** Seconds of low-pass muffling for distant sounds (0 = clear). */
   muffle?: number;
+  /** Seconds from now before it sounds (a far shot arrives late). */
+  delay?: number;
+  /** Footsteps: how the foot lands (default run). */
+  step?: StepAction;
 }
 
 interface Voice {
@@ -220,6 +287,35 @@ export class GRAAudioManager {
   private beachArrayBuffer: ArrayBuffer | null = null;
   private ambienceUrl = '/assets/v1/audio/wind.mp3';
   private beachUrl = '/assets/v1/audio/beach.mp3';
+  /** SAMPLES files: fetched before the context exists, decoded once it does. */
+  private readonly sampleData = new Map<string, ArrayBuffer>();
+  private readonly sampleBuffers = new Map<string, AudioBuffer>();
+
+  /** Fetches every SAMPLES file (`url` maps a file name to its address); a file that fails keeps its synthesized cue. */
+  async loadSamples(url: (file: string) => string): Promise<void> {
+    const files = [...new Set(Object.values(SAMPLES).map((s) => s!.file))];
+    await Promise.all(
+      files.map(async (file) => {
+        try {
+          const res = await fetch(url(file));
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          this.sampleData.set(file, await res.arrayBuffer());
+          if (this.ctx) this.decodeSample(file);
+        } catch (e) {
+          console.warn(`[audio] Failed to load ${file}:`, e);
+        }
+      }),
+    );
+  }
+
+  private decodeSample(file: string): void {
+    const data = this.sampleData.get(file);
+    if (!this.ctx || !data || this.sampleBuffers.has(file)) return;
+    this.ctx
+      .decodeAudioData(data.slice(0))
+      .then((buf) => this.sampleBuffers.set(file, buf))
+      .catch((e) => console.warn(`[audio] Failed to decode ${file}:`, e));
+  }
 
   /** Loads or preloads the ambient wind audio bed from a URL. */
   async loadAmbience(url: string): Promise<void> {
@@ -276,6 +372,7 @@ export class GRAAudioManager {
           })
           .catch((e) => console.warn('[audio] Failed to decode beach audio:', e));
       }
+      for (const file of this.sampleData.keys()) this.decodeSample(file);
     } catch {
       this.ctx = null;
     }
@@ -318,7 +415,7 @@ export class GRAAudioManager {
       g.gain.value = this.categoryGain(cat);
       // Threat, match and UI stay clear in every state; the rest goes through the "world" filter, and the ambience
       // (environment, music) through its own duck first.
-      g.connect(cat === 'threat' || cat === 'match' || cat === 'ui' ? this.master : cat === 'environment' || cat === 'music' ? this.ambientDuck : this.world);
+      g.connect(cat === 'threat' || cat === 'match' || cat === 'ui' || cat === 'footsteps' ? this.master : cat === 'environment' || cat === 'music' ? this.ambientDuck : this.world);
       this.buses.set(cat, g);
       this.voices.set(cat, []);
     }
@@ -391,7 +488,11 @@ export class GRAAudioManager {
   play(cue: Cue, o: PlayOptions = {}): void {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;
-    const cat = o.threat ? 'threat' : CUE_CATEGORY[cue];
+    // Someone else's steps keep to their own bus: a crowd of feet never cuts a threat's voice.
+    const cat = o.threat ? (cue.startsWith('step.') ? 'footsteps' : 'threat') : CUE_CATEGORY[cue];
+    // Muted combat can still receive a full room's casts. Do not build sources for inaudible cues or let them
+    // evict an audible voice that is already fading out. Environmental action cues use foley, so follow effects.
+    if (this.volume <= 0 || (cat === 'music' ? this.ambienceVolume : this.effectsVolume) <= 0 || (o.volume ?? 1) <= 0) return;
     const list = this.voices.get(cat)!;
     const now = ctx.currentTime;
     for (let i = list.length - 1; i >= 0; i--) if (list[i]!.endsAt < now) list.splice(i, 1);
@@ -416,7 +517,8 @@ export class GRAAudioManager {
     }
     tail.connect(cat === 'environment' ? this.foley : this.buses.get(cat)!);
     const pitch = (o.pitch ?? 1) * (0.97 + Math.random() * 0.06);
-    const dur = this.synth(cue, out, now, pitch);
+    const at = now + Math.max(0, o.delay ?? 0);
+    const dur = this.synth(cue, out, at, pitch, o) + (at - now);
     const nodes: AudioScheduledSourceNode[] = (out as unknown as { __src?: AudioScheduledSourceNode[] }).__src ?? [];
     list.push({
       endsAt: now + dur,
@@ -430,6 +532,21 @@ export class GRAAudioManager {
         }
       },
     });
+  }
+
+  /**
+   * A shot heard from `distance` m, in the three bands of the reference study (close, medium, distant): close it is the
+   * shot itself; farther its crack is muffled and fades while the distant report (`fire.far`) takes over. Both arrive
+   * late by the speed of sound. `reach` > 1 carries a heavy weapon farther (a sniper's report over the whole valley).
+   */
+  playShot(cue: Cue, distance: number, o: PlayOptions = {}, reach = 1): void {
+    const d = Math.max(0, distance);
+    const delay = Math.min(0.35, d / SPEED_OF_SOUND);
+    const volume = o.volume ?? 1;
+    const near = 1 - smooth(SHOT_NEAR[0], SHOT_NEAR[1], d);
+    const far = smooth(SHOT_FAR[0], SHOT_FAR[1], d);
+    if (near > 0.02) this.play(cue, { ...o, delay, volume: (volume * near) / (1 + d / 14), muffle: Math.min(0.8, d / 90) });
+    if (far > 0.02 && d < 220 * reach) this.play('fire.far', { ...o, delay, volume: (volume * far * reach) / (1 + d / (45 * reach)), muffle: Math.min(0.6, d / 300) });
   }
 
   /** Outdoor bed (wind loop and beach loop) at `windLevel` and `beachLevel` (0 silent … 1 full); `time` (s) drives updates. */
@@ -552,7 +669,17 @@ export class GRAAudioManager {
     this.track(out, o);
   }
 
-  private noiseBurst(out: GainNode, t: number, dur: number, gain: number, type: BiquadFilterType, f0: number, f1 = f0, q = 1): void {
+  /**
+   * For sounds built outside this file (the world's doors, crates and region beds: audio/WorldAudio.ts): the running
+   * context, a category's bus (its volume, duck and filters apply) and the shared noise buffer; null until unlocked.
+   */
+  output(cat: AudioCategory): { ctx: AudioContext; bus: AudioNode; noise: AudioBuffer } | null {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.noise) return null;
+    return { ctx, bus: this.buses.get(cat)!, noise: this.noise };
+  }
+
+  private noiseBurst(out: GainNode, t: number, dur: number, gain: number, type: BiquadFilterType, f0: number, f1 = f0, q = 1, attack = 0.003): void {
     const ctx = this.ctx!;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
@@ -564,7 +691,7 @@ export class GRAAudioManager {
     if (f1 !== f0) f.frequency.exponentialRampToValueAtTime(Math.max(30, f1), t + dur);
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.003);
+    g.gain.exponentialRampToValueAtTime(gain, t + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(f).connect(g).connect(out);
     src.start(t, Math.random() * 0.5);
@@ -577,9 +704,104 @@ export class GRAAudioManager {
     (o.__src ??= []).push(n);
   }
 
+  /** A decoded file at `t`, played faster or slower by `p`; returns its duration (s). */
+  private sample(out: GainNode, buf: AudioBuffer, t: number, p: number, gain: number): number {
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = p;
+    const g = ctx.createGain();
+    g.gain.value = gain;
+    src.connect(g).connect(out);
+    src.start(t);
+    this.track(out, src);
+    return buf.duration / p;
+  }
+
+  /**
+   * One foot on a surface: the heel's thump and what the surface answers (grass rustles, dirt crunches, sand slides,
+   * stone clicks heel then toe, wood knocks hollow, metal rings). `k` is the loudness (STEP_INTENSITY).
+   */
+  private step(surface: StepSurface, out: GainNode, t: number, p: number, k: number, a: StepAction): void {
+    const hard = a === 'sprint' || a === 'land';
+    switch (surface) {
+      case 'grass':
+        this.osc(out, 'sine', t, 95 * p, 60 * p, 0.06, 0.35 * k);
+        this.noiseBurst(out, t, 0.09, 0.22 * k, 'bandpass', 3200 * p, 2200 * p, 0.9, 0.008);
+        this.noiseBurst(out, t + 0.035, 0.06, 0.1 * k, 'bandpass', 4500 * p, 3600 * p, 1.2);
+        if (hard) this.noiseBurst(out, t, 0.08, 0.2 * k, 'lowpass', 900 * p, 400 * p);
+        return;
+      case 'dirt':
+        this.osc(out, 'sine', t, 110 * p, 65 * p, 0.07, 0.45 * k);
+        this.noiseBurst(out, t, 0.07, 0.3 * k, 'bandpass', 1600 * p, 900 * p, 1.2);
+        for (let i = 0; i < 3; i++) this.noiseBurst(out, t + Math.random() * 0.05, 0.012, 0.15 * k, 'bandpass', (3000 + Math.random() * 2000) * p, undefined, 5);
+        return;
+      case 'sand':
+        this.osc(out, 'sine', t, 80 * p, 55 * p, 0.08, 0.28 * k, 0.01);
+        this.noiseBurst(out, t, 0.14, 0.28 * k, 'bandpass', 1200 * p, 700 * p, 0.7, 0.025);
+        return;
+      case 'stone': {
+        this.noiseBurst(out, t, 0.025, 0.4 * k, 'bandpass', 2400 * p, undefined, 2.2);
+        this.osc(out, 'triangle', t, 340 * p, 240 * p, 0.035, 0.14 * k);
+        // Heel, then the ball of the foot: closer together the faster the stride.
+        const toe = a === 'walk' ? 0.06 : a === 'run' ? 0.04 : 0.028;
+        this.noiseBurst(out, t + toe, 0.018, 0.22 * k, 'bandpass', 3200 * p, undefined, 3);
+        if (hard) this.noiseBurst(out, t, 0.05, 0.1 * k, 'highpass', 2500);
+        return;
+      }
+      case 'wood':
+        this.osc(out, 'triangle', t, 210 * p, 170 * p, 0.09, 0.35 * k);
+        this.osc(out, 'sine', t, 105 * p, 95 * p, 0.12, 0.25 * k);
+        this.noiseBurst(out, t, 0.04, 0.25 * k, 'bandpass', 1100 * p, undefined, 2.5);
+        // Now and then a board answers with a creak.
+        if (Math.random() < 0.18) this.osc(out, 'sawtooth', t + 0.02, 260 * p, 300 * p, 0.12, 0.03 * k, 0.03);
+        return;
+      case 'metal':
+        this.osc(out, 'sine', t, 140 * p, 80 * p, 0.06, 0.3 * k);
+        this.noiseBurst(out, t, 0.02, 0.3 * k, 'highpass', 3500);
+        this.osc(out, 'sine', t, 620 * p, 600 * p, 0.18, 0.12 * k);
+        this.osc(out, 'sine', t, 1580 * p, 1560 * p, 0.12, 0.07 * k);
+        this.osc(out, 'sine', t, 2710 * p, 2690 * p, 0.08, 0.04 * k);
+        return;
+    }
+  }
+
   /** Builds one cue; returns its duration (s). */
-  private synth(cue: Cue, out: GainNode, t: number, p: number): number {
+  private synth(cue: Cue, out: GainNode, t: number, p: number, o: PlayOptions = {}): number {
+    const file = SAMPLES[cue];
+    const buf = file && this.sampleBuffers.get(file.file);
+    if (buf) {
+      if (cue !== 'hurt.shieldBreak') return this.sample(out, buf, t, p, file.gain);
+      // Our own shield breaking: the same crystal, lower, with a weight under it (the shooter hears it bright).
+      const d = this.sample(out, buf, t, p * 0.86, file.gain);
+      this.osc(out, 'sine', t, 130, 45, 0.3, 0.5);
+      return d;
+    }
+    if (cue.startsWith('step.')) {
+      const a = o.step ?? 'run';
+      const k = STEP_INTENSITY[a];
+      const surface = cue.slice(5) as StepSurface;
+      this.step(surface, out, t, p, k, a);
+      if (a !== 'land') return 0.2;
+      // Both feet come down, then the body's weight.
+      this.step(surface, out, t + 0.035, p * 0.96, k * 0.7, a);
+      this.osc(out, 'sine', t, 120 * p, 45 * p, 0.16, 0.5);
+      return 0.26;
+    }
     switch (cue) {
+      case 'fire.light':
+        // Gunpowder: a dry bright crack, a short body and a dull tail (the file's recipe, until it loads).
+        this.noiseBurst(out, t, 0.03, 0.5, 'highpass', 2500);
+        this.osc(out, 'sine', t, 180 * p, 115 * p, 0.12, 0.35);
+        this.noiseBurst(out, t + 0.008, 0.25, 0.16, 'lowpass', 1300, 600);
+        return 0.28;
+      case 'fire.far':
+        // A shot over the hill: a low report, its muffled crack, and the land sending it back twice.
+        this.osc(out, 'sine', t, 120 * p, 55 * p, 0.22, 0.5);
+        this.noiseBurst(out, t, 0.16, 0.35, 'lowpass', 900 * p, 300 * p);
+        this.noiseBurst(out, t + 0.16, 0.25, 0.16, 'lowpass', 500 * p, 250 * p, 0.7, 0.02);
+        this.noiseBurst(out, t + 0.38, 0.3, 0.08, 'lowpass', 420 * p, 200 * p, 0.7, 0.03);
+        return 0.7;
       case 'fire.sunbeam':
         // Bright zap with a falling pitch, a click on top.
         this.osc(out, 'sawtooth', t, 1500 * p, 420 * p, 0.09, 0.22);
@@ -696,6 +918,47 @@ export class GRAAudioManager {
         this.osc(out, 'triangle', t, 220, 170, 0.12, 0.25);
         this.osc(out, 'triangle', t + 0.1, 190, 150, 0.12, 0.2);
         return 0.24;
+      case 'melee.swing':
+        // A quick whoosh of the arm (pitch varies per hand).
+        this.noiseBurst(out, t, 0.14, 0.26, 'bandpass', 700 * p, 2400 * p, 1.1);
+        return 0.15;
+      case 'melee.hit':
+        // A cartoon thwack: a low body thump and a snappy slap on top.
+        this.osc(out, 'sine', t, 170 * p, 60 * p, 0.14, 0.75);
+        this.noiseBurst(out, t, 0.05, 0.5, 'bandpass', 1800 * p, 900 * p, 1.4);
+        this.osc(out, 'triangle', t + 0.005, 620 * p, 300 * p, 0.05, 0.16);
+        return 0.16;
+      case 'melee.wall':
+        // Knuckles on stone: a dull knock.
+        this.osc(out, 'triangle', t, 260, 140, 0.07, 0.3);
+        this.noiseBurst(out, t, 0.04, 0.3, 'lowpass', 1600, 500);
+        return 0.08;
+      case 'creep.windup':
+        // The telegraph: a rising grumble that says "it is about to hit" (lower for the big ones).
+        this.osc(out, 'sawtooth', t, 70 * p, 150 * p, 0.42, 0.16, 0.06);
+        this.noiseBurst(out, t, 0.4, 0.12, 'lowpass', 400 * p, 1100 * p, 1);
+        return 0.44;
+      case 'creep.hit':
+        // A creature of clay or stone taking a hit: a crumbly knock.
+        this.noiseBurst(out, t, 0.08, 0.42, 'bandpass', 900 * p, 500 * p, 1.6);
+        this.osc(out, 'triangle', t, 330 * p, 200 * p, 0.07, 0.18);
+        return 0.09;
+      case 'creep.die':
+        // It crumbles: falling pebbles and a soft puff.
+        for (let k = 0; k < 5; k++) this.noiseBurst(out, t + k * 0.05, 0.05, 0.28 - k * 0.04, 'bandpass', (1400 - k * 160) * p, (1100 - k * 140) * p, 3);
+        this.osc(out, 'sine', t, 220 * p, 80 * p, 0.3, 0.35);
+        return 0.35;
+      case 'xp':
+        // XP: two quick sparkly notes.
+        this.osc(out, 'sine', t, 1318.5 * p, 1318.5 * p, 0.12, 0.12, 0.005);
+        this.osc(out, 'sine', t + 0.06, 1975.5 * p, 1975.5 * p, 0.16, 0.1, 0.005);
+        return 0.22;
+      case 'levelup':
+        // Level up: a bright fanfare climbing an octave, with a shimmer.
+        [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, k) => this.osc(out, 'triangle', t + k * 0.07, f * p, f * p, 0.45, 0.14, 0.01));
+        this.osc(out, 'sine', t + 0.35, 1568 * p, 1568 * p, 0.6, 0.1, 0.02);
+        this.noiseBurst(out, t + 0.3, 0.5, 0.07, 'highpass', 7500);
+        return 0.95;
       case 'ui.click':
         this.osc(out, 'triangle', t, 1100, 900, 0.04, 0.16);
         return 0.05;
@@ -906,5 +1169,12 @@ export class GRAAudioManager {
         this.noiseBurst(out, t + 0.2, 0.4, 0.07, 'highpass', 6500);
         return 0.7;
     }
+    // Step template-literal cues return above; TypeScript cannot narrow startsWith to that union.
+    return 0;
   }
+}
+
+function smooth(a: number, b: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
 }

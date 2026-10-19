@@ -14,7 +14,8 @@
  * Every request is validated here (sequence, rate, phase via the host, generation, state, distance, line of sight,
  * capacity). Clients only ever see chest positions and states, never what a closed chest holds.
  */
-import { ATTRIBUTES, CONSUMABLES, CONSUMABLE_ORDER, ITEMS, LOOT_RULES, WEAPONS, type ItemId } from '@graao/game-data';
+import { AMMO, ATTRIBUTES, CONSUMABLES, CONSUMABLE_ORDER, ITEMS, LOOT_RULES, WEAPONS, type ItemId } from '@graao/game-data';
+import { newPassiveRuntime, passiveModifiers } from './passives';
 import {
   ChestState,
   LootAction,
@@ -36,6 +37,7 @@ import { GROUPS_WORLD_QUERY, addChestCollider, refreshQueries, removeChestCollid
 import { mulberry32 } from './rng';
 
 export interface LootActor {
+  loadout?: readonly string[];
   readonly index: number;
   vitals: Vitals;
   inv: Inventory;
@@ -110,7 +112,10 @@ export class GRALootSystem {
     this.gen++;
     this.seed = seed >>> 0;
     const chosen = pickChestSpots(this.spots, count, mulberry32(this.seed), LOOT_RULES.minChestSpacingDeg, forced);
-    const contents = rollMatchLoot(this.seed, chosen.length);
+    // The first chest of each region is a starter: it always holds a weapon (everyone lands unarmed).
+    const seen = new Set<number>();
+    const starters = chosen.map((s) => !seen.has(s.region) && !!seen.add(s.region));
+    const contents = rollMatchLoot(this.seed, chosen.length, starters);
     chosen.forEach((spot, i) => {
       const collider = addChestCollider(this.host.physics, spot.pos, spot.up, spot.forward);
       this.colliders.add(collider);
@@ -204,7 +209,8 @@ export class GRALootSystem {
     const no = (r: LootReject): LootResultMsg => ({ s: m.s, a: LootAction.TAKE, ok: false, r, id: m.id });
     const it = this.items.get(m.id);
     if (!it) return no(LootReject.GONE);
-    const r = this.reach(a, it.pos, LOOT_RULES.itemRange, offset(it.pos, unit(it.pos), 0.25));
+    const passive = passiveModifiers(a.loadout ?? [], newPassiveRuntime(), now, a.vitals.alive);
+    const r = this.reach(a, it.pos, LOOT_RULES.itemRange * passive.pickupRange, offset(it.pos, unit(it.pos), 0.25));
     if (r !== LootReject.OK) return no(r);
     const def = ITEMS[it.item];
     const ok = (n: number, w?: number): LootResultMsg => ({ s: m.s, a: LootAction.TAKE, ok: true, r: LootReject.OK, id: m.id, d: itemIndex(it.item), n, ...(w !== undefined ? { w } : {}) });
@@ -222,9 +228,11 @@ export class GRALootSystem {
       this.host.changed(a, true);
       return ok(1, slot);
     }
-    const n = def.kind === 'ammo' ? addAmmo(a.inv, def.ammo!, it.qty) : addConsumable(a.inv, def.consumable!, it.qty);
+    const ammoRoom = def.kind === 'ammo' ? AMMO[def.ammo!].max - a.inv.reserve[def.ammo!] : 0;
+    const consumed = def.kind === 'ammo' ? Math.min(it.qty, Math.ceil(ammoRoom / (1 + passive.ammoBonus))) : 0;
+    const n = def.kind === 'ammo' ? addAmmo(a.inv, def.ammo!, Math.floor(consumed * (1 + passive.ammoBonus) + 1e-8)) : addConsumable(a.inv, def.consumable!, it.qty);
     if (n <= 0) return no(LootReject.FULL);
-    it.qty -= n;
+    it.qty -= def.kind === 'ammo' ? consumed : n;
     if (it.qty <= 0) this.remove(it, a.index);
     else this.host.emit({ e: 'take', id: it.id, by: a.index, left: it.qty });
     this.host.changed(a, false);
@@ -363,10 +371,12 @@ const weaponMagazine = (item: ItemId): number => {
   return d.kind === 'weapon' ? WEAPONS[d.weapon!].magazine : 0;
 };
 
-const MAX = { health: ATTRIBUTES.maxHealth, shield: ATTRIBUTES.maxShield, mana: ATTRIBUTES.maxMana };
-const statFull = (v: Vitals, stat: 'health' | 'shield' | 'mana'): boolean => v[stat] >= MAX[stat] - 0.5;
+/** The maximum of a vital for these vitals (in-match attributes raise Health and Mana). */
+const maxOf = (v: Vitals, stat: 'health' | 'shield' | 'mana'): number =>
+  stat === 'health' ? (v.maxHealth ?? ATTRIBUTES.maxHealth) : stat === 'mana' ? (v.maxMana ?? ATTRIBUTES.maxMana) : ATTRIBUTES.maxShield;
+const statFull = (v: Vitals, stat: 'health' | 'shield' | 'mana'): boolean => v[stat] >= maxOf(v, stat) - 0.5;
 function restore(v: Vitals, stat: 'health' | 'shield' | 'mana', amount: number): void {
-  v[stat] = Math.min(MAX[stat], v[stat] + amount);
+  v[stat] = Math.min(maxOf(v, stat), v[stat] + amount);
 }
 
 const unit = (p: Vec3): Vec3 => {

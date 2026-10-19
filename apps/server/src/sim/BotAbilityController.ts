@@ -1,6 +1,6 @@
 /** Tactical intentions only. The room sends these through the same onAbility admission as a human. */
 import { ABILITIES, type AbilityDefinition } from '@graao/game-data';
-import { checkCast, type AbilityActor } from '@graao/game-core';
+import { checkCast, type AbilityActor, type AbilityRuntime } from '@graao/game-core';
 import { AbilityReject } from '@graao/shared';
 
 export interface BotAbilitySituation {
@@ -17,7 +17,7 @@ export interface BotAbilitySituation {
 
 export interface BotAbilityChoice { slot: number; def: AbilityDefinition }
 
-export function chooseBotAbility(actor: AbilityActor, situation: BotAbilitySituation, offset = 0): BotAbilityChoice | null {
+export function chooseBotAbility(actor: AbilityActor & { runtime?: AbilityRuntime }, situation: BotAbilitySituation, offset = 0): BotAbilityChoice | null {
   const s = situation;
   for (let i = 0; i < actor.loadout.length; i++) {
     const slot = (i + offset) % actor.loadout.length;
@@ -29,6 +29,7 @@ export function chooseBotAbility(actor: AbilityActor, situation: BotAbilitySitua
     if (profile.needsSurface && !s.nearWall) continue;
     if (mobility?.kind === 'mobility' && (mobility.mode === 'ricochet' || mobility.mode === 'grapple') && !s.nearWall) continue;
     let useful = false;
+    const defensiveUltimate = def.effects.some((effect) => effect.kind === 'cleanse' || effect.kind === 'mobility' || effect.kind === 'portal' || effect.kind === 'barrier' || (effect.kind === 'area' && effect.target === 'self'));
     switch (profile.role) {
       case 'passive': break;
       case 'mobility': useful = s.seekingZone || s.recentlyHurt || (s.hasEnemy && s.distance > 8); break;
@@ -43,13 +44,12 @@ export function chooseBotAbility(actor: AbilityActor, situation: BotAbilitySitua
       }
       case 'exploration': useful = def.effects.some((effect) => effect.kind === 'reveal' && effect.mode === 'resources') ? s.hasResources : s.hasEnemy; break;
       case 'ultimate': {
-        const defensive = def.effects.some((effect) => effect.kind === 'cleanse' || effect.kind === 'mobility' || effect.kind === 'portal' || (effect.kind === 'area' && effect.target === 'self'));
-        useful = defensive ? s.recentlyHurt || s.seekingZone || actor.vitals.health < 65 : s.hasEnemy && s.enemyVisible;
+        useful = defensiveUltimate ? s.recentlyHurt || s.seekingZone || actor.vitals.health < 65 : s.hasEnemy && s.enemyVisible;
         break;
       }
     }
     if (!useful) continue;
-    if (profile.role === 'control' || (profile.role === 'ultimate' && !s.seekingZone && !s.recentlyHurt)) {
+    if (profile.role === 'control' || (profile.role === 'ultimate' && !defensiveUltimate)) {
       if (s.distance < profile.minRange || s.distance > profile.maxRange) continue;
     }
     return { slot, def };

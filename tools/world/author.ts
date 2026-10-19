@@ -8,7 +8,7 @@
  * game's layout does (game-core buildingSite), so chest spots and links computed here land where the game puts them.
  */
 import { buildingSite, createTerrain, dirToLatLon, headingTangent, latLonToDir, transportTangent, type Terrain } from '@graao/game-core';
-import { KIT_BUILDINGS, PLANET, type ChestSpotDef, type MapPlacement, type MapWaypoint } from '@graao/game-data';
+import { KIT_BUILDINGS, PLANET, type ChestSpotDef, type MapPlacement, type MapTrail, type MapWaypoint } from '@graao/game-data';
 import { v3cross, v3dot, v3normalize, type Vec3 } from '@graao/shared';
 
 export const terrain: Terrain = createTerrain();
@@ -41,10 +41,14 @@ export function frameOf(p: MapPlacement): Frame {
   return { up, forward, side, base, at, raise };
 }
 
+/** The terrain point under a world point (along its radial). */
+export const groundUnder = (p: Vec3): Vec3 => terrain.surfaceAt(v3normalize(p));
+
 export interface MapSink {
   placements: MapPlacement[];
   chestSpots: ChestSpotDef[];
   waypoints: MapWaypoint[];
+  trails: MapTrail[];
 }
 
 /** A region's authoring plane. */
@@ -78,6 +82,14 @@ export function regionPlane(sink: MapSink, region: string, center: { lat: number
   /** A placement at plane (x, z) facing `yaw0` (plane degrees). */
   const put = (id: string, prefab: string, x: number, z: number, yaw0 = 0, extra: Partial<MapPlacement> = {}): MapPlacement => {
     const dir = dirAt(x, z);
+    const { lat, lon } = dirToLatLon(dir);
+    const p: MapPlacement = { id, prefab, lat: round(lat, 5), lon: round(lon, 5), yaw: round(yawAt(dir, yaw0), 2), region, ...extra };
+    sink.placements.push(p);
+    return p;
+  };
+  /** A placement at a world point (on the ground under it), facing `yaw0` (plane degrees). */
+  const putAt = (id: string, prefab: string, point: Vec3, yaw0 = 0, extra: Partial<MapPlacement> = {}): MapPlacement => {
+    const dir = v3normalize(point);
     const { lat, lon } = dirToLatLon(dir);
     const p: MapPlacement = { id, prefab, lat: round(lat, 5), lon: round(lon, 5), yaw: round(yawAt(dir, yaw0), 2), region, ...extra };
     sink.placements.push(p);
@@ -127,7 +139,16 @@ export function regionPlane(sink: MapSink, region: string, center: { lat: number
     }
     return out;
   };
-  return { C, dirAt, yawAt, latLon, put, ground, height, chestAt, waypoint, path, region };
+  /** A dirt trail painted on the terrain through plane points (MapTrail), `width` m wide. */
+  const trail = (id: string, pts: [number, number][], width: number): MapTrail => {
+    const t: MapTrail = { id, points: pts.map(([x, z]) => {
+      const ll = latLon(x, z);
+      return [ll.lat, ll.lon] as [number, number];
+    }), width, region };
+    sink.trails.push(t);
+    return t;
+  };
+  return { C, dirAt, yawAt, latLon, put, putAt, ground, height, chestAt, waypoint, path, trail, region };
 }
 
 export type RegionPlane = ReturnType<typeof regionPlane>;

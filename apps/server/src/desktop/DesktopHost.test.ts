@@ -83,7 +83,7 @@ describe('Graao Host server (HOST_MODE=DESKTOP)', () => {
   });
 
   it('refuses rooms created from the network', async () => {
-    await expect(new Client(url).create(ROOM_NAME, join('Intruso'))).rejects.toThrow();
+    await expect(new Client(url).create(ROOM_NAME, join('Intruso'))).rejects.toThrow(/abertas pelo aplicativo Graao Host/);
   });
 
   it('opens the one room with the allocated code; the owner key makes the host, even after a reload', async () => {

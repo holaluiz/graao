@@ -20,6 +20,11 @@ export interface WeaponDefinition {
   critMultiplier: number;
   /** Shots per second. */
   fireRate: number;
+  /**
+   * The most the Velocidade de Ataque attribute may speed this weapon up (fire-rate multiplier; 1 = not at all).
+   * Absent: the attribute applies in full.
+   */
+  attackSpeedCap?: number;
   automatic: boolean;
   magazine: number;
   reloadTime: number;
@@ -75,6 +80,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     damage: 11,
     critMultiplier: 1.3,
     fireRate: 1.25,
+    attackSpeedCap: 1.06,
     automatic: false,
     magazine: 4,
     reloadTime: 2.1,
@@ -150,6 +156,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     damage: 75,
     critMultiplier: 2.4,
     fireRate: 0.9,
+    attackSpeedCap: 1,
     automatic: false,
     magazine: 5,
     reloadTime: 2.5,
@@ -200,6 +207,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     damage: 85,
     critMultiplier: 1.2,
     fireRate: 0.75,
+    attackSpeedCap: 1,
     automatic: false,
     magazine: 2,
     reloadTime: 2.8,

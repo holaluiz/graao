@@ -5,8 +5,8 @@
  * grass tufts that bend around the local player (never networked).
  */
 import * as THREE from 'three';
-import { PLANET } from '@graao/game-data';
-import type { GameWorld, Placement, PlacementKind } from '@graao/game-core';
+import { KIT_PREFABS, PLANET } from '@graao/game-data';
+import { buildTrails, soilAt, trailEdgeDistance, type GameWorld, type Placement, type PlacementKind } from '@graao/game-core';
 import { createStylizedMaterial, GLSL_NOISE, GLSL_TORMENTA, useTormenta } from '../render/materials/GRAStylizedMaterial';
 import type { Quality } from '../render/GRARenderer';
 import * as G from './propGeometry';
@@ -40,6 +40,53 @@ void main() {
   vec4 mvPosition = viewMatrix * wp;
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
+}
+`;
+
+/** Kit water (fountains, falls, streams): vertex colour, bands that run down falls and shimmer on flat water. */
+const KIT_WATER_VERTEX = /* glsl */ `
+#include <common>
+#include <color_pars_vertex>
+#include <fog_pars_vertex>
+varying vec3 vWorldPos;
+varying vec3 vNormalW;
+void main() {
+  #include <color_vertex>
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorldPos = wp.xyz;
+  vNormalW = normalize(mat3(modelMatrix) * normal);
+  vec4 mvPosition = viewMatrix * wp;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}
+`;
+const KIT_WATER_FRAGMENT = /* glsl */ `
+#include <common>
+#include <color_pars_fragment>
+#include <fog_pars_fragment>
+uniform float uTime;
+varying vec3 vWorldPos;
+varying vec3 vNormalW;
+${GLSL_NOISE}
+${GLSL_TORMENTA}
+void main() {
+  vec3 up = normalize(vWorldPos);
+  vec3 N = normalize(vNormalW);
+  float vertical = 1.0 - abs(dot(N, up));
+  // Falling sheets: streaks running down (along the radial); flat water: slow drifting glints.
+  float r = length(vWorldPos);
+  float fall = smoothstep(0.55, 0.95, graNoise3(vec3(vWorldPos.x * 2.1, r * 1.6 + uTime * 3.2, vWorldPos.z * 2.1)));
+  float flat_ = smoothstep(0.7, 0.9, graNoise3(vWorldPos * 1.3 + vec3(uTime * 0.35, 0.0, uTime * 0.25)));
+  // vColor is a vec4 in three r18x (vertex colours may carry alpha): take the rgb.
+  vec3 col = vColor.rgb;
+  col = mix(col, vec3(0.93, 0.98, 1.0), mix(flat_ * 0.45, fall * 0.65, vertical));
+  if (uTormOn.x > 0.001) {
+    float tm = graTormentaMetres(vWorldPos, uTorm);
+    if (tm > -4.0) col = mix(col, graTormentaBleach(col, vWorldPos, graTormentaEdge(vWorldPos, tm)), uTormOn.x);
+  }
+  gl_FragColor = vec4(col, mix(0.8, 0.9, vertical));
+  #include <colorspace_fragment>
+  #include <fog_fragment>
 }
 `;
 
@@ -171,6 +218,19 @@ export class PlanetView {
   readonly propMaterial = createStylizedMaterial({ variant: 'world', vertexColors: true, instanceFade: true });
   readonly foliageMaterial = createStylizedMaterial({ variant: 'foliage', vertexColors: true, instanceFade: true });
   readonly crystalMaterial = createStylizedMaterial({ variant: 'world', vertexColors: true, instanceFade: true, edgePooling: -0.25 });
+  /** Kit pieces: like the props, plus the near-detail fold (aLod) beyond `uLodNear`. */
+  readonly kitMaterial = createStylizedMaterial({ variant: 'world', vertexColors: true, instanceFade: true, kitLod: true });
+  readonly kitWaterMaterial = new THREE.ShaderMaterial({
+    name: 'GRAKitWater',
+    vertexShader: KIT_WATER_VERTEX,
+    fragmentShader: KIT_WATER_FRAGMENT,
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uTime: { value: 0 } }]),
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+    fog: true,
+    side: THREE.DoubleSide,
+  });
   readonly water: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   readonly grassMaterial: THREE.ShaderMaterial;
   /** Placement id → instance (solid props only), for camera obstruction fades. */
@@ -179,16 +239,37 @@ export class PlanetView {
   /** Static meshes of the baked kit pieces (one per icosahedron face that has any). */
   readonly kitMeshes: THREE.Mesh[] = [];
   private readonly fades = new Map<THREE.InstancedMesh, Float32Array>();
-  stats = { terrainTris: 0, propInstances: 0, grassInstances: 0, drawGroups: 0, kitPieces: 0, kitTris: 0, kitMeshes: 0 };
+  stats = { terrainTris: 0, propInstances: 0, grassInstances: 0, drawGroups: 0, kitPieces: 0, kitTris: 0, kitMeshes: 0, kitWaterMeshes: 0 };
   /** Grass and flower chunks: skipped from high up (grass collapses beyond uFadeDist anyway; flowers go sub-pixel). */
   private readonly grassMeshes: THREE.InstancedMesh[] = [];
   private readonly flowerMeshes: THREE.InstancedMesh[] = [];
   /** Warm rim glow seen from orbit (additive fresnel shell, hidden on the ground). */
   readonly atmosphere: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
+  /**
+   * Chunked meshes culled behind the planet's horizon (cullHorizon): terrain faces, kit cells, grass and flowers. On a
+   * 100 m planet the horizon is ≈ 25 m away from a standing eye; the frustum alone would still draw the far side.
+   */
+  private readonly horizonCull: { mesh: THREE.Object3D; center: THREE.Vector3; radius: number; kind: 'always' | 'grass' | 'flower' }[] = [];
+  private grassOn = true;
+  private flowersOn = true;
+  /** Radius of a sphere inside the terrain everywhere (what surely hides what lies behind it). */
+  private readonly occluderRadius: number;
+  /** Kit shadows: the small decoration (aLod) casts none — it folds away in the shadow pass. */
+  private readonly kitDepthMaterial = (() => {
+    const m = new THREE.MeshDepthMaterial();
+    m.onBeforeCompile = (sh) => {
+      sh.vertexShader = `attribute float aLod;\n${sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  if (aLod > 0.5) gl_Position.z = gl_Position.w * 2.0;')}`;
+    };
+    return m;
+  })();
 
   constructor(private readonly world: GameWorld, quality: Quality) {
     this.group.name = 'Planet';
+    let low = Infinity;
+    for (const h of world.mesh.heights) low = Math.min(low, h);
+    this.occluderRadius = PLANET.radius + low - 0.5;
     this.terrainMaterial.uniforms.uSeaLevel!.value = PLANET.seaLevel;
+    useTormenta(this.kitWaterMaterial.uniforms);
     this.buildTerrain();
     this.water = this.buildWater();
     this.grassMaterial = this.buildGrassMaterial();
@@ -233,10 +314,9 @@ export class PlanetView {
    * high up the grass (fully shrunk past its fade distance) and the flowers are not drawn at all.
    */
   setOrbit(k: number, sunDir: THREE.Vector3, altitude: number): void {
-    const grass = altitude < 36;
-    const flowers = altitude < 70;
-    if (this.grassMeshes[0]?.visible !== grass) for (const m of this.grassMeshes) m.visible = grass;
-    if (this.flowerMeshes[0] && this.flowerMeshes[0].visible !== flowers) for (const m of this.flowerMeshes) m.visible = flowers;
+    // Grass and flowers are skipped from high up (applied with the horizon test in cullHorizon).
+    this.grassOn = altitude < 36;
+    this.flowersOn = altitude < 70;
     this.atmosphere.visible = k > 0.01;
     this.atmosphere.material.uniforms.uOrbit!.value = k * 0.85;
     (this.atmosphere.material.uniforms.uSunDir!.value as THREE.Vector3).copy(sunDir);
@@ -244,12 +324,16 @@ export class PlanetView {
 
   private buildTerrain(): void {
     const m = this.world.mesh;
+    // Trails (map `trails`): each vertex keeps its signed distance to the nearest trail's edge, so the shader paints a
+    // dirt path that follows the ground exactly (the edge is the zero line between vertices).
+    const trails = buildTrails();
     // Split by icosahedron face for frustum culling; vertices are copied per chunk with the global smooth normals.
     for (let face = 0; face < 20; face++) {
       const remap = new Map<number, number>();
       const pos: number[] = [];
       const nor: number[] = [];
       const hgt: number[] = [];
+      const soil: number[] = [];
       const idx: number[] = [];
       for (let t = 0; t < m.indices.length / 3; t++) {
         if (m.triangleFace[t] !== face) continue;
@@ -262,6 +346,9 @@ export class PlanetView {
             pos.push(m.positions[v * 3]!, m.positions[v * 3 + 1]!, m.positions[v * 3 + 2]!);
             nor.push(m.normals[v * 3]!, m.normals[v * 3 + 1]!, m.normals[v * 3 + 2]!);
             hgt.push(m.heights[v]!);
+            const l = Math.hypot(m.positions[v * 3]!, m.positions[v * 3 + 1]!, m.positions[v * 3 + 2]!) || 1;
+            const u = { x: m.positions[v * 3]! / l, y: m.positions[v * 3 + 1]! / l, z: m.positions[v * 3 + 2]! / l };
+            soil.push(...soilAt(u), trailEdgeDistance(trails, u, 3));
           }
           idx.push(id);
         }
@@ -270,6 +357,7 @@ export class PlanetView {
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
       g.setAttribute('aHeight', new THREE.Float32BufferAttribute(hgt, 1));
+      g.setAttribute('aSoil', new THREE.Float32BufferAttribute(soil, 3));
       g.setIndex(idx);
       g.computeBoundingSphere();
       const mesh = new THREE.Mesh(g, this.terrainMaterial);
@@ -277,6 +365,7 @@ export class PlanetView {
       mesh.castShadow = true;
       mesh.name = `terrain_${face}`;
       this.group.add(mesh);
+      this.horizonCull.push({ mesh, center: g.boundingSphere!.center.clone(), radius: g.boundingSphere!.radius, kind: 'always' });
       this.stats.terrainTris += idx.length / 3;
     }
   }
@@ -347,6 +436,11 @@ export class PlanetView {
         case 'rock':
         case 'bush':
         case 'pine':
+        case 'cerrado':
+        case 'ipe':
+        case 'palm':
+        case 'canela':
+        case 'capim':
           return `${p.kind}:${p.variant % 3}`;
         case 'house':
           return `house:${p.variant % 3}`;
@@ -356,10 +450,12 @@ export class PlanetView {
     };
     const grassFraction = quality === 'LOW' ? 0.35 : quality === 'MEDIUM' ? 0.7 : 1;
     const kit: Placement[] = [];
+    const kitWater: Placement[] = [];
     for (const p of this.world.layout.placements) {
       if (p.kind === 'grass' || p.kind === 'flower') continue;
       if (p.kind === 'kit') {
-        kit.push(p);
+        // Breakable crates are drawn by the InteractiveView (they disappear when broken).
+        if (!p.breakable) (KIT_PREFABS[p.prefab!]?.material === 'water' ? kitWater : kit).push(p);
         continue;
       }
       const k = keyOf(p);
@@ -378,6 +474,16 @@ export class PlanetView {
           return { g: G.rockGeometry(variant), mat: this.propMaterial };
         case 'bush':
           return { g: G.bushGeometry(variant), mat: this.foliageMaterial };
+        case 'cerrado':
+          return { g: G.cerradoTreeGeometry(variant), mat: this.foliageMaterial };
+        case 'ipe':
+          return { g: G.ipeGeometry(variant), mat: this.foliageMaterial };
+        case 'palm':
+          return { g: G.palmGeometry(variant), mat: this.foliageMaterial };
+        case 'canela':
+          return { g: G.canelaGeometry(variant), mat: this.foliageMaterial };
+        case 'capim':
+          return { g: G.capimGeometry(variant), mat: this.foliageMaterial };
         case 'house':
           return { g: G.houseGeometry(variant), mat: this.propMaterial };
         case 'tower':
@@ -409,7 +515,9 @@ export class PlanetView {
       g.setAttribute('instanceFade', new THREE.InstancedBufferAttribute(fade, 1));
       const mesh = new THREE.InstancedMesh(g, mat, list.length);
       mesh.name = `props:${key}`;
-      mesh.castShadow = true;
+      // Ground cover (golden grass, canelas-de-ema, bushes) casts no shadow: hundreds of tufts cost a shadow pass each
+      // for shadows nobody reads (docs/world/WORLD_PERFORMANCE.md).
+      mesh.castShadow = !/^(capim|canela|bush)/.test(key);
       mesh.receiveShadow = true;
       list.forEach((p, i) => {
         basis.makeBasis(
@@ -433,13 +541,14 @@ export class PlanetView {
       this.stats.propInstances += list.length;
     }
 
-    // Kit pieces (buildings, street props, paving): baked per icosahedron face, faded by vertex range.
-    const centers = icosaFaceCenters();
-    const faceOf = (p: Placement) => {
+    // Kit pieces (buildings, street props, paving): baked per cell of the planet (≈ 45 m: a region is a few draw calls
+    // and the frustum still culls most of the map), faded by vertex range.
+    const cells = fibonacciCells(KIT_CELLS);
+    const kitCellOf = (p: Placement) => {
       let best = 0;
       let bd = -2;
-      for (let i = 0; i < centers.length; i++) {
-        const d = centers[i]!.x * p.up.x + centers[i]!.y * p.up.y + centers[i]!.z * p.up.z;
+      for (let i = 0; i < cells.length; i++) {
+        const d = cells[i]!.x * p.up.x + cells[i]!.y * p.up.y + cells[i]!.z * p.up.z;
         if (d > bd) {
           bd = d;
           best = i;
@@ -447,13 +556,27 @@ export class PlanetView {
       }
       return best;
     };
-    const baked = buildKitChunks(kit, this.propMaterial, faceOf);
-    for (const mesh of baked.meshes) this.group.add(mesh);
+    const baked = buildKitChunks(kit, this.kitMaterial, kitCellOf);
+    for (const mesh of baked.meshes) {
+      mesh.customDepthMaterial = this.kitDepthMaterial;
+      this.group.add(mesh);
+      this.horizonCull.push({ mesh, center: mesh.geometry.boundingSphere!.center.clone(), radius: mesh.geometry.boundingSphere!.radius, kind: 'always' });
+    }
     for (const [id, r] of baked.refs) this.instances.set(id, { mesh: r.mesh, index: -1, start: r.start, count: r.count, placement: r.placement });
     this.kitMeshes.push(...baked.meshes);
-    this.stats.kitPieces = kit.length;
-    this.stats.kitTris = baked.triangles;
+    // Water pieces: their own meshes (transparent, animated), no shadows, never dissolved.
+    const water = buildKitChunks(kitWater, this.kitWaterMaterial, kitCellOf);
+    for (const mesh of water.meshes) {
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.renderOrder = 9;
+      this.group.add(mesh);
+      this.horizonCull.push({ mesh, center: mesh.geometry.boundingSphere!.center.clone(), radius: mesh.geometry.boundingSphere!.radius, kind: 'always' });
+    }
+    this.stats.kitPieces = kit.length + kitWater.length;
+    this.stats.kitTris = baked.triangles + water.triangles;
     this.stats.kitMeshes = baked.meshes.length;
+    this.stats.kitWaterMeshes = water.meshes.length;
 
     // Grass and flowers: chunked by nearest icosahedron face for culling.
     const grass = this.world.layout.placements.filter((p) => p.kind === 'grass');
@@ -499,6 +622,7 @@ export class PlanetView {
       mesh.receiveShadow = true;
       this.group.add(mesh);
       (name === 'grass' ? this.grassMeshes : this.flowerMeshes).push(mesh);
+      this.horizonCull.push({ mesh, center: mesh.boundingSphere!.center.clone(), radius: mesh.boundingSphere!.radius + 0.6, kind: name === 'grass' ? 'grass' : 'flower' });
       this.stats.grassInstances += ps.length;
     }
   }
@@ -525,8 +649,34 @@ export class PlanetView {
     return this.fades.get(ref.mesh as THREE.InstancedMesh)![ref.index]!;
   }
 
+  /**
+   * Hides the chunked meshes the planet itself hides from `eye` (the camera): a chunk is behind the horizon when its
+   * bounding sphere, raised to its highest point, lies past the occluder sphere's horizon. Conservative (the occluder
+   * is inside the terrain everywhere), so nothing that could be seen is ever skipped. Their shadow pass goes with
+   * them (shadows reach a few metres; the shadow camera follows the player).
+   */
+  cullHorizon(eye: THREE.Vector3): void {
+    const D = eye.length();
+    const Ro = this.occluderRadius;
+    const camAngle = D > Ro ? Math.acos(Ro / D) : Math.PI;
+    for (const c of this.horizonCull) {
+      const on = c.kind === 'always' || (c.kind === 'grass' ? this.grassOn : this.flowersOn);
+      let seen = on;
+      if (on && D > Ro) {
+        const rc = c.center.length();
+        const top = rc + c.radius;
+        const objAngle = top > Ro ? Math.acos(Ro / top) : 0;
+        const spread = rc > 1e-3 ? Math.asin(Math.min(1, c.radius / rc)) : Math.PI;
+        const theta = Math.acos(THREE.MathUtils.clamp(c.center.dot(eye) / (rc * D || 1), -1, 1));
+        seen = theta - spread < camAngle + objAngle + 0.02;
+      }
+      if (c.mesh.visible !== seen) c.mesh.visible = seen;
+    }
+  }
+
   update(time: number, player: THREE.Vector3, sunDir: THREE.Vector3): void {
     this.water.material.uniforms.uTime!.value = time;
+    this.kitWaterMaterial.uniforms.uTime!.value = time;
     (this.water.material.uniforms.uSunDir!.value as THREE.Vector3).copy(sunDir);
     this.grassMaterial.uniforms.uTime!.value = time;
     (this.grassMaterial.uniforms.uPlayer!.value as THREE.Vector3).copy(player);
@@ -545,5 +695,22 @@ function icosaFaceCenters(): THREE.Vector3[] {
     out.push(c.normalize());
   }
   faceCenters = out;
+  return out;
+}
+
+/**
+ * Kit chunk cells: Fibonacci points on the sphere, ≈ 45 m apart on the 100 m planet — a region is one or two meshes
+ * (plus their shadow pass), and the frustum still culls the far side (docs/world/WORLD_PERFORMANCE.md).
+ */
+const KIT_CELLS = 64;
+
+function fibonacciCells(n: number): THREE.Vector3[] {
+  const out: THREE.Vector3[] = [];
+  for (let k = 0; k < n; k++) {
+    const y = 1 - (2 * (k + 0.5)) / n;
+    const r = Math.sqrt(1 - y * y);
+    const phi = k * Math.PI * (3 - Math.sqrt(5));
+    out.push(new THREE.Vector3(r * Math.cos(phi), y, r * Math.sin(phi)));
+  }
   return out;
 }

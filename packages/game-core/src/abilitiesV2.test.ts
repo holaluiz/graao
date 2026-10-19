@@ -30,6 +30,17 @@ describe('Ability v2 first vertical slice contracts', () => {
     expect(checkCast({ ...state, mana: 14 }, 0, 'wind_step', 1000)).toBe(AbilityReject.NO_MANA);
     expect(checkCast(state, 2, 'steady_hand', 1000)).toBe(AbilityReject.PASSIVE);
     expect(validateLoadout(loadout)).toEqual(loadout);
+    expect(validateLoadout(['steady_hand', 'soft_step', 'wind_step', 'sun_meteor'])).toBeNull();
+  });
+
+  it('admits self-cleansing through silence while retaining all other authoritative gates', () => {
+    const state = { alive: true, canFight: true, mana: 100, loadout: ['rain_bath', 'wind_step', 'steady_hand', 'confetti_wheel'], cooldownEnds: [0, 0, 0, 0], castUntil: 0, silenced: true };
+    expect(checkCast(state, 0, 'rain_bath', 1000)).toBe(AbilityReject.OK);
+    expect(checkCast(state, 3, 'confetti_wheel', 1000)).toBe(AbilityReject.OK);
+    expect(checkCast(state, 1, 'wind_step', 1000)).toBe(AbilityReject.SILENCED);
+    expect(checkCast({ ...state, mana: 0 }, 0, 'rain_bath', 1000)).toBe(AbilityReject.NO_MANA);
+    expect(checkCast({ ...state, blocked: true }, 0, 'rain_bath', 1000)).toBe(AbilityReject.BLOCKED);
+    expect(checkCast({ ...state, cooldownEnds: [5000, 0, 0, 0] }, 0, 'rain_bath', 1000)).toBe(AbilityReject.COOLDOWN);
   });
 
   it('consumes temporary protection first, expires it without inflating Shield and never protects against Tormenta', () => {

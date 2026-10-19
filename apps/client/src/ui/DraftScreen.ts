@@ -67,6 +67,17 @@ function effectFacts(effects: readonly AbilityEffect[]): string[] {
       case 'slow': return [`Reduz a velocidade em ${number((1 - e.factor) * 100)}% por ${seconds(e.duration)}`];
       case 'dash': return [`Avança ${number(e.distance)} m em ${seconds(e.duration)}`];
       case 'knockback': return ['Empurra e levanta os alvos atingidos'];
+      case 'temporaryShield': return [`${number(e.amount)} de proteção temporária por ${seconds(e.duration)}`];
+      case 'status': return [`${({ slow: 'Lentidão', root: 'Imobilização', silence: 'Silenciamento', noSprint: 'Sem corrida', speed: 'Velocidade' } as const)[e.status]} por ${seconds(e.duration)}`];
+      case 'cleanse': return [`Remove efeitos negativos e resiste à reaplicação por ${seconds(e.duration)}`];
+      case 'mobility': return [e.duration ? `Movimento especial por até ${seconds(e.duration)}` : 'Impulso de mobilidade', ...(e.distance ? [`Deslocamento de até ${number(e.distance)} m`] : [])];
+      case 'barrier': return [`${e.count} cobertura${e.count > 1 ? 's' : ''} · ${number(e.health)} de resistência cada`, `Duração máxima: ${seconds(e.duration)}`];
+      case 'reveal': return [`Informação autorizada por ${seconds(e.duration)}`, `Raio: ${number(e.radius)} m`];
+      case 'trap': return [`Armadilha identificável por até ${seconds(e.duration)}`, ...effectFacts(e.effects)];
+      case 'cloud': return [`Oculta a visão · ${number(e.radius)} m de raio por ${seconds(e.duration)}`];
+      case 'wave': return [`Percorre até ${number(e.distance)} m pela superfície`, `Largura: ${number(e.width)} m`];
+      case 'portal': return [`Portais por ${seconds(e.duration)} · só o conjurador atravessa`, `Até ${number(e.range)} m entre os extremos`];
+      case 'frontShield': return [`Bloqueia disparos num setor frontal de ${number(e.arc)}°`, `Protege por até ${seconds(e.duration)} · impede disparar`];
       case 'projectile': return effectFacts(e.onHit);
       case 'area': return [
         `Área de ${number(e.radius)} m de raio${e.delay ? ` · aviso de ${seconds(e.delay)}` : ''}${e.pulses > 1 ? ` · ${e.pulses} pulsos` : ''}`,
@@ -149,6 +160,7 @@ export class DraftScreen {
   private page = 0;
   private visibleIds: string[] = [];
   private readonly small = window.matchMedia('(max-width: 560px), (max-height: 620px)');
+  private readonly short = window.matchMedia('(max-height: 450px)');
 
   constructor(private readonly actions: DraftActions) {
     this.el.hidden = true;
@@ -158,6 +170,7 @@ export class DraftScreen {
     this.filters.setAttribute('aria-label', 'Categorias de magias');
     this.pagination.setAttribute('aria-label', 'Páginas de magias');
     this.small.addEventListener('change', () => { this.cardKey = ''; this.render(); });
+    this.short.addEventListener('change', () => { this.cardKey = ''; this.render(); });
     this.statusEl.setAttribute('role', 'status');
     this.confirm.type = this.change.type = 'button';
     this.confirm.addEventListener('click', () => this.submitSelection());
@@ -349,7 +362,7 @@ export class DraftScreen {
   }
 
   private renderCards(s: DraftStateMsg): void {
-    const size = this.small.matches ? 4 : 6;
+    const size = this.short.matches ? 2 : this.small.matches ? 4 : 6;
     const page = draftCatalogPage(s.pool, this.category, this.page, size);
     this.page = page.page;
     this.visibleIds = page.ids;
@@ -444,6 +457,7 @@ export class DraftScreen {
       el('strong', '', stat, value);
     }
     this.detailEffects.replaceChildren();
+    if (def.kind === 'passive') el('li', '', this.detailEffects, 'Automática · não exige tecla nem consome Mana');
     for (const fact of [...new Set(effectFacts(def.effects))].slice(0, 3)) el('li', '', this.detailEffects, fact);
     this.detailTags.replaceChildren();
     for (const t of def.tags) if (TAGS[t]) el('span', 'dc-tag', this.detailTags, TAGS[t]);

@@ -8,6 +8,7 @@ export const BINDING_ACTIONS = [
   { id: 'sprint', label: 'Correr' },
   { id: 'weapon1', label: 'Arma 1' },
   { id: 'weapon2', label: 'Arma 2' },
+  { id: 'holster', label: 'Guardar armas (socos)' },
   { id: 'reload', label: 'Recarregar' },
   { id: 'ability1', label: 'Habilidade 1' },
   { id: 'ability2', label: 'Habilidade 2' },
@@ -18,6 +19,7 @@ export const BINDING_ACTIONS = [
   { id: 'item2', label: 'Usar escudo' },
   { id: 'item3', label: 'Usar mana' },
   { id: 'ready', label: 'Ficar pronto' },
+  { id: 'stats', label: 'Atributos' },
 ] as const;
 
 export type RebindableAction = (typeof BINDING_ACTIONS)[number]['id'];
@@ -25,9 +27,9 @@ export type KeyBindings = Record<RebindableAction, string>;
 
 export const DEFAULT_BINDINGS: Readonly<KeyBindings> = Object.freeze({
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft',
-  weapon1: 'KeyE', weapon2: 'KeyQ', reload: 'KeyR',
+  weapon1: 'KeyE', weapon2: 'KeyQ', holster: 'KeyH', reload: 'KeyR',
   ability1: 'Digit1', ability2: 'Digit2', ability3: 'Digit3', ultimate: 'Digit4',
-  interact: 'KeyF', item1: 'KeyZ', item2: 'KeyX', item3: 'KeyC', ready: 'Enter',
+  interact: 'KeyF', item1: 'KeyZ', item2: 'KeyX', item3: 'KeyC', ready: 'Enter', stats: 'KeyP',
 });
 
 const EXTRA_CODES = new Set(['Space', 'Enter', 'NumpadEnter', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight']);

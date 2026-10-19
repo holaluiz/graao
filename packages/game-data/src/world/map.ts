@@ -52,10 +52,54 @@ export interface MapWaypoint {
   kind?: 'rua' | 'porta' | 'escada' | 'telhado' | 'ponte' | 'mirante' | 'interior' | 'trilha';
 }
 
+/**
+ * A dirt trail painted on the terrain (docs/world/PLANET_LAYOUT.md, "Caminhos"): a polyline of [lat, lon] points
+ * joined by great-circle arcs, `width` m wide. The ground under it keeps its shape (a trail follows every hill and
+ * bank of the planet, never a flat tile over a curve); the client paints it into the terrain and the layout keeps wild
+ * trees, rocks and grass off it.
+ */
+export interface MapTrail {
+  id: string;
+  points: [number, number][];
+  width: number;
+  region?: string;
+}
+
+/**
+ * A wind volume (docs/gameplay/WIND_VOLUMES.md): a column standing on the terrain at (lat, lon), from `base` m over the
+ * ground to `base + height`, `radius` m wide. An updraft lifts gliders and slows anyone's fall; a directional wind
+ * carries whoever is in the air toward `yaw`. Client prediction and the server run the same volumes from this data, so
+ * the force is the simulation's, never something a client claims.
+ */
+export interface MapWind {
+  id: string;
+  kind: 'updraft' | 'directional';
+  lat: number;
+  lon: number;
+  /** Bottom of the column over the terrain under its centre (m), and its height (m). */
+  base: number;
+  height: number;
+  radius: number;
+  /** Directional winds: where they blow, degrees clockwise from the local north at the centre. */
+  yaw?: number;
+  /** m/s: an updraft's rise speed for a glider, a directional wind's speed along its direction. */
+  strength: number;
+  /** Off until the bell of this placement rings (an event wind: the bell's placement id). */
+  trigger?: string;
+  region?: string;
+}
+
+export const WIND_LIMITS = { radius: [1, 20], height: [1, 50], base: [-2, 40], strength: [0.5, 14] } as const;
+
 export interface GraaoMap {
   mapId: string;
   /** Bumped on any layout change. */
   mapVersion: number;
+  /**
+   * Set by the map editor (`?editor`) when it saves (ISO date): the file then holds hand edits that the region scripts
+   * do not know, and `tools/world/seed-map.ts --write` refuses to overwrite it without `--force`.
+   */
+  editedAt?: string;
   /** Bumped when shared geometry (kit prefabs, classic structures) changes. */
   geometryVersion: number;
   /** Bumped when colliders change. */
@@ -64,6 +108,10 @@ export interface GraaoMap {
   chestSpots: ChestSpotDef[];
   /** Bot navigation waypoints and links (the rest of the nav graph is generated from the terrain and colliders). */
   waypoints?: MapWaypoint[];
+  /** Dirt trails painted on the terrain between and inside the regions. */
+  trails?: MapTrail[];
+  /** Wind volumes (updrafts, directional winds); absent in maps older than mapVersion 5 (= none). */
+  winds?: MapWind[];
 }
 
 /**
@@ -119,10 +167,28 @@ export function validateMap(m: GraaoMap): string[] {
   const wps = new Set((m.waypoints ?? []).map((w) => w.id));
   if (wps.size !== (m.waypoints ?? []).length) out.push('waypoint repetido');
   for (const w of m.waypoints ?? []) for (const l of w.links) if (!wps.has(l)) out.push(`${w.id}: ligação para waypoint desconhecido ${l}`);
+  const trails = new Set<string>();
+  for (const t of m.trails ?? []) {
+    if (trails.has(t.id)) out.push(`trilha repetida: ${t.id}`);
+    trails.add(t.id);
+    if (t.points.length < 2 || !t.points.every(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180)) out.push(`${t.id}: pontos inválidos`);
+    if (!(t.width > 0.4 && t.width < 8)) out.push(`${t.id}: largura ${t.width} fora de 0,4–8 m`);
+  }
+  const winds = new Set<string>();
+  const inside = (v: number, [a, b]: readonly [number, number]) => Number.isFinite(v) && v >= a && v <= b;
+  for (const w of m.winds ?? []) {
+    if (winds.has(w.id)) out.push(`vento repetido: ${w.id}`);
+    winds.add(w.id);
+    if (w.kind !== 'updraft' && w.kind !== 'directional') out.push(`${w.id}: tipo de vento ${String(w.kind)}`);
+    if (![w.lat, w.lon].every(Number.isFinite) || Math.abs(w.lat) > 90 || Math.abs(w.lon) > 180) out.push(`${w.id}: posição inválida`);
+    for (const k of ['radius', 'height', 'base', 'strength'] as const) if (!inside(w[k], WIND_LIMITS[k])) out.push(`${w.id}: ${k} ${w[k]} fora de ${WIND_LIMITS[k].join('–')}`);
+    if (w.kind === 'directional' && !Number.isFinite(w.yaw)) out.push(`${w.id}: vento direcional sem direção (yaw)`);
+    if (w.trigger && !ids.has(w.trigger)) out.push(`${w.id}: gatilho ${w.trigger} não é uma peça do mapa`);
+  }
   return out;
 }
 
-export const GRAAO_MAP: GraaoMap = MAP_FILE as GraaoMap;
+export const GRAAO_MAP: GraaoMap = MAP_FILE as unknown as GraaoMap;
 {
   const problems = validateMap(GRAAO_MAP);
   if (problems.length) throw new Error(`planeta-graao.map.json: ${problems.join('; ')}`);
@@ -130,9 +196,9 @@ export const GRAAO_MAP: GraaoMap = MAP_FILE as GraaoMap;
 
 /** The map file's text: one placement or chest spot per line, so diffs and reviews stay readable. */
 export function serializeMap(m: GraaoMap): string {
-  const head = JSON.stringify({ mapId: m.mapId, mapVersion: m.mapVersion, geometryVersion: m.geometryVersion, collisionVersion: m.collisionVersion }, null, 2).slice(0, -2);
+  const head = JSON.stringify({ mapId: m.mapId, mapVersion: m.mapVersion, ...(m.editedAt ? { editedAt: m.editedAt } : {}), geometryVersion: m.geometryVersion, collisionVersion: m.collisionVersion }, null, 2).slice(0, -2);
   const list = (items: unknown[]) => (items.length ? `[\n    ${items.map((i) => JSON.stringify(i)).join(',\n    ')}\n  ]` : '[]');
-  return `${head},\n  "placements": ${list(m.placements)},\n  "chestSpots": ${list(m.chestSpots)},\n  "waypoints": ${list(m.waypoints ?? [])}\n}\n`;
+  return `${head},\n  "placements": ${list(m.placements)},\n  "chestSpots": ${list(m.chestSpots)},\n  "waypoints": ${list(m.waypoints ?? [])},\n  "trails": ${list(m.trails ?? [])},\n  "winds": ${list(m.winds ?? [])}\n}\n`;
 }
 
 /** FNV-1a (32 bit) of a string, as 8 hex digits. */
@@ -147,5 +213,16 @@ export function fnv1a(text: string): string {
 
 /** Map identity: id and versions, readable in logs and error messages. */
 export const MAP_ID = `${GRAAO_MAP.mapId}@${GRAAO_MAP.mapVersion}.${GRAAO_MAP.geometryVersion}.${GRAAO_MAP.collisionVersion}`;
+/**
+ * Digest of map data with every fractional number snapped to a binary grid of 2^-12 (≈ 0.24 mm, 0.00024°). Prefab parts
+ * are computed with trigonometry, and JS engines disagree in the last bits of those results (Node 24 and Chromium
+ * differ on `pavilhao-parede`, measured on 2026-10-19; Firefox and Safari ship other math libraries): a digest of the
+ * raw floats would refuse a browser running the very same map. A binary grid, unlike a decimal one, never has an
+ * authored decimal (a few digits after the point) sitting exactly on a rounding edge, so last-bit noise can't flip it.
+ */
+export function mapDigest(data: unknown): string {
+  return fnv1a(JSON.stringify(data, (_key, v: unknown) => (typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 4096) / 4096 : v)));
+}
+
 /** Digest of the layout and every kit prefab and building: two builds agree on the map iff their hashes match. */
-export const MAP_HASH = `${MAP_ID}#${fnv1a(JSON.stringify([GRAAO_MAP, KIT_PREFABS, KIT_BUILDINGS]))}`;
+export const MAP_HASH = `${MAP_ID}#${mapDigest([GRAAO_MAP, KIT_PREFABS, KIT_BUILDINGS])}`;

@@ -209,6 +209,9 @@ export function scatterOnGround(physics: GamePhysics, base: Vec3, forward: Vec3,
   const radius = opts.radius ?? LOOT_RULES.scatterRadius;
   const step = (opts.ring ? 360 / Math.max(1, n) : (opts.stepDeg ?? LOOT_RULES.scatterStepDeg)) * DEG;
   const out: Vec3[] = [];
+  // Under a roof, a rock overhang or a kiosk, look for the ground from just under it (never onto its top).
+  const ceiling = physics.castRay(add(base, up, 0.2), up, 1.6, GROUPS_WORLD_QUERY);
+  const from = ceiling ? Math.max(0.5, ceiling.toi + 0.05) : 1.6;
   for (let k = 0; k < n; k++) {
     const a0 = opts.ring ? k * step : (k - (n - 1) / 2) * step;
     const r = opts.ring && n > 6 ? radius + (k % 2) * 0.55 : radius;
@@ -218,9 +221,12 @@ export function scatterOnGround(physics: GamePhysics, base: Vec3, forward: Vec3,
       const d = v3rotateAxis(f, up, a0 + da);
       const t = add(base, d, rr);
       const tu = v3normalize(t);
-      const hit = physics.castRayNormal(add(t, tu, 1.6), neg(tu), 4, GROUPS_WORLD_QUERY);
+      const hit = physics.castRayNormal(add(t, tu, from), neg(tu), 2.4 + from, GROUPS_WORLD_QUERY);
       if (!hit || v3angle(hit.normal, tu) > 40 * DEG) continue;
-      const p = add(add(t, tu, 1.6), neg(tu), hit.toi);
+      const p = add(add(t, tu, from), neg(tu), hit.toi);
+      // Near the chest's own level (not on top of the rock or the counter beside it, not down a ledge).
+      const rise = v3dot({ x: p.x - base.x, y: p.y - base.y, z: p.z - base.z }, up);
+      if (rise > 0.9 || rise < -1.1) continue;
       // Not inside a crowd of props: a small ball just above the resting point must be free.
       if (physics.ballOverlaps(add(p, tu, 0.35), 0.18, GROUPS_PROP_QUERY)) continue;
       placed = add(p, tu, 0.04);

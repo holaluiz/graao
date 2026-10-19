@@ -32,6 +32,12 @@ export const C2S = {
   ROOM_SETTINGS: 16,
   /** PREPARATION: client finished loading the world and the frozen roster. */
   PREPARED: 17,
+  /** A punch (empty hands): the server resolves reach, direction, walls and the interval. */
+  MELEE: 18,
+  /** Spend one attribute point (in-match progression). */
+  ALLOCATE_STAT: 19,
+  /** Open or close a door (F, when no chest or item is in reach): `WorldUseMsg`. (30+: world interactivity.) */
+  WORLD_USE: 30,
 } as const;
 export type C2SType = (typeof C2S)[keyof typeof C2S];
 
@@ -60,12 +66,18 @@ export const S2C = {
   ABILITY_STATE: 114,
   /** Authorized reconnaissance, sent only to its caster. */
   ABILITY_REVEAL: 115,
+  /** Private: XP this player just earned (and the levels it gave). The running totals also ride in SELF. */
+  PROGRESS: 116,
+  /** Doors and crates of the room (on join, reconnect and every new match): `WorldStateMsg`. (130+: world.) */
+  WORLD_STATE: 130,
 } as const;
 export type S2CType = (typeof S2C)[keyof typeof S2C];
 
 /** Reasons the server refuses a join. Sent as the ServerError message prefix. */
 export const JoinError = {
   VERSION_MISMATCH: 'VERSION_MISMATCH',
+  /** Same protocol, different authoritative map (layout, prefabs or colliders). */
+  MAP_MISMATCH: 'MAP_MISMATCH',
   ROOM_FULL: 'ROOM_FULL',
   IN_PROGRESS: 'IN_PROGRESS',
   BAD_APPEARANCE: 'BAD_APPEARANCE',
@@ -108,6 +120,14 @@ export const MovementState = {
   FALL: 5,
   /** In deep water (moving or treading): also how a snapshot tells the client that the character swims. */
   SWIM: 6,
+  /**
+   * Vertical traversal (game-data TraversalMode, docs/gameplay/TRAVERSAL_STATES.md): hanging from a ledge, pulling up
+   * over it, climbing a wall, gliding. They are also how a snapshot tells the owner's prediction which mode to rebuild.
+   */
+  LEDGE_HANG: 7,
+  MANTLE: 8,
+  CLIMB: 9,
+  GLIDE: 10,
 } as const;
 export type MovementState = (typeof MovementState)[keyof typeof MovementState];
 
@@ -151,6 +171,12 @@ export interface JoinOptions {
   loadout?: string[];
   /** Graao Host rooms: the session's owner key (proves the room's host; never a Supabase token). */
   hostKey?: string;
+  /**
+   * The client's `MAP_HASH` (game-data): map id, versions and a digest of the layout and prefabs. A server on another
+   * map refuses the join (MAP_MISMATCH): client prediction and the server would collide against different geometry.
+   * Absent from clients older than the check; the protocol version still screens those.
+   */
+  map?: string;
 }
 
 /** First message after joining. Carries the server clock and rates so the client can sync. */
@@ -163,6 +189,8 @@ export interface WelcomeMsg {
   server: string;
   tickHz: number;
   snapshotHz: number;
+  /** The server's `MAP_HASH` (absent from servers older than the map check). */
+  map?: string;
 }
 
 // ------------------------------------------------------------------------------------------------ input
@@ -188,17 +216,47 @@ export const AIM_SCALE = 1000;
 
 /**
  * Per-player snapshot tuple (broadcast once per SNAPSHOT_HZ to everyone; each client reads its own ack from it):
- * `[index, px, py, pz, vx, vy, vz, fx, fy, fz, aimPitch, moveState, actionState, flags, ackSeq, health, shield, mana, weapon, simDt]`
+ * `[index, px, py, pz, vx, vy, vz, fx, fy, fz, aimPitch, moveState, actionState, flags, ackSeq, health, shield, mana, weapon, simDt, stamina, trav, ledge]`
  * - p: position in millimetres (ints).  v: velocity in cm/s (ints).
  * - f: facing tangent × 127.  aimPitch: radians × 100 relative to the local horizon.
  * - flags: bit 0 grounded, bit 1 alive, bit 2 aiming, bit 3 aboard the UFO, bit 4 diving, bit 5 double jump used.
  * - simDt: ms between the snapshot time and the moment this player's simulated state is valid (≤ 0). Each player is
  *   simulated in whole 1/60 s commands, so remotes interpolate on this per-player clock to move perfectly evenly.
+ * - stamina: traversal stamina × STAMINA_SCALE (int).  trav: traversal timers in whole simulation steps, packed by
+ *   game-core `packTraversal` (steps in the current mode, glide steps of this flight, grab cooldown). Both rebuild the
+ *   owner's prediction exactly; others only read moveState.  ledge: radius (mm from the planet centre) of the ledge
+ *   top being hung from or pulled up over, 0 when none.
  */
 export type PlayerSnap = [
   number, number, number, number, number, number, number, number, number, number,
   number, number, number, number, number, number, number, number, number, number,
+  number, number, number,
 ];
+
+export const STAMINA_SCALE = 100;
+
+/** The snapshot's `weapon` field (and SWITCH_WEAPON `w`) for empty hands: fighting with fists, weapons put away. */
+export const FISTS_SLOT = 2;
+
+/** Creep AI states (server-owned; clients pick the creature's pose from them). */
+export const CreepStateCode = {
+  IDLE: 0,
+  PATROL: 1,
+  ALERT: 2,
+  CHASE: 3,
+  ATTACK: 4,
+  RETURN: 5,
+  DEAD: 6,
+} as const;
+export type CreepStateCode = (typeof CreepStateCode)[keyof typeof CreepStateCode];
+
+/**
+ * One creep in a snapshot: `[id, type, px, py, pz, fx, fy, fz, state, health, target]` — CREEP_TYPE_IDS index,
+ * feet position (mm), facing tangent x 127, CreepStateCode, Health left, the player it is after (-1: nobody).
+ */
+export type CreepSnap = [number, number, number, number, number, number, number, number, number, number, number];
+/** Hit targets: a creep's id is offset by this in hit lists (shot `t`, projectile `t`) so it never reads as a player. */
+export const CREEP_TARGET_BASE = 1000;
 
 export const SnapFlag = {
   GROUNDED: 1 << 0,
@@ -225,6 +283,8 @@ export interface SnapshotMsg {
   /** Server tick number. */
   k: number;
   p: PlayerSnap[];
+  /** Every other snapshot (10 Hz): the creeps that are alive or still showing their defeat. */
+  c?: CreepSnap[];
 }
 
 // ------------------------------------------------------------------------------------------------ room state
@@ -258,6 +318,8 @@ export interface PlayerPublic {
   wins: number;
   /** RESULTS only: asked to go back to the lobby. */
   back: boolean;
+  /** In-match level (1 outside a match). */
+  level?: number;
 }
 
 /**
@@ -463,8 +525,42 @@ export interface FireMsg {
 }
 export const DIR_SCALE = 10000;
 
+/** SWITCH_WEAPON: slot 0 (E), 1 (Q) or FISTS_SLOT (put the weapons away and fight with fists). */
 export interface SwitchWeaponMsg {
   w: number;
+}
+
+/**
+ * MELEE intent: `{ s, o, d }` — punch sequence (per client, increasing), camera origin in mm (clamped near the
+ * attacker) and aim direction x 10000. Only with empty hands; the server picks the target, if any.
+ */
+export interface MeleeMsg {
+  s: number;
+  o: [number, number, number];
+  d: [number, number, number];
+}
+
+/** ALLOCATE_STAT intent: `{ s, k }` — request sequence and the attribute (STAT_IDS index). */
+export interface AllocateStatMsg {
+  s: number;
+  k: number;
+}
+
+/** Private XP gain (S2C.PROGRESS): what was earned, from what, and where it leaves the player. */
+export interface ProgressMsg {
+  /** XP just earned. */
+  xp: number;
+  /** CREEP_TYPE_IDS index of the creep it came from. */
+  creep: number;
+  /** Final blow on it. */
+  last: boolean;
+  /** Levels gained by this XP (0 = none). */
+  up: number;
+  level: number;
+  /** XP into the current level and what the next one needs (0 at the cap). */
+  cur: number;
+  next: number;
+  points: number;
 }
 
 /** Private per-player status (sent only to that player when it changes). */
@@ -508,7 +604,18 @@ export interface SelfStatusMsg {
   /** Authoritative movement multipliers ×100. */
   speed?: number;
   airControl?: number;
+  sprintSpeed?: number;
   abilityMovement?: { mode: 'grapple' | 'glide' | 'flight'; remaining: number; speed: number; gravityFactor: number; airControl: number; lift: number; anchor?: { x: number; y: number; z: number } } | null;
+  /** Empty hands: no weapon in hand (none carried, or put away), the attack button punches. */
+  fists?: boolean;
+  /** Last MELEE sequence the server handled. */
+  meleeSeq?: number;
+  /** In-match progression: `[level, xp into this level, xp the next level needs (0 at the cap), unspent points]`. */
+  prog?: [number, number, number, number];
+  /** Points spent per attribute (STAT_IDS order) and the maxima they give. */
+  stats?: number[];
+  maxHealth?: number;
+  maxMana?: number;
 }
 
 // ------------------------------------------------------------------------------------------------ loot
@@ -736,6 +843,7 @@ export interface DraftStateMsg {
   reveal: { index: number; a: string; auto: boolean; contested: boolean }[];
 }
 
+/** A dash FX with v=0 ends a sustained movement visual after an authoritative motor stop. */
 export type StatusFx = 'shield' | 'heal' | 'slow' | 'knock' | 'dash';
 
 /** Public persistent gameplay geometry. Position mm; full size/radius cm; tangent direction ×DIR_SCALE. */
@@ -764,10 +872,10 @@ export type AbilityRevealMsg = AbilityRevealBase & (
 );
 
 /**
- * What hurt a player when nobody did (`by` = the target itself): the Tormenta. Self damage without a cause is
- * drowning.
+ * What hurt a player when nobody did (`by` = the target itself): the Tormenta, or a creep (`cr` = the creep's id).
+ * Self damage without a cause is drowning. `m` marks a punch.
  */
-export type DamageCause = 'tormenta';
+export type DamageCause = 'tormenta' | 'creep';
 
 export type GameEvent =
   | { e: 'abilityEntity'; entity: AbilityEntityView }
@@ -775,7 +883,7 @@ export type GameEvent =
   /** A shot happened with weapon `id` from slot `w`. `to` are impact points (mm); `t` is the target index or -1 for world. */
   | { e: 'shot'; by: number; w: number; id: string; s: number; from: [number, number, number]; to: [number, number, number][]; t: number[] }
   /** Damage dealt by `by` to `target`; kinds is the hit taxonomy. */
-  | { e: 'dmg'; by: number; target: number; amount: number; kinds: HitKind[]; health: number; shield: number; a?: string; c?: DamageCause }
+  | { e: 'dmg'; by: number; target: number; amount: number; kinds: HitKind[]; health: number; shield: number; a?: string; c?: DamageCause; cr?: number; m?: 1 }
   /** An ability was accepted: everyone plays the cast; `until` is when the wind-up ends (server time). */
   | { e: 'cast'; by: number; a: string; k: number; s: number; until: number; d?: [number, number, number]; p?: [number, number, number] }
   /** A server projectile was launched (`v` in cm/s; gravity and radius come from the ability definition). */
@@ -786,7 +894,7 @@ export type GameEvent =
   | { e: 'area'; by: number; a: string; at: [number, number, number]; r: number; n: number }
   /** A status effect landed on `target` (shield/heal amount, slow/dash duration ms, knock speed). */
   | { e: 'fx'; by: number; target: number; k: StatusFx; v: number }
-  | { e: 'elim'; by: number; target: number; c?: DamageCause }
+  | { e: 'elim'; by: number; target: number; c?: DamageCause; cr?: number }
   | { e: 'respawn'; target: number }
   | { e: 'reload'; by: number; w: number }
   /**
@@ -803,7 +911,46 @@ export type GameEvent =
   /** `by` took from item `id`; `left` is what stays on the ground (0 = gone). */
   | { e: 'take'; id: number; by: number; left: number }
   /** `by` started (0), finished (1) or stopped (2) using consumable `c` (CONSUMABLE_ORDER index). */
-  | { e: 'use'; by: number; c: number; ph: 0 | 1 | 2 };
+  | { e: 'use'; by: number; c: number; ph: 0 | 1 | 2 }
+  /**
+   * `by` punched (sequence `s`, hand `h`: 0 left, 1 right). `r`: 0 nothing in reach, 1 a player (`t` = index),
+   * 2 a creep (`t` = creep id), 3 stopped by a wall. `at` is the contact point (or the end of the reach) in mm.
+   */
+  | { e: 'melee'; by: number; s: number; h: number; r: 0 | 1 | 2 | 3; t: number; at: [number, number, number] }
+  /** A creep appeared (CREEP_TYPE_IDS index `ty`). */
+  | { e: 'creepSpawn'; id: number; ty: number; at: [number, number, number] }
+  /** Creep `id` winds up attack `k` (ph 0: the telegraph; `until` is when the blow lands) or delivers it (ph 1). */
+  | { e: 'creepAtk'; id: number; k: number; ph: 0 | 1; t: number; until: number }
+  /** A player (or an ability, `a`) hurt creep `id`; `health` is what it has left; `m` marks a punch. */
+  | { e: 'creepHit'; id: number; by: number; amount: number; health: number; a?: string; m?: 1 }
+  /** Creep `id` was defeated by `by` (-1: it dissolved in the Tormenta or was cleared; no XP). */
+  | { e: 'creepDie'; id: number; by: number }
+  /** `target` reached `level` (everyone sees the level-up). */
+  | { e: 'lvl'; target: number; level: number }
+  /** Door `id` (layout.doors index) was opened (1) or closed (0) by `by` (-1: the room). */
+  | { e: 'door'; id: number; open: 0 | 1; by: number }
+  /** Crate `id` (layout.crates index) took a hit from `by`; `hp` is what it has left (0: broken). */
+  | { e: 'crate'; id: number; hp: number; by: number }
+  /** Bell `id` (layout.bells index) rang (1: its event winds blow) or fell silent (0, `by` −1); `by` who rang it. */
+  | { e: 'bell'; id: number; on: 0 | 1; by: number };
+
+/** WORLD_USE intent: request sequence and the door (layout.doors index), or the bell (layout.bells index) when k = 1. */
+export interface WorldUseMsg {
+  s: number;
+  id: number;
+  /** What `id` names: 0 (or absent) a door, 1 a bell. */
+  k?: 0 | 1;
+}
+
+/**
+ * WORLD_STATE: the doors that are open, every crate that is not whole (`[id, hp]`, hp 0 = broken) and the bells
+ * ringing now (`[id, ms left]`; absent from servers before protocol 11).
+ */
+export interface WorldStateMsg {
+  o: number[];
+  c: [number, number][];
+  b?: [number, number][];
+}
 
 export interface EventsMsg {
   t: number;

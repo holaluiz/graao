@@ -3,8 +3,8 @@ import { DEFAULT_BINDINGS, normalizeBindings, type KeyBindings, type RebindableA
 /** Remappable desktop controls, fixed mouse/navigation shortcuts, and release on focus loss. */
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'fire' | 'aim'
-  | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard'
-  | 'interact' | 'item1' | 'item2' | 'item3' | 'spectatePrevious' | 'spectateNext';
+  | 'weapon1' | 'weapon2' | 'holster' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard'
+  | 'interact' | 'item1' | 'item2' | 'item3' | 'stats' | 'stat5' | 'spectatePrevious' | 'spectateNext';
 
 const ALIASES: Record<string, RebindableAction> = {
   ArrowUp: 'forward',
@@ -65,7 +65,7 @@ export class Input {
         e.preventDefault();
       }
       // A remapped Space still must not scroll/press a focused control; jumping also works without pointer lock.
-      if (a === 'debug' || a === 'jump' || e.code === 'Space' || (this.locked && ['weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate', 'interact', 'item1', 'item2', 'item3'].includes(a))) e.preventDefault();
+      if (a === 'debug' || a === 'jump' || e.code === 'Space' || (this.locked && ['weapon1', 'weapon2', 'holster', 'ability1', 'ability2', 'ability3', 'ultimate', 'interact', 'item1', 'item2', 'item3', 'stats', 'stat5'].includes(a))) e.preventDefault();
       this.pressCode(e.code, a, e.repeat);
     });
     on(window, 'keyup', (e: KeyboardEvent) => {
@@ -119,6 +119,8 @@ export class Input {
       if (!this.keys.has(code) && this.currentBindings[action] === DEFAULT_BINDINGS[action]) this.keys.set(code, action);
     }
     for (const [code, action] of Object.entries(FIXED_KEYS)) this.keys.set(code, action);
+    // The attribute panel's fifth row (Energia): Digit5, unless a remapping already owns that key.
+    if (!this.keys.has('Digit5')) this.keys.set('Digit5', 'stat5');
   }
 
   private pressCode(code: string, action: Action, repeat: boolean): void {

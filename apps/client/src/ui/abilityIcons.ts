@@ -1,8 +1,11 @@
 /** Ability glyphs shared by the HUD slots and the Ability Draft cards (SVG, viewBox −16..16). */
 import type { AbilityIcon } from '@graao/game-data';
 
-/** One glyph per ability (viewBox −16..16): every ability reads by shape, color is a second cue. */
-export const ABILITY_ICONS: Record<AbilityIcon, string> = {
+/**
+ * One glyph per ability (viewBox −16..16): every ability reads by shape, color is a second cue. Glyphs of abilities
+ * not in the game data yet (habilidades v2) may wait here.
+ */
+export const ABILITY_ICONS: Record<AbilityIcon, string> & Record<string, string> = {
   orb: '<circle class="f" r="6.5"/><path d="M0 -14 V-10 M0 10 V14 M-14 0 H-10 M10 0 H14 M-9.9 -9.9 L-7.1 -7.1 M9.9 9.9 L7.1 7.1 M9.9 -9.9 L7.1 -7.1 M-9.9 9.9 L-7.1 7.1"/>',
   wind: '<path d="M-13 -5 H5 A4 4 0 1 0 1 -9 M-13 1 H9 A4 4 0 1 1 5 5 M-10 7 H-1"/>',
   pollen: '<circle class="f" r="3.2"/><circle class="f" cx="0" cy="-9" r="2.4"/><circle class="f" cx="8" cy="-4.5" r="2.4"/><circle class="f" cx="8" cy="5" r="2.4"/><circle class="f" cx="0" cy="9.5" r="2.4"/><circle class="f" cx="-8" cy="5" r="2.4"/><circle class="f" cx="-8" cy="-4.5" r="2.4"/>',
