@@ -148,8 +148,11 @@ export class LocalPlayer {
   reconcile(server: CharacterState, ackSeq: number): void {
     let acked: InputCmd | undefined;
     while (this.pending.length && seqLE(this.pending[0]![0], ackSeq)) acked = this.pending.shift();
-    const before = this.state.pos;
-    const bx = before.x, by = before.y, bz = before.z;
+    // What is on screen now (without the correction offset), at the current interpolation alpha.
+    const alpha = this.acc / SIM_DT;
+    const bx = lerp(this.prev.pos.x, this.state.pos.x, alpha);
+    const by = lerp(this.prev.pos.y, this.state.pos.y, alpha);
+    const bz = lerp(this.prev.pos.z, this.state.pos.z, alpha);
     // The snapshot does not carry input edge state: rebuild it from the last acknowledged command.
     const s = cloneCharacterState(server);
     s.jumpHeld = acked ? (acked[7] & InputButton.JUMP) !== 0 : this.state.jumpHeld;
@@ -163,20 +166,30 @@ export class LocalPlayer {
         s.dashSteps = total - done;
       } else if (done > total + 240) this.dash = null;
     }
-    for (const cmd of this.pending) this.stepCmd(s, cmd);
-    const err = Math.hypot(s.pos.x - bx, s.pos.y - by, s.pos.z - bz);
+    // Replay keeps the step before the last one as `prev`, like `update`: rendering stays interpolated between the same
+    // two steps, so a correct prediction shows no jump at all (resetting `prev` jerked it forward on every snapshot).
+    let prev = s;
+    for (let i = 0; i < this.pending.length; i++) {
+      if (i === this.pending.length - 1) prev = cloneCharacterState(s);
+      this.stepCmd(s, this.pending[i]!);
+    }
+    if (prev === s) prev = cloneCharacterState(s);
+    const nx = lerp(prev.pos.x, s.pos.x, alpha);
+    const ny = lerp(prev.pos.y, s.pos.y, alpha);
+    const nz = lerp(prev.pos.z, s.pos.z, alpha);
+    const err = Math.hypot(nx - bx, ny - by, nz - bz);
     this.stats.replayed = this.pending.length;
     this.stats.lastCorrection = err;
     if (err > 4) {
       // Teleport-sized: snap.
       this.correction.set(0, 0, 0);
     } else if (err > 0.002) {
-      this.correction.x += bx - s.pos.x;
-      this.correction.y += by - s.pos.y;
-      this.correction.z += bz - s.pos.z;
+      this.correction.x += bx - nx;
+      this.correction.y += by - ny;
+      this.correction.z += bz - nz;
     }
     this.state = s;
-    this.prev = cloneCharacterState(s);
+    this.prev = prev;
   }
 
   /** Interpolated, corrected render position. */
@@ -208,6 +221,8 @@ export class LocalPlayer {
     this.body.dispose();
   }
 }
+
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 /** seq a ≤ b with 31-bit wraparound. */
 const seqLE = (a: number, b: number) => ((b - a) & 0x7fffffff) < 0x40000000;

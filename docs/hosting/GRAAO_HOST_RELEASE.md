@@ -4,7 +4,7 @@
 
 | Versão | Onde | Regra |
 |---|---|---|
-| `PROTOCOL_VERSION` (hoje 9) | `packages/shared/src/version.ts` | Site e servidor do app precisam ser iguais. O site na Vercel atualiza sozinho; o app não. **Todo aumento de protocolo exige uma nova versão do Graao Host publicada antes (ou junto) do deploy do site.** |
+| `PROTOCOL_VERSION` (hoje 10) | `packages/shared/src/version.ts` | Site e servidor do app precisam ser iguais. O site na Vercel atualiza sozinho; o app não. **Todo aumento de protocolo exige uma nova versão do Graao Host publicada antes (ou junto) do deploy do site.** Aumentar também quando o **mundo** muda (terreno, vila, árvores sólidas, colisões, `MOVEMENT`): com o mesmo protocolo e mundos diferentes o site entra na sala e o jogador é "empurrado" o tempo todo (aconteceu com o PR #8 e o app 0.1.0). |
 | Versão do app | `apps/host/package.json` | SemVer; exibida no app e no Painel do Windows |
 | `HOST_API_VERSION` (1) | `packages/shared/src/hosting.ts` | Contrato app ↔ site ↔ funções da central |
 | `min_app_version`, `latest_app_version`, `download_url` | `private.host_config` | O app consulta ao abrir e a cada 6 h: abaixo do mínimo → não hospeda e mostra "Baixar atualização"; abaixo do mais recente → aviso no rodapé/configurações |
@@ -101,7 +101,8 @@ Passo a passo:
    outra aba. Na prévia, testar pela própria aba do site: o botão "Abrir no site" do app abre sempre graao.vercel.app.
 4. Produção: PR `mvp-online-1v1` → `main` e merge. Vai para o ar o que estiver **commitado** no branch (trabalho não
    commitado de outras frentes fica de fora). Conferir antes que `PROTOCOL_VERSION` continua igual ao do app publicado
-   (hoje 9 nos dois); se mudou, publicar um Graao Host novo primeiro.
+   (10 a partir do app 0.1.1) e que o mundo não mudou desde o último app; se mudou, publicar um Graao Host novo
+   primeiro.
 5. Conferir produção — o bundle precisa citar a Supabase e o botão (vazio = build antigo; comando testado em
    2026-10-18 só contra o build antigo):
 

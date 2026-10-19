@@ -25,8 +25,14 @@ export const MAX_SOLO_BOTS = MAX_PLAYERS - 1;
  */
 export const RECONNECT_SECONDS = 20;
 
-/** Inputs a client may queue ahead of the server (anti speed-hack + jitter buffer). */
-export const MAX_INPUT_BACKLOG = 12;
+/**
+ * Inputs a client may queue ahead of the server, and the movement time it may bank while none arrive (anti speed-hack:
+ * never faster than real time over this window). One second at SIM_HZ rides out a Wi-Fi or tunnel stall without
+ * dropping a command: a dropped one moved the client's prediction but never the server, so it came back as a pull.
+ */
+export const MAX_INPUT_BACKLOG = SIM_HZ;
+/** Commands one PLAYER_INPUT message may carry (the client sends at most 10). */
+export const MAX_INPUT_PER_MESSAGE = 12;
 /** Commands the server keeps queued per player so it can consume input at a steady rate (smooth remotes). */
 export const INPUT_JITTER_BUFFER = 2;
 /** Colyseus per-client message rate limit. */

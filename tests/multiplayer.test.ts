@@ -273,6 +273,54 @@ describe('double jump through the authoritative server', () => {
   }, 15000);
 });
 
+describe('input stream through a network stall', () => {
+  it('simulates every command of a burst that arrives after a 450 ms stall (the client never gets pulled back)', async () => {
+    const a = await new Client(url).create(ROOM_NAME, opts('A'));
+    const ia = (await waitFor<WelcomeMsg>(a, S2C.WELCOME)).index;
+    const isA = (p: number[]) => p[0] === ia;
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let seq = 1;
+    const run = (n: number): InputCmd[] => Array.from({ length: n }, () => [seq++, WISH_SCALE, 0, 0, 0, 0, AIM_SCALE, 0] as InputCmd);
+    // Like the browser client: a real-time accumulator makes exactly 60 commands per second, sent every ~33 ms; `hold`
+    // keeps the messages back (a Wi-Fi or tunnel stall) and delivers them together at the end.
+    const stream = async (ms: number, hold = false) => {
+      const held: InputCmd[][] = [];
+      const t0 = Date.now();
+      let sent = 0;
+      while (Date.now() - t0 < ms) {
+        const due = Math.floor(((Date.now() - t0) / 1000) * 60) - sent;
+        if (due > 0) {
+          const msg = run(Math.min(due, 10));
+          sent += msg.length;
+          if (hold) held.push(msg);
+          else a.send(C2S.PLAYER_INPUT, { i: msg });
+        }
+        await wait(33);
+      }
+      for (const msg of held) a.send(C2S.PLAYER_INPUT, { i: msg });
+    };
+    // The player's clock advances one SIM step per command the server simulates; the ack is the last one.
+    const clock = async () => {
+      const m = await waitFor<SnapshotMsg>(a, S2C.SNAPSHOT, (s) => s.p.some(isA));
+      const p = m.p.find(isA)!;
+      return { ack: p[14]!, ms: m.t + p[19]! };
+    };
+    // No idle gap near a second: the server resyncs a player's clock after 1 s without commands.
+    await stream(600);
+    const before = await clock();
+    await stream(450, true);
+    await stream(300);
+    await wait(150);
+    const after = await clock();
+    await a.leave(true);
+    const acked = after.ack - before.ack;
+    const simulated = Math.round((after.ms - before.ms) / (1000 / 60));
+    expect(acked).toBeGreaterThan(30);
+    // Every acknowledged command was simulated: a dropped one moves the client but never the server.
+    expect(simulated).toBe(acked);
+  }, 15000);
+});
+
 describe('combat through the authoritative server (gate 3)', () => {
   let a: Room;
   let b: Room;

@@ -1,7 +1,7 @@
 {
   "name": "@graao/host",
   "productName": "Graao Host",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Graao Host: hospede partidas do graao no seu próprio PC.",
   "author": "graao",

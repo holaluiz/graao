@@ -1,5 +1,5 @@
 /** Runtime validation of untrusted client messages. Every handler on the server goes through one of these. */
-import { DISPLAY_NAME_MAX, MAX_INPUT_BACKLOG, MAX_PLAYERS, MAX_SOLO_BOTS, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from './constants';
+import { DISPLAY_NAME_MAX, MAX_INPUT_PER_MESSAGE, MAX_PLAYERS, MAX_SOLO_BOTS, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from './constants';
 import { isAppearanceShape } from './appearance';
 import { AIM_SCALE, MatchPhase, WISH_SCALE, type InputCmd, type InputMsg, type PingMsg, type AppearanceUpdateMsg, type RoomListing } from './protocol';
 import { PROTOCOL_VERSION } from './version';
@@ -32,7 +32,7 @@ export function validateInputCmd(c: unknown): InputCmd | null {
 export function validateInputMsg(m: unknown): InputMsg | null {
   if (!m || typeof m !== 'object') return null;
   const i = (m as { i?: unknown }).i;
-  if (!Array.isArray(i) || i.length === 0 || i.length > MAX_INPUT_BACKLOG) return null;
+  if (!Array.isArray(i) || i.length === 0 || i.length > MAX_INPUT_PER_MESSAGE) return null;
   const out: InputCmd[] = [];
   for (const c of i) {
     const v = validateInputCmd(c);

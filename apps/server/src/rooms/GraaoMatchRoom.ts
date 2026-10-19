@@ -1623,10 +1623,12 @@ export class GraaoMatchRoom extends Room {
       }
       // The per-player clock only resyncs on gross drift (stalls); clients adapt to its steady offset.
       if (Math.abs(wall - p.simTime) > 1000) p.simTime = wall - 60;
-      // A client that stops sending (tab hidden) still falls; it is corrected when it resumes.
+      // A client that stops sending (tab hidden) still falls; it is corrected when it resumes. Only after the bankable
+      // window: a shorter silence is a network stall whose commands are still on their way, and falling ahead of them
+      // would pull the player back when they arrive.
       if (stepped === 0) {
         p.starvedFor += dt;
-        if (p.starvedFor > 0.3 && !p.state.grounded) {
+        if (p.starvedFor > MAX_INPUT_BACKLOG / SIM_HZ && !p.state.grounded) {
           p.input.wish.x = p.input.wish.y = p.input.wish.z = 0;
           p.input.buttons = 0;
           for (let i = 0; i < Math.round(dt * SIM_HZ); i++) this.motor.step(p.body, p.state, p.input, SIM_DT);
