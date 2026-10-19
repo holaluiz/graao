@@ -14,7 +14,7 @@ import { applyStatus, cleanseStatusEffects, newAbilityRuntime, statusModifiers, 
 import { passiveModifiers } from './passives';
 import { Group, groups, GROUPS_WORLD_QUERY, type AbilityBarrierFrame, type GamePhysics } from './physics';
 import { transportTangent } from './sphere';
-import { abilityCloudVolume } from './abilityVolumes';
+import { abilityBeaconVolume, abilityCloudVolume } from './abilityVolumes';
 import { releaseTraversal } from './traversal';
 import {
   applyHeal,
@@ -201,7 +201,7 @@ export class GRAAbilitySystem {
     let closest: { toi: number; handle: number } | null = null;
     for (const entity of this.persistent.values()) {
       if (entity.effect?.kind !== 'cloud' && entity.view.kind !== 'beacon') continue;
-      const volume = entity.effect?.kind === 'cloud' ? abilityCloudVolume(entity.center, entity.effect.radius) : { center: v3addScaled(entity.center, v3normalize(entity.center), 1.2), radius: 0.5 };
+      const volume = entity.effect?.kind === 'cloud' ? abilityCloudVolume(entity.center, entity.effect.radius) : abilityBeaconVolume(entity.center);
       const { center, radius } = volume;
       const toi = distance(origin, center) <= radius ? 0 : raySphere(origin, direction, center, radius);
       if (toi < 0 || toi > maxDistance || (closest && toi >= closest.toi)) continue;

@@ -912,7 +912,7 @@ export class AbilityDirector {
       const left = this.ctl.cooldownLeft(i, now);
       const state: AbilitySlotView['state'] = !alive ? 'disabled' : def.kind === 'passive' ? 'passive' : !fight ? 'disabled'
         : now < this.ctl.silencedEnd && !def.tags.includes('cleanse') ? 'silenced'
-          : now < this.ctl.blockedEnd && !def.tags.includes('cleanse') ? 'blocked'
+          : now < this.ctl.blockedEnd ? 'blocked'
             : this.ctl.targetState(i, now) ?? (casting && i === this.ctl.castSlot ? 'casting' : left > 0 ? 'cooldown' : mana < def.manaCost ? 'nomana' : 'ready');
       return { key: keyLabel(this.app.input.keyFor(ACTIONS[i]!)), name: def.name, description: def.blurb, kind: def.kind, active: alive && this.ctl.passiveActive[i], icon: def.presentation.icon, color: def.presentation.color, cost: def.manaCost, ultimate: i === ULTIMATE_SLOT, cd: this.ctl.cooldownFrac(i, now), secondsLeft: left, state };
     });

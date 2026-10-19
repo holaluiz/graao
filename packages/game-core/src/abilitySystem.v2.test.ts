@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ABILITIES, ABILITY_IDS, ABILITY_RULES, type AbilityId, type Loadout } from '@graao/game-data';
-import { AbilityReject, type AbilityRevealMsg, type GameEvent, type Vec3 } from '@graao/shared';
+import { AbilityReject, v3addScaled, v3normalize, type AbilityRevealMsg, type GameEvent, type Vec3 } from '@graao/shared';
 import { GRAAbilitySystem, type AbilityActor, type AbilityHost } from './abilitySystem';
 import { createCharacterState } from './character';
 import { applyAbilityDamage, type RayCaster } from './abilities';
@@ -456,6 +456,29 @@ describe('authoritative information and spherical waves', () => {
     const before = h.reveals.length;
     h.tick(4050, 3000);
     expect(h.reveals.length).toBe(before);
+  });
+
+  it('lets a shot aimed at the visible beacon lamp damage and destroy it, but misses above it', () => {
+    const a = actor(0, 0, ['wind_step', 'sap_snare', 'leaf_shell', 'firefly_beacon']);
+    const h = harness([a]);
+    expect(h.cast(a, 'firefly_beacon', 1000, ground(5))).toBe(AbilityReject.OK);
+    h.tick(1000, 500);
+    const beacon = h.system.entities.find((entity) => entity.kind === 'beacon')!;
+    const at = { x: beacon.at[0] / 1000, y: beacon.at[1] / 1000, z: beacon.at[2] / 1000 };
+    const up = v3normalize(at);
+    const lamp = v3addScaled(at, up, 2.6);
+    const direction = { x: up.z, y: 0, z: -up.x };
+    const from = v3addScaled(lamp, direction, -4);
+    expect(h.system.occludeRay(v3addScaled(from, up, .51), direction, 8)).toBeNull();
+    const hit = h.system.occludeRay(from, direction, 8)!;
+    expect(hit).not.toBeNull();
+    // The rendered anchor is quantized to millimetres; the authoritative centre retains full precision.
+    expect(hit.toi).toBeCloseTo(3.5, 3);
+    h.system.damageBarrier(hit.handle, 30);
+    expect(h.system.entities.find((entity) => entity.id === beacon.id)?.health).toBe(30);
+    h.system.damageBarrier(hit.handle, 30);
+    expect(h.system.entities.some((entity) => entity.id === beacon.id)).toBe(false);
+    expect(h.system.occludeRay(from, direction, 8)).toBeNull();
   });
 
   it.each(['dawn_lance', 'ink_tide'] as const)('%s follows the curved surface and pushes each enemy once without damage', (id) => {

@@ -1,6 +1,6 @@
 /** Persistent, authoritative spell geometry and private reconnaissance. No gameplay is inferred from particles. */
 import * as THREE from 'three';
-import { abilityCloudVolume, castOrigin, createAbilityBarrier, type AbilityCloudVolume, type GamePhysics } from '@graao/game-core';
+import { abilityBeaconVolume, abilityCloudVolume, castOrigin, createAbilityBarrier, type AbilityCloudVolume, type GamePhysics } from '@graao/game-core';
 import { ABILITIES, isAbilityId, type AbilityDefinition } from '@graao/game-data';
 import { DIR_SCALE, POS_SCALE, type AbilityEntityView, type AbilityRevealMsg, type AbilityStateMsg } from '@graao/shared';
 import '../../styles/ability-world.css';
@@ -32,7 +32,7 @@ export function abilityEntityFrame(view: AbilityEntityView): { center: THREE.Vec
 interface EntityObject { view: AbilityEntityView; root: THREE.Group; signature: string; collider?: { dispose(): void }; cloud?: AbilityCloudVolume }
 interface MarkerObject { root: THREE.Object3D; until: number }
 interface BearingObject { direction: THREE.Vector3; el: HTMLElement; until: number }
-interface AttachmentObject { root: THREE.Group; character: THREE.Object3D; until: number; rope?: THREE.Line; anchor?: THREE.Vector3 }
+interface AttachmentObject { by: number; root: THREE.Group; character: THREE.Object3D; until: number; rope?: THREE.Line; anchor?: THREE.Vector3; spin?: THREE.Object3D }
 
 export class AbilityWorldPresentation {
   readonly root = new THREE.Group();
@@ -41,7 +41,7 @@ export class AbilityWorldPresentation {
   private readonly markers = new Map<string, MarkerObject>();
   private readonly materials = new Map<string, THREE.MeshBasicMaterial>();
   private readonly bearings: BearingObject[] = [];
-  private readonly attachments = new Map<number, AttachmentObject>();
+  private readonly attachments = new Map<string, AttachmentObject>();
   private readonly veil = document.createElement('div');
   private readonly bearingLayer = document.createElement('div');
   private readonly right = new THREE.Vector3();
@@ -137,7 +137,8 @@ export class AbilityWorldPresentation {
         const pole = this.mesh(POLE, '#3a4f42', root);
         pole.position.y = 1.2; pole.scale.y = 2.4;
         const light = this.mesh(SPHERE, '#ffed88', root);
-        light.position.y = 2.6; light.scale.set(.45, .65, .45);
+        const volume = abilityBeaconVolume(frame.center);
+        light.position.y = frame.center.distanceTo(volume.center); light.scale.setScalar(volume.radius);
         this.mesh(RING, colors.color, root).rotation.x = Math.PI / 2;
         break;
       }
@@ -196,13 +197,29 @@ export class AbilityWorldPresentation {
   onCast(by: number, definition: AbilityDefinition, character: THREE.Object3D, now: number, direction?: { x: number; y: number; z: number }): void {
     const mobility = definition.effects.find((effect) => effect.kind === 'mobility');
     const shield = definition.effects.find((effect) => effect.kind === 'frontShield');
-    if (!shield && (!mobility || !['grapple', 'glide', 'flight'].includes(mobility.mode))) return;
-    this.removeAttachment(by);
+    const confetti = definition.id === 'confetti_wheel' ? definition.effects.find((effect) => effect.kind === 'cleanse') : undefined;
+    if (!shield && !confetti && (!mobility || !['grapple', 'glide', 'flight'].includes(mobility.mode))) return;
+    // A defensive cast can coexist with gliding: replacing its own channel must preserve the other effect.
+    const key = `${by}:${shield ? 'defense' : confetti ? 'buff' : 'mobility'}`;
+    this.removeAttachmentKey(key);
     const root = new THREE.Group();
+    root.name = `ability-attachment:${definition.id}`;
     character.add(root);
-    const entry: AttachmentObject = { root, character, until: now + (shield?.duration ?? mobility?.duration ?? 1) * 1000 };
+    const entry: AttachmentObject = { by, root, character, until: now + (shield?.duration ?? confetti?.duration ?? mobility?.duration ?? 1) * 1000 };
     const color = definition.presentation.color;
-    if (shield) {
+    if (confetti) {
+      const wheel = new THREE.Group();
+      wheel.position.y = .85;
+      root.add(wheel); entry.spin = wheel;
+      const ring = this.mesh(RING, color, wheel);
+      ring.rotation.x = Math.PI / 2; ring.scale.setScalar(.8);
+      for (let i = 0; i < 8; i++) {
+        const angle = i * Math.PI / 4;
+        const piece = this.mesh(BOX, i % 2 ? color : definition.presentation.color2, wheel);
+        piece.position.set(Math.cos(angle), Math.sin(angle * 2) * .18, Math.sin(angle));
+        piece.scale.set(.12, .22, .06); piece.rotation.z = angle;
+      }
+    } else if (shield) {
       const canopy = this.mesh(SPHERE, color, root);
       canopy.position.set(0, 1.25, .72); canopy.scale.set(.85, .8, .12);
       const rim = this.mesh(RING, '#2a2130', root);
@@ -229,15 +246,19 @@ export class AbilityWorldPresentation {
         wing.scale.set(.5, 1.2, .15);
       }
     }
-    this.attachments.set(by, entry);
+    this.attachments.set(key, entry);
   }
 
   removeAttachment(by: number): void {
-    const attachment = this.attachments.get(by);
+    for (const [key, attachment] of this.attachments) if (attachment.by === by) this.removeAttachmentKey(key);
+  }
+
+  private removeAttachmentKey(key: string): void {
+    const attachment = this.attachments.get(key);
     if (!attachment) return;
     attachment.root.removeFromParent();
     attachment.rope?.removeFromParent(); attachment.rope?.geometry.dispose();
-    this.attachments.delete(by);
+    this.attachments.delete(key);
   }
 
   /** The caller must route only the server's private message for this player. Never reads opponent history. */
@@ -296,8 +317,9 @@ export class AbilityWorldPresentation {
       if (entry.view.kind === 'portal') entry.root.children[0]!.rotation.z = now / 2200;
     }
     if (this.veil.hidden === insideCloud) this.veil.hidden = !insideCloud;
-    for (const [by, attachment] of this.attachments) {
-      if (now >= attachment.until || !attachment.character.parent || !attachment.character.visible) { this.removeAttachment(by); continue; }
+    for (const [key, attachment] of this.attachments) {
+      if (now >= attachment.until || !attachment.character.parent || !attachment.character.visible) { this.removeAttachmentKey(key); continue; }
+      if (attachment.spin) attachment.spin.rotation.y = now / 400;
       if (attachment.rope && attachment.anchor) {
         const positions = attachment.rope.geometry.getAttribute('position');
         const hand = attachment.character.localToWorld(new THREE.Vector3(0, 1.3, .4));
@@ -328,7 +350,7 @@ export class AbilityWorldPresentation {
   clear(): void {
     for (const id of [...this.entities.keys()]) this.removeEntity(id);
     this.clearReveals(); this.veil.hidden = true;
-    for (const by of [...this.attachments.keys()]) this.removeAttachment(by);
+    for (const key of [...this.attachments.keys()]) this.removeAttachmentKey(key);
   }
 
   stats(): string { return `${this.entities.size} entidades · ${this.markers.size} revelações`; }

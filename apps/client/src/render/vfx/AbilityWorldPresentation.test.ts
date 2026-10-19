@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type GamePhysics } from '@graao/game-core';
+import { abilityBeaconVolume, type GamePhysics } from '@graao/game-core';
 import type { AbilityEntityView } from '@graao/shared';
 import { ABILITIES } from '@graao/game-data';
 import { AbilityWorldPresentation, abilityEntityFrame } from './AbilityWorldPresentation';
@@ -127,5 +127,52 @@ describe('authoritative world ability presentation', () => {
     expect(presentation.root.children).toHaveLength(96);
     presentation.clearReveals();
     expect(presentation.root.children).toHaveLength(0);
+  });
+
+  it('draws the beacon lamp at the exact authoritative hit volume in every radial orientation', () => {
+    for (const at of [[0, 100000, 0], [100000, 0, 0], [0, -100000, 0], [0, 0, -100000]] as [number, number, number][]) {
+      presentation.setState({ entities: [wall({ a: 'firefly_beacon', kind: 'beacon', at })] });
+      const lamp = presentation.root.children[0]!.children[1] as THREE.Mesh;
+      const volume = abilityBeaconVolume({ x: at[0] / 1000, y: at[1] / 1000, z: at[2] / 1000 });
+      const center = lamp.getWorldPosition(new THREE.Vector3());
+      expect(center.distanceTo(new THREE.Vector3(volume.center.x, volume.center.y, volume.center.z))).toBeLessThan(1e-10);
+      expect(lamp.scale.toArray()).toEqual([volume.radius, volume.radius, volume.radius]);
+    }
+  });
+
+  it('preserves wings when a shield opens, and replaces only the same attachment channel', () => {
+    const actor = new THREE.Group();
+    new THREE.Scene().add(actor);
+    presentation.onCast(1, ABILITIES.paper_wings, actor, 1000);
+    presentation.onCast(1, ABILITIES.magic_umbrella, actor, 1500);
+    expect(actor.children.map((child) => child.name)).toEqual(['ability-attachment:paper_wings', 'ability-attachment:magic_umbrella']);
+    presentation.onCast(1, ABILITIES.kite_flight, actor, 2000);
+    expect(actor.children.map((child) => child.name)).toEqual(['ability-attachment:magic_umbrella', 'ability-attachment:kite_flight']);
+    presentation.update(4500);
+    expect(actor.children.map((child) => child.name)).toEqual(['ability-attachment:kite_flight']);
+    presentation.removeAttachment(1);
+    expect(actor.children).toHaveLength(0);
+  });
+
+  it('shows the accepted confetti buff for its six seconds and clears every channel on reset', () => {
+    const actor = new THREE.Group();
+    new THREE.Scene().add(actor);
+    presentation.onCast(1, ABILITIES.confetti_wheel, actor, 1000);
+    const buff = actor.children[0]!;
+    const wheel = buff.children[0]!;
+    expect(wheel.children).toHaveLength(9);
+    presentation.update(4000);
+    const rotation = wheel.rotation.y;
+    presentation.update(6999);
+    expect(actor.children).toHaveLength(1);
+    expect(wheel.rotation.y).not.toBe(rotation);
+    presentation.update(7000);
+    expect(actor.children).toHaveLength(0);
+    presentation.onCast(1, ABILITIES.paper_wings, actor, 8000);
+    presentation.onCast(1, ABILITIES.confetti_wheel, actor, 8000);
+    presentation.onCast(1, ABILITIES.magic_umbrella, actor, 8000);
+    expect(actor.children).toHaveLength(3);
+    presentation.clear();
+    expect(actor.children).toHaveLength(0);
   });
 });

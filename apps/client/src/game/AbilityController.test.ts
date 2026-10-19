@@ -97,4 +97,18 @@ describe('AbilityController (client mirror, never the judge)', () => {
     expect(c.targetState(0, performance.now() + 1000)).toBeNull();
     expect(c.cooldownLeft(0, performance.now())).toBe(0);
   });
+
+  it.each(['rain_bath', 'confetti_wheel'] as const)('does not predict %s while hands are locked, but still allows cleansing silence', (id) => {
+    const c = new AbilityController();
+    c.setLoadout(['rain_bath', 'wind_step', 'leaf_shell', 'confetti_wheel']);
+    const slot = c.loadout.indexOf(id);
+    c.applyServer(status({ blockedUntil: 2000, silencedUntil: 1800 }), 1000, 1000, same);
+    expect(c.expect(slot, 1000, true, true)).toBe(AbilityReject.BUSY);
+    expect(c.press(slot, 1000, true, true)?.predicted).toBe(false);
+    expect(c.manaShown).toBe(100);
+    expect(c.cooldownLeft(slot, 1000)).toBe(0);
+    c.reset();
+    c.applyServer(status({ silencedUntil: 2500 }), 2000, 2000, same);
+    expect(c.expect(slot, 2000, true, true)).toBe(AbilityReject.OK);
+  });
 });

@@ -490,6 +490,9 @@ export class GRAAudioManager {
     if (!ctx || ctx.state !== 'running') return;
     // Someone else's steps keep to their own bus: a crowd of feet never cuts a threat's voice.
     const cat = o.threat ? (cue.startsWith('step.') ? 'footsteps' : 'threat') : CUE_CATEGORY[cue];
+    // Muted combat can still receive a full room's casts. Do not build sources for inaudible cues or let them
+    // evict an audible voice that is already fading out. Environmental action cues use foley, so follow effects.
+    if (this.volume <= 0 || (cat === 'music' ? this.ambienceVolume : this.effectsVolume) <= 0 || (o.volume ?? 1) <= 0) return;
     const list = this.voices.get(cat)!;
     const now = ctx.currentTime;
     for (let i = list.length - 1; i >= 0; i--) if (list[i]!.endsAt < now) list.splice(i, 1);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ABILITIES } from '@graao/game-data';
 import { GRAAudioManager, type AudioCategory, type AudioLoop, type Cue } from './GRAAudioManager';
 
 const ambienceInstances = vi.hoisted(() => [] as { destination: unknown; update: ReturnType<typeof vi.fn> }[]);
@@ -152,8 +153,8 @@ describe('separate audio volumes', () => {
     expect(graph.ambientSignal.gain.value).toBe(0.9);
     audio.play('tormenta.warn');
     audio.play('tormenta.hurt');
-    expect(graph.voices.get('match')).toHaveLength(1);
-    expect(graph.voices.get('threat')).toHaveLength(1);
+    expect(graph.voices.get('match')).toHaveLength(0);
+    expect(graph.voices.get('threat')).toHaveLength(0);
     audio.setAmbienceVolume(0);
     audio.setEffectsVolume(1);
     expect(graph.ambientSignal.gain.value).toBe(0);
@@ -229,5 +230,71 @@ describe('separate audio volumes', () => {
     expect(mixer(audio).buses.get('weapons')!.gain.value).toBeCloseTo(0.15);
     expect(mixer(audio).buses.get('environment')!.gain.value).toBeCloseTo(0.15);
     expect(mixer(audio).master.gain.value).toBe(0.4);
+  });
+
+  it('synthesizes every active ability family on own and enemy routes without depending on graphics quality', () => {
+    const audio = new GRAAudioManager();
+    audio.unlock();
+    const graph = mixer(audio);
+    const catalog = Object.values(ABILITIES);
+    expect(catalog).toHaveLength(40);
+    expect(catalog.filter((def) => def.kind === 'passive')).toHaveLength(8);
+    for (const def of catalog.filter((entry) => entry.kind !== 'passive')) {
+      const cue = `ab.${def.presentation.cue}` as const;
+      for (const enemy of [false, true]) {
+        const sourceCount = Context.latest.sources.length;
+        audio.play(cue, { threat: enemy, pan: enemy ? 0.6 : 0, volume: 0.7 });
+        expect(Context.latest.sources.length, `${def.id} (${enemy ? 'enemy' : 'own'})`).toBeGreaterThan(sourceCount);
+        const voice = graph.voices.get(enemy ? 'threat' : 'abilities')!.at(-1)!;
+        expect(Number.isFinite(voice.endsAt), def.id).toBe(true);
+        expect(voice.endsAt, def.id).toBeGreaterThan(Context.latest.currentTime);
+      }
+    }
+    expect(graph.voices.get('abilities')).toHaveLength(8);
+    expect(graph.voices.get('threat')).toHaveLength(8);
+  });
+
+  it('does not allocate or steal voices for muted casts, warnings or foley, and resumes new cues after unmuting', () => {
+    const audio = new GRAAudioManager();
+    audio.unlock();
+    const graph = mixer(audio);
+    for (let i = 0; i < 8; i++) audio.play('ab.orb');
+    const oldest = graph.voices.get('abilities')![0]!;
+    const stop = vi.spyOn(oldest, 'stop');
+    const sourceCount = Context.latest.sources.length;
+    const gainCount = Context.latest.gains.length;
+    audio.setEffectsVolume(0);
+    for (let i = 0; i < 30; i++) {
+      audio.play('ab.meteor');
+      audio.play('ab.warn', { threat: true });
+      audio.play('land');
+      audio.play('ui.click');
+    }
+    expect(Context.latest.sources).toHaveLength(sourceCount);
+    expect(Context.latest.gains).toHaveLength(gainCount);
+    expect(graph.voices.get('abilities')).toHaveLength(8);
+    expect(graph.voices.get('threat')).toHaveLength(0);
+    expect(graph.voices.get('environment')).toHaveLength(0);
+    expect(stop).not.toHaveBeenCalled();
+    // Muting ambience must not mute a spell, warning or the player's movement.
+    audio.setAmbienceVolume(0);
+    audio.setEffectsVolume(1);
+    audio.play('ab.meteor');
+    audio.play('ab.warn', { threat: true });
+    audio.play('land');
+    expect(Context.latest.sources.length).toBeGreaterThan(sourceCount);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(graph.voices.get('threat')).toHaveLength(1);
+    expect(graph.voices.get('environment')).toHaveLength(1);
+    const audibleCount = Context.latest.sources.length;
+    audio.setVolume(0);
+    audio.play('ab.orb');
+    audio.play('ab.warn', { threat: true });
+    expect(Context.latest.sources).toHaveLength(audibleCount);
+    audio.setVolume(1);
+    audio.play('ab.orb', { volume: 0 });
+    expect(Context.latest.sources).toHaveLength(audibleCount);
+    audio.play('ab.orb');
+    expect(Context.latest.sources.length).toBeGreaterThan(audibleCount);
   });
 });

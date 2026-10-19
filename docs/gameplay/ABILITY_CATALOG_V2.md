@@ -64,3 +64,5 @@ Validação integrada de 19/10/2026: [158 testes focados, navegador e métricas]
 Os testes de regressão finais incluem Meteoro sem impacto duplicado, volume compartilhado da nuvem e Eco sem
 rastros estacionários. A apresentação foi inspecionada em desktop, retrato e paisagem; isso não substitui a
 qualificação manual de cada uma das 40 magias, razão para manter os estados individuais TESTING.
+
+Continuação de apresentação: [181 testes, Farol atingível, anexos simultâneos, Roda visível, avisos protegidos e mixer](../qa/ABILITY_V2_PRESENTATION_2026-10-19.md).

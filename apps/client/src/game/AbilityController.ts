@@ -98,7 +98,7 @@ export class AbilityController {
     const def = id ? ABILITIES[id] : undefined;
     if (def?.kind === 'passive') return AbilityReject.PASSIVE;
     if (def && now < this.silencedEnd && !def.tags.includes('cleanse')) return AbilityReject.SILENCED;
-    if (def && now < this.blockedEnd && !def.tags.includes('cleanse')) return AbilityReject.BUSY;
+    if (def && now < this.blockedEnd) return AbilityReject.BUSY;
     return checkCast(
       { alive, canFight, mana: this.manaShown, loadout: this.loadout, cooldownEnds: this.cdEnd, castUntil: this.castEnd },
       slot,
