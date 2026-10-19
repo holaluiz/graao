@@ -361,6 +361,31 @@ describe('persistent tactical entities and mobility', () => {
 });
 
 describe('authoritative information and spherical waves', () => {
+  it('announces an early motor stop once and clears movement tracking on cancel and reset', () => {
+    const a = actor(0, 0, ['paper_wings', 'wind_step', 'leaf_shell', 'kite_flight']);
+    a.state.grounded = false;
+    const h = harness([a]);
+    const ends = () => h.events.filter((e) => e.e === 'fx' && e.k === 'dash' && e.v === 0);
+    expect(h.cast(a, 'paper_wings', 1000)).toBe(AbilityReject.OK);
+    h.system.update(1100, .05);
+    expect(ends()).toHaveLength(0);
+    delete a.state.abilityMovement; // The character motor does this when the glide lands or is interrupted.
+    h.system.update(1150, .05);
+    expect(ends()).toEqual([{ e: 'fx', by: 0, target: 0, k: 'dash', v: 0 }]);
+    h.system.update(1200, .05);
+    expect(ends()).toHaveLength(1);
+    a.cooldownEnds.fill(0); a.vitals.mana = 100;
+    expect(h.cast(a, 'paper_wings', 1300)).toBe(AbilityReject.OK);
+    h.system.cancelFor(0);
+    h.system.update(1350, .05);
+    expect(ends()).toHaveLength(2);
+    a.cooldownEnds.fill(0); a.vitals.mana = 100;
+    expect(h.cast(a, 'paper_wings', 1400)).toBe(AbilityReject.OK);
+    h.system.clear();
+    h.system.update(1450, .05);
+    expect(ends()).toHaveLength(2);
+  });
+
   it('solar orb reveals only the first real hit player to its owner, then follows actual snapshots without damage', () => {
     const a = actor(0, 0, ['sun_orb', 'wind_step', 'leaf_shell', 'sun_meteor']);
     const b = actor(1, 5);

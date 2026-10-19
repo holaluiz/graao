@@ -534,6 +534,12 @@ export class AbilityDirector {
         if (isAbilityId(e.a)) this.areaFx(ABILITIES[e.a], mmToV(e.at), e.r / 100, e.n, e.by);
         break;
       case 'fx':
+        if (e.k === 'dash' && e.v === 0) {
+          this.world.endMovement(e.target);
+          const fx = this.remoteFx.get(e.target);
+          if (fx) fx.dashUntil = 0;
+          break;
+        }
         this.statusFx(e.target, e.k, e.v, e.by);
         break;
       case 'elim': this.world.removeAttachment(e.target); break;

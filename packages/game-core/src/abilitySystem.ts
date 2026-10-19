@@ -160,6 +160,7 @@ export class GRAAbilitySystem {
   /** Separate movement anchors survive history expiry: a motionless actor must not create a fresh footprint. */
   private readonly lastTrackedPositions = new Map<number, Vec3>();
   private readonly activity = new Map<number, number>();
+  private readonly movementVisuals = new Map<number, AbilityActor>();
   private trailAt = -Infinity;
   private nextId = 1;
 
@@ -331,6 +332,12 @@ export class GRAAbilitySystem {
     }
     this.updateEntities(now, dt);
     this.updateReconnaissance(now);
+    // The motor can stop a grapple/glide/flight early (landing, water or control). Tell every client immediately.
+    for (const [index, actor] of this.movementVisuals) {
+      if (actor.vitals.alive && actor.state.abilityMovement && actor.state.abilityMovement.remaining > 0) continue;
+      this.movementVisuals.delete(index);
+      this.host.emit({ e: 'fx', by: index, target: index, k: 'dash', v: 0 });
+    }
   }
 
   /** A player died or respawned: drop their wind-ups and the areas that follow them. Projectiles keep flying. */
@@ -342,6 +349,7 @@ export class GRAAbilitySystem {
     this.trails.delete(index);
     this.lastTrackedPositions.delete(index);
     this.activity.delete(index);
+    if (this.movementVisuals.delete(index)) this.host.emit({ e: 'fx', by: index, target: index, k: 'dash', v: 0 });
     const actor = this.actor(index);
     if (actor) { delete actor.state.abilityMovement; actor.frontShieldUntil = 0; }
   }
@@ -356,6 +364,7 @@ export class GRAAbilitySystem {
     this.trails.clear();
     this.lastTrackedPositions.clear();
     this.activity.clear();
+    this.movementVisuals.clear();
     this.trailAt = -Infinity;
     for (const actor of this.host.actors()) { delete actor.state.abilityMovement; actor.frontShieldUntil = 0; }
   }
@@ -759,6 +768,7 @@ export class GRAAbilitySystem {
               lift: e.lift ?? (e.mode === 'flight' ? 3 : 3.5),
               originHeight: v3len(caster.state.pos), ...(anchor ? { anchor } : {}),
             };
+            this.movementVisuals.set(caster.index, caster);
             if (e.mode === 'flight') { caster.state.grounded = false; caster.state.airTime = 1; }
           }
           this.host.emit({ e: 'fx', by: caster.index, target: caster.index, k: 'dash', v: Math.round((e.duration ?? 0.3) * 1000) });

@@ -4,6 +4,8 @@ import { abilityBeaconVolume, type GamePhysics } from '@graao/game-core';
 import type { AbilityEntityView } from '@graao/shared';
 import { ABILITIES } from '@graao/game-data';
 import { AbilityWorldPresentation, abilityEntityFrame } from './AbilityWorldPresentation';
+import { AbilityDirector } from '../../game/AbilityDirector';
+import type { GraaoApp } from '../../app/GraaoApp';
 
 class ElementStub {
   className = ''; hidden = false; title = ''; textContent = '';
@@ -24,10 +26,11 @@ describe('authoritative world ability presentation', () => {
   let removed: number;
 
   beforeEach(() => {
-    vi.stubGlobal('document', { createElement: () => new ElementStub() });
+    vi.stubGlobal('document', { createElement: () => new ElementStub(), getElementById: () => ui });
     const collider = { setTranslation() { return this; }, setRotation() { return this; }, setCollisionGroups() { return this; } };
     created = removed = 0;
     const physics = {
+      castRay: () => ({ toi: 6, handle: 1 }),
       R: { ColliderDesc: { cuboid: () => collider } }, barrierHandles: new Set<number>(),
       world: { createCollider: () => ({ handle: ++created }), getCollider: (handle: number) => ({ handle }), removeCollider: () => { removed++; }, step() {} },
     } as unknown as GamePhysics;
@@ -174,5 +177,39 @@ describe('authoritative world ability presentation', () => {
     expect(actor.children).toHaveLength(3);
     presentation.clear();
     expect(actor.children).toHaveLength(0);
+  });
+
+  it('ends movement on a server stop while preserving the independent shield and confetti', () => {
+    const actor = new THREE.Group();
+    new THREE.Scene().add(actor);
+    presentation.onCast(1, ABILITIES.paper_wings, actor, 1000);
+    presentation.onCast(1, ABILITIES.confetti_wheel, actor, 1000);
+    presentation.onCast(1, ABILITIES.magic_umbrella, actor, 1000);
+    presentation.endMovement(1);
+    presentation.endMovement(1);
+    expect(actor.children.map((child) => child.name)).toEqual(['ability-attachment:confetti_wheel', 'ability-attachment:magic_umbrella']);
+  });
+
+  it.each([0, 1])('routes the reliable early-stop event to actor %i without removing its defensive buff', (index) => {
+    const scene = new THREE.Scene(), actor = new THREE.Group();
+    scene.add(actor);
+    const director = new AbilityDirector({ r: { scene, camera }, world: { physics: {} }, net: { myIndex: 0 } } as unknown as GraaoApp);
+    director.world.onCast(index, ABILITIES.paper_wings, actor, 1000);
+    director.world.onCast(index, ABILITIES.magic_umbrella, actor, 1000);
+    director.onEvent({ e: 'fx', by: index, target: index, k: 'dash', v: 0 });
+    expect(actor.children.map((child) => child.name)).toEqual(['ability-attachment:magic_umbrella']);
+    director.world.dispose();
+  });
+
+  it('disposes a grapple rope when its authoritative movement stops early', () => {
+    const actor = new THREE.Group(); actor.position.set(0, 100, 0);
+    new THREE.Scene().add(actor);
+    presentation.onCast(1, ABILITIES.clothesline, actor, 1000, { x: 0, y: 0, z: 1 });
+    const rope = presentation.root.children.find((child) => child instanceof THREE.Line) as THREE.Line;
+    const disposed = vi.spyOn(rope.geometry, 'dispose');
+    presentation.endMovement(1);
+    expect(actor.children).toHaveLength(0);
+    expect(presentation.root.children).not.toContain(rope);
+    expect(disposed).toHaveBeenCalledOnce();
   });
 });

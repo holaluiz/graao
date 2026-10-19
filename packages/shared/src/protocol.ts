@@ -843,6 +843,7 @@ export interface DraftStateMsg {
   reveal: { index: number; a: string; auto: boolean; contested: boolean }[];
 }
 
+/** A dash FX with v=0 ends a sustained movement visual after an authoritative motor stop. */
 export type StatusFx = 'shield' | 'heal' | 'slow' | 'knock' | 'dash';
 
 /** Public persistent gameplay geometry. Position mm; full size/radius cm; tangent direction ×DIR_SCALE. */

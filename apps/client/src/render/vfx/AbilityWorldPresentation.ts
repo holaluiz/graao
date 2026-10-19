@@ -253,6 +253,9 @@ export class AbilityWorldPresentation {
     for (const [key, attachment] of this.attachments) if (attachment.by === by) this.removeAttachmentKey(key);
   }
 
+  /** Reliable server notification: movement ended before its maximum visual duration. */
+  endMovement(by: number): void { this.removeAttachmentKey(`${by}:mobility`); }
+
   private removeAttachmentKey(key: string): void {
     const attachment = this.attachments.get(key);
     if (!attachment) return;

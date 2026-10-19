@@ -65,4 +65,4 @@ Os testes de regressão finais incluem Meteoro sem impacto duplicado, volume com
 rastros estacionários. A apresentação foi inspecionada em desktop, retrato e paisagem; isso não substitui a
 qualificação manual de cada uma das 40 magias, razão para manter os estados individuais TESTING.
 
-Continuação de apresentação: [181 testes, Farol atingível, anexos simultâneos, Roda visível, avisos protegidos e mixer](../qa/ABILITY_V2_PRESENTATION_2026-10-19.md).
+Continuação de apresentação: [186 testes, Farol atingível, anexos simultâneos, encerramento autoritativo, Roda visível, avisos protegidos e mixer](../qa/ABILITY_V2_PRESENTATION_2026-10-19.md).
