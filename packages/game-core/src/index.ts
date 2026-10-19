@@ -6,6 +6,8 @@ export * from './layout';
 export * from './trails';
 export * from './physics';
 export * from './character';
+export * from './wind';
+export * from './traversal';
 export * from './world';
 export * from './nav';
 export * from './interactives';

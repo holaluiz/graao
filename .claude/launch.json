@@ -272,6 +272,32 @@
         "--strictPort"
       ],
       "port": 5185
+    },
+    {
+      "name": "graao-client-vertical",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@graao/client",
+        "exec",
+        "vite",
+        "--config",
+        "../../tools/profiling/vite.bench.config.mjs",
+        "--port",
+        "5186",
+        "--strictPort"
+      ],
+      "port": 5186
+    },
+    {
+      "name": "graao-server-vertical",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:SUPABASE_URL='http://127.0.0.1:9'; pnpm --filter @graao/server exec tsx src/index.ts --port 2576"
+      ],
+      "port": 2576
     }
   ]
 }

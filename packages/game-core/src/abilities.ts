@@ -30,6 +30,7 @@ import {
 import type { CharacterState } from './character';
 import { applyDamage, HITBOX, rayPlayers, type DamageResult, type PlayerHitTarget, type Vitals } from './combat';
 import { GROUPS_WORLD_QUERY, type GamePhysics } from './physics';
+import { releaseTraversal } from './traversal';
 
 /** The part of GamePhysics ability rules need (lets unit tests pass a fake world). */
 export type RayCaster = Pick<GamePhysics, 'castRay'> & Partial<Pick<GamePhysics, 'castRayNormal'>>;
@@ -282,6 +283,8 @@ export function applyKnockback(s: CharacterState, from: Vec3 | null, strength: n
   const newUp = Math.max(vUp, 0) + lift;
   v3set(s.vel, keep.x + push.x * strength + up.x * newUp, keep.y + push.y * strength + up.y * newUp, keep.z + push.z * strength + up.z * newUp);
   s.dashSteps = 0;
+  // A push tears the character off a ledge or a wall and folds the glider (the regrab cooldown leaves a moment to react).
+  releaseTraversal(s);
   if (lift > 0) {
     s.grounded = false;
     s.airTime = 1;

@@ -15,7 +15,7 @@
  */
 import * as THREE from 'three';
 import { GROUPS_WORLD_QUERY, PLAYER_MELEE_BODY, newPassiveRuntime, passiveModifiers, muzzlePoint, resolveMelee, resolvePellet, shotSeed, spreadDirections, type MeleeBody, type PlayerHitTarget } from '@graao/game-core';
-import { ATTRIBUTES, BOT_KIT, ITEMS, MATCH_KIT, MELEE, RARITIES, STARTING_KIT, WEAPONS, weaponItem, type WeaponDefinition, type WeaponId } from '@graao/game-data';
+import { ATTRIBUTES, BOT_KIT, ITEMS, MATCH_KIT, MELEE, RARITIES, STARTING_KIT, TRAVERSAL_ACTIONS, TRAVERSAL_LABEL, WEAPONS, weaponItem, type WeaponDefinition, type WeaponId } from '@graao/game-data';
 import {
   ActionState,
   DIR_SCALE,
@@ -167,8 +167,10 @@ export class CombatDirector {
   private canFire(): boolean {
     if (!this.alive || !this.app.input.locked) return false;
     if (performance.now() < this.abilities.ctl.blockedEnd) return false;
-    // Hands are busy while swimming, while an ability winds up and while a consumable is used (the server refuses too).
+    // Hands are busy while swimming, on a ledge, a wall or the glider, while an ability winds up and while a consumable
+    // is used (the server refuses too).
     if (this.app.local.state.swimming || this.abilities.casting() || this.app.loot.using || this.app.local.state.abilityMovement?.mode === 'flight') return false;
+    if (!TRAVERSAL_ACTIONS[this.app.local.state.traversal].fire) return false;
     if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
     if (this.phase === MatchPhase.MATCH) return this.serverNow() >= this.startsAt && !!this.me()?.inMatch;
     return this.phase === MatchPhase.FREE_ROAM;
@@ -190,7 +192,7 @@ export class CombatDirector {
 
   /** Upper body holds the aim pose while aiming and shortly after any shot (never with empty hands). */
   aimPose(aiming: boolean): boolean {
-    return this.alive && this.weapon.armed && (aiming || performance.now() - this.lastFireAt < 650);
+    return this.alive && this.weapon.armed && TRAVERSAL_ACTIONS[this.app.local.state.traversal].fire && (aiming || performance.now() - this.lastFireAt < 650);
   }
 
   /** What the hand holds for the weapon holder: the selected slot, or nothing (FISTS_SLOT). */
@@ -218,6 +220,10 @@ export class CombatDirector {
     }
     const firePressed = input.consume('fire');
     if (firePressed && input.locked && this.alive && app.local.state.swimming) app.hud.notice('NADANDO · SEM ARMAS NA ÁGUA', 1.1);
+    const traversal = TRAVERSAL_ACTIONS[app.local.state.traversal];
+    if (firePressed && input.locked && this.alive && !traversal.fire) app.hud.notice(`${TRAVERSAL_LABEL[app.local.state.traversal]} · MÃOS OCUPADAS`, 0.9);
+    const reloadPressed = input.consume('reload') && traversal.reload;
+    const switchTo = !traversal.switchWeapon ? -1 : input.consume('weapon1') ? 0 : input.consume('weapon2') ? 1 : -1;
     const fists = !this.weapon.armed;
     const r = this.weapon.update(
       dt,
@@ -225,8 +231,8 @@ export class CombatDirector {
       {
         fireHeld: input.isDown('fire'),
         firePressed,
-        reloadPressed: input.consume('reload'),
-        switchTo: input.consume('weapon1') ? 0 : input.consume('weapon2') ? 1 : -1,
+        reloadPressed,
+        switchTo,
       },
       this.canFire(),
     );

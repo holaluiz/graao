@@ -4,7 +4,7 @@
  * Sources, in priority order:
  *   1. Mixamo FBX clips listed in `animations/mixamo/manifest.json` (optional; user-downloaded, not redistributed)
  *   2. Quaternius Universal Animation Library (CC0), in-place variant, packed by tools/animation/build-animations.mjs
- *   3. Procedural graao poses built on the T-pose bind (the skydive), see `skydiveClip`
+ *   3. Procedural graao poses built on the T-pose bind (the skydive, the ledge hang, the glide), see `skydiveClip`
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -45,9 +45,14 @@ export type ClipName =
   | 'swimIdle'
   | 'punchL'
   | 'punchR'
-  | 'skydive';
+  | 'skydive'
+  /** Vertical traversal (docs/gameplay/TRAVERSAL_STATES.md): the climbing cycle, the pull-up, the hang, the glide. */
+  | 'climb'
+  | 'mantle'
+  | 'hang'
+  | 'glide';
 
-type UalClip = Exclude<ClipName, 'skydive'>;
+type UalClip = Exclude<ClipName, 'skydive' | 'hang' | 'glide'>;
 
 /** Semantic name → source clip name in the UAL packs. */
 const UAL_SOURCES: Record<UalClip, { pack: 1 | 2; clip: string }> = {
@@ -82,6 +87,9 @@ const UAL_SOURCES: Record<UalClip, { pack: 1 | 2; clip: string }> = {
   // Empty hands: a left jab and a right cross, alternated.
   punchL: { pack: 1, clip: 'Punch_Jab' },
   punchR: { pack: 1, clip: 'Punch_Cross' },
+  // In place (the pelvis only bobs): the capsule's controller does the moving, the clip only the reaching and pulling.
+  climb: { pack: 2, clip: 'ClimbUp_1m' },
+  mantle: { pack: 2, clip: 'ClimbUp_1m' },
 };
 
 export interface LibraryReport {
@@ -132,6 +140,10 @@ export class GRAAnimationLibrary {
     }
     this.clips.set('skydive', skydiveClip());
     source.skydive = 'procedural';
+    this.clips.set('hang', hangClip());
+    source.hang = 'procedural';
+    this.clips.set('glide', glideClip());
+    source.glide = 'procedural';
 
     // Optional Mixamo overrides (same retargeter; FBX loader is only fetched when a manifest exists).
     const mixamo = await loadMixamoClips(this.assets, rig);
@@ -188,6 +200,73 @@ export function skydiveClip(): THREE.AnimationClip {
   track('LeftFoot', () => [0.35, 0, 0]);
   track('RightFoot', () => [0.35, 0, 0]);
   return new THREE.AnimationClip('skydive', dur, tracks);
+}
+
+/** A looping pose clip on the T-pose bind: each bone's Euler (x, y, z) as a function of a slow sine wave. */
+function poseClip(name: string, dur: number, bones: Record<string, (wave: number) => [number, number, number]>): THREE.AnimationClip {
+  const times = [0, dur * 0.25, dur * 0.5, dur * 0.75, dur];
+  const e = new THREE.Euler();
+  const q = new THREE.Quaternion();
+  const tracks = Object.entries(bones).map(([bone, f]) => {
+    const values: number[] = [];
+    for (const t of times) {
+      const [x, y, z] = f(Math.sin((t / dur) * Math.PI * 2));
+      values.push(...q.setFromEuler(e.set(x, y, z)).toArray());
+    }
+    return new THREE.QuaternionKeyframeTrack(`${bone}.quaternion`, times, values);
+  });
+  return new THREE.AnimationClip(name, dur, tracks);
+}
+
+/**
+ * Ledge hang (graao-authored, procedural): both arms straight up and a little forward with the hands on the edge, the
+ * head tilted up toward it, the legs hanging loose with a slow sway. Same rig conventions as the skydive.
+ */
+export function hangClip(): THREE.AnimationClip {
+  return poseClip('hang', 2.4, {
+    Spine: () => [0.06, 0, 0],
+    Spine1: () => [0.04, 0, 0],
+    Spine2: () => [0.02, 0, 0],
+    Neck: () => [-0.18, 0, 0],
+    Head: () => [-0.22, 0, 0],
+    LeftShoulder: () => [0, 0, 0.35],
+    RightShoulder: () => [0, 0, -0.35],
+    LeftArm: () => [0, -0.32, 1.25],
+    RightArm: () => [0, 0.32, -1.25],
+    LeftForeArm: () => [0, 0, 0.12],
+    RightForeArm: () => [0, 0, -0.12],
+    LeftHand: () => [-0.5, 0, 0],
+    RightHand: () => [-0.5, 0, 0],
+    LeftUpLeg: (w) => [-0.12 + w * 0.06, 0, 0.04],
+    RightUpLeg: (w) => [-0.06 - w * 0.06, 0, -0.04],
+    LeftLeg: (w) => [0.32 - w * 0.08, 0, 0],
+    RightLeg: (w) => [0.22 + w * 0.08, 0, 0],
+    LeftFoot: () => [0.25, 0, 0],
+    RightFoot: () => [0.25, 0, 0],
+  });
+}
+
+/**
+ * Glide (graao-authored, procedural): hands up holding the kite's cross-bar over the head, elbows bent, legs together
+ * and trailing a little, a gentle flutter. GraaoCharacter leans the body forward on top of it and shows the kite.
+ */
+export function glideClip(): THREE.AnimationClip {
+  return poseClip('glide', 1.6, {
+    Spine: () => [-0.06, 0, 0],
+    Spine1: () => [-0.05, 0, 0],
+    Neck: () => [-0.25, 0, 0],
+    Head: () => [-0.2, 0, 0],
+    LeftArm: (w) => [0, -0.15, 1.0 + w * 0.04],
+    RightArm: (w) => [0, 0.15, -1.0 - w * 0.04],
+    LeftForeArm: () => [0, 0, 0.75],
+    RightForeArm: () => [0, 0, -0.75],
+    LeftUpLeg: (w) => [0.12 + w * 0.05, 0, 0.03],
+    RightUpLeg: (w) => [0.12 - w * 0.05, 0, -0.03],
+    LeftLeg: (w) => [0.35 + w * 0.06, 0, 0],
+    RightLeg: (w) => [0.35 - w * 0.06, 0, 0],
+    LeftFoot: () => [0.45, 0, 0],
+    RightFoot: () => [0.45, 0, 0],
+  });
 }
 
 /** Blends selected bone rotations toward the bind pose (identity) and the hips height toward rest. */

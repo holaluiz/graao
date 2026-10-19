@@ -27,6 +27,15 @@ export class GraaoThirdPersonCamera {
   /** Extra field of view (degrees), e.g. the speed of a dive. */
   fovBoost = 0;
   /**
+   * Traversal framing (docs/gameplay/TRAVERSAL_STATES.md): on a ledge or a wall the camera pulls back and up a little
+   * to show the route; under the glider it widens the view a little for the sense of speed. Eased, never snapped.
+   */
+  traversal: 'none' | 'wall' | 'glide' = 'none';
+  /** Comfort setting: no field-of-view changes (dive, glide) and no traversal pull-back. */
+  reducedMotion = false;
+  private wallBlend = 0;
+  private glideBlend = 0;
+  /**
    * Sea surface radius (0 = none). While the pivot is above the water the camera stays above it too (a swimmer looking
    * up does not dunk the view); it only goes under with the player (a plunge).
    */
@@ -63,6 +72,9 @@ export class GraaoThirdPersonCamera {
       this.aimBlend = 0;
       this.pitch = -0.18;
       this.fovBoost = 0;
+      this.wallBlend = 0;
+      this.glideBlend = 0;
+      this.traversal = 'none';
       this.recoilPitch = 0;
       this.recoilYaw = 0;
       this.shake = 0;
@@ -106,6 +118,9 @@ export class GraaoThirdPersonCamera {
     this.up.copy(newUp);
 
     this.aimBlend += ((this.aim ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 14));
+    const calm = this.reducedMotion ? 0 : 1;
+    this.wallBlend = THREE.MathUtils.damp(this.wallBlend, this.traversal === 'wall' ? calm : 0, 3, dt);
+    this.glideBlend = THREE.MathUtils.damp(this.glideBlend, this.traversal === 'glide' ? calm : 0, 2.5, dt);
     this.recoilPitch *= Math.exp(-dt * 11);
     this.recoilYaw *= Math.exp(-dt * 11);
     const right = new THREE.Vector3().crossVectors(this.heading, this.up).normalize();
@@ -114,13 +129,13 @@ export class GraaoThirdPersonCamera {
 
     // Pivot: above the shoulder, slightly to the right.
     const shoulder = THREE.MathUtils.lerp(0.42, 0.62, this.aimBlend);
-    const height = THREE.MathUtils.lerp(1.62, 1.52, this.aimBlend);
+    const height = THREE.MathUtils.lerp(1.62, 1.52, this.aimBlend) + this.wallBlend * 0.3;
     const feetH = feet.length();
     this.followUp = this.followUp === 0 ? feetH : THREE.MathUtils.damp(this.followUp, feetH, 18, dt);
     const smoothedFeet = feet.clone().multiplyScalar(this.followUp / feetH);
     this.pivot.copy(smoothedFeet).addScaledVector(this.up, height).addScaledVector(right, shoulder);
 
-    let want = THREE.MathUtils.lerp(this.baseDistance, this.aimDistance, this.aimBlend);
+    let want = THREE.MathUtils.lerp(this.baseDistance, this.aimDistance, this.aimBlend) + this.wallBlend * 1.0 + this.glideBlend * 0.7;
     // Looking up from below pulls the camera closer so it does not dig into the ground.
     if (this.pitch > 0.35) want *= THREE.MathUtils.lerp(1, 0.65, (this.pitch - 0.35) / 0.7);
     if (physics) {
@@ -145,7 +160,7 @@ export class GraaoThirdPersonCamera {
     this.camera.position.copy(pos);
     this.camera.up.copy(this.up);
     this.camera.lookAt(this.pivot.clone().addScaledVector(view, 8));
-    const fov = THREE.MathUtils.lerp(70, 52, this.aimBlend) + this.fovBoost;
+    const fov = THREE.MathUtils.lerp(70, 52, this.aimBlend) + (this.reducedMotion ? 0 : this.fovBoost) + this.glideBlend * 6;
     if (Math.abs(this.camera.fov - fov) > 0.01) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();

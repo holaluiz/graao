@@ -37,6 +37,8 @@ import { recordMatchPayload, type ParticipantInfo } from '@graao/database';
 import {
   AbilityDraft,
   CharacterMotor,
+  packTraversal,
+  traversalAllowsCast,
   GRAAbilitySystem,
   GRATormentaSystem,
   applyTormentaDamage,
@@ -117,7 +119,7 @@ import {
   type PlayerHitTarget,
   type TormentaConfig,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MAP_HASH, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MAP_HASH, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, TRAVERSAL_ACTIONS, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
 import {
   AbilityReject,
   AIM_SCALE,
@@ -144,6 +146,7 @@ import {
   NoticeCode,
   PITCH_SCALE,
   POS_SCALE,
+  STAMINA_SCALE,
   PROTOCOL_VERSION,
   RECONNECT_SECONDS,
   ROOM_CODE_ALPHABET,
@@ -522,6 +525,8 @@ export class GraaoMatchRoom extends Room {
     // Doors and breakable crates: per room in the shared world too.
     this.interactives = new InteractiveSystem({ physics: this.world.physics, layout: this.world.layout, actors: () => this.interactiveActors(), emit: (e) => this.events.push(e) });
     this.motor.interactiveFilter = this.interactives.colliders;
+    // Event winds (a rung bell's updrafts) blow for this room's characters only.
+    this.motor.windActive = this.interactives.windsOn;
     this.newLootGeneration();
     this.creeps = new GRACreepSystem(this.creepHost(), getCreepAreas(this.world));
     this.startCreeps();
@@ -620,7 +625,7 @@ export class GraaoMatchRoom extends Room {
     client.send(S2C.SELF, p.statusIfChanged());
     client.send(S2C.LOOT_STATE, this.loot.view());
     client.send(S2C.ABILITY_STATE, { entities: this.abilities.entities });
-    client.send(S2C.WORLD_STATE, this.interactives.view());
+    client.send(S2C.WORLD_STATE, this.interactives.view(Date.now()));
     this.broadcastRoomState();
     // Joining mid-draft: watch it (not a seat; plays from the next match).
     if (this.draft) client.send(S2C.DRAFT_STATE, this.draft.view(index));
@@ -707,7 +712,7 @@ export class GraaoMatchRoom extends Room {
     client.send(S2C.SELF, p.statusIfChanged(true));
     client.send(S2C.LOOT_STATE, this.loot.view());
     client.send(S2C.ABILITY_STATE, { entities: this.abilities.entities });
-    client.send(S2C.WORLD_STATE, this.interactives.view());
+    client.send(S2C.WORLD_STATE, this.interactives.view(Date.now()));
     if (this.draft) client.send(S2C.DRAFT_STATE, this.draft.view(p.index));
   }
 
@@ -1380,6 +1385,7 @@ export class GraaoMatchRoom extends Room {
     const p = this.players.get(c.sessionId);
     const v = validateSwitch(m);
     if (!p || !v || !p.vitals.alive) return;
+    if (!TRAVERSAL_ACTIONS[p.state.traversal].switchWeapon) return;
     if (v.w === FISTS_SLOT) {
       if (p.fists) return;
       p.fists = true;
@@ -1406,7 +1412,7 @@ export class GraaoMatchRoom extends Room {
   private onReload(c: Client): void {
     if (!this.legacyWarmup && this.phase !== MatchPhase.MATCH) return;
     const p = this.players.get(c.sessionId);
-    if (p && p.vitals.alive) this.startReload(p);
+    if (p && p.vitals.alive && TRAVERSAL_ACTIONS[p.state.traversal].reload) this.startReload(p);
   }
 
   private startReload(p: ServerPlayer): void {
@@ -1429,8 +1435,9 @@ export class GraaoMatchRoom extends Room {
     // Weapons put away (or none at all): the attack is a punch (MELEE), never a shot.
     if (p.fists) return;
     if (!this.canFight(p, Date.now())) return;
-    // Hands are busy while swimming, while an ability winds up and while a consumable is being used.
-    if (p.state.swimming) return;
+    // Hands are busy while swimming, hanging, climbing, gliding, while an ability winds up and while a consumable is
+    // being used (docs/gameplay/TRAVERSAL_STATES.md: what each traversal mode allows).
+    if (p.state.swimming || !TRAVERSAL_ACTIONS[p.state.traversal].fire) return;
     if (this.abilities.attackLocked(p, Date.now())) return;
     if (Date.now() < p.castUntil || Date.now() < p.useUntil) return;
     if (p.lastShotSeq >= 0 && !seqGreater(f.s, p.lastShotSeq)) return;
@@ -1581,6 +1588,8 @@ export class GraaoMatchRoom extends Room {
     if (this.phase === MatchPhase.MATCH && !p.inMatch) return LootReject.PHASE;
     // Aboard the UFO or still in the air.
     if (p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING || p.state.diving) return LootReject.PHASE;
+    // Hands on a ledge, a wall or the glider.
+    if (!TRAVERSAL_ACTIONS[p.state.traversal].interact) return LootReject.BUSY;
     return LootReject.OK;
   }
 
@@ -1595,7 +1604,7 @@ export class GraaoMatchRoom extends Room {
     this.broadcast(S2C.LOOT_STATE, this.loot.view());
     // Every match starts with its doors as built and every crate whole.
     this.interactives.reset();
-    this.broadcast(S2C.WORLD_STATE, this.interactives.view());
+    this.broadcast(S2C.WORLD_STATE, this.interactives.view(Date.now()));
     log('loot generation', { code: this.roomId, gen: this.loot.gen, seed: this.loot.seed, chests: this.loot.chests.length });
   }
 
@@ -1712,6 +1721,7 @@ export class GraaoMatchRoom extends Room {
     const now = Date.now();
     if (!p.vitals.alive || !this.canFight(p, now) || !p.unarmed) return;
     if (p.state.swimming || now < p.castUntil || now < p.useUntil || p.state.diving || p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING) return;
+    if (!TRAVERSAL_ACTIONS[p.state.traversal].fire) return;
     if (this.abilities.attackLocked(p, now)) return;
     if (!meleeReady(p.lastMeleeAt, now, p.mods.meleeIntervalMs)) return;
     const up = v3normalize(p.state.pos);
@@ -1756,6 +1766,7 @@ export class GraaoMatchRoom extends Room {
     const v = validateWorldUse(m);
     if (!p || !v || !p.vitals.alive) return;
     if (p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING || p.state.diving) return;
+    if (!TRAVERSAL_ACTIONS[p.state.traversal].interact) return;
     if (this.phase === MatchPhase.MATCH && !p.inMatch) return;
     this.interactives.use(p, v, Date.now());
   }
@@ -1933,8 +1944,10 @@ export class GraaoMatchRoom extends Room {
     const now = Date.now();
     const dir = v.d ? v3normalize({ x: v.d[0] / DIR_SCALE, y: v.d[1] / DIR_SCALE, z: v.d[2] / DIR_SCALE }) : undefined;
     const point = v.p ? { x: v.p[0] / POS_SCALE, y: v.p[1] / POS_SCALE, z: v.p[2] / POS_SCALE } : undefined;
-    // No casting while swimming (the hands are stroking); the client locks its slots in the water too.
+    // No casting while swimming (the hands are stroking); the client locks its slots in the water too. On a ledge or a
+    // wall nothing is cast, on the glider only mobility (which takes the glide over).
     if (p.state.swimming || now < p.useUntil) return reply(AbilityReject.BUSY);
+    if (!traversalAllowsCast(p.state.traversal, v.a)) return reply(AbilityReject.BUSY);
     const r = this.abilities.request(p,{ slot: v.k, id: v.a, seq: v.s, cmdSeq: v.c, dir, point }, now);
     if (r === AbilityReject.OK) {
       p.castUltimate = v.k === ULTIMATE_SLOT;
@@ -2289,6 +2302,8 @@ export class GraaoMatchRoom extends Room {
       p.state.noSprint = statuses.noSprint;
       p.state.airControl = passive.airControl;
       p.state.sprintSpeed = passive.speed;
+      // Bots start no traversal until their navigation plans ledges, walls and glides (docs/world/VERTICAL_BOT_NAVIGATION.md).
+      if (p.bot) p.state.traversalCaps = 0;
       let stepped = 0;
       // Keep a small jitter buffer once the stream is flowing: steady consumption = smooth remote motion.
       const keep = p.queue.length > INPUT_JITTER_BUFFER + 6 ? 0 : INPUT_JITTER_BUFFER;
@@ -2329,6 +2344,8 @@ export class GraaoMatchRoom extends Room {
     }
 
     this.abilities.update(wall, dt);
+    // Bells fall silent (and their winds stop) when their time is up.
+    this.interactives.update(Date.now());
     const tc = performance.now();
     this.creeps.update(wall, dt);
     this.perf.creepMs = this.perf.creepMs * 0.9 + (performance.now() - tc) * 0.1;
@@ -2439,6 +2456,9 @@ export class GraaoMatchRoom extends Room {
         manaShown(p.vitals),
         p.unarmed ? FISTS_SLOT : p.weapon,
         Math.round(p.simTime - now),
+        Math.round(s.stamina * STAMINA_SCALE),
+        packTraversal(s),
+        Math.round(s.ledgeR * POS_SCALE),
       ]);
     }
     const msg: SnapshotMsg = { t: now, k: this.tick, p: snaps };

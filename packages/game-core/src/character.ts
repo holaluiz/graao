@@ -4,7 +4,7 @@
  * the tangent plane of the character's own localUp; gravity is radial; Rapier's kinematic character controller resolves
  * collisions with its "up" set to localUp every step. Animation never moves the capsule (no root motion).
  */
-import { ABILITY_RULES, MOVEMENT, PLANET } from '@graao/game-data';
+import { ABILITY_RULES, MOVEMENT, PLANET, SurfaceFlag, TRAVERSAL, TraversalMode } from '@graao/game-data';
 import {
   InputButton,
   MovementState,
@@ -25,6 +25,8 @@ import {
 } from '@graao/shared';
 import { Group, groups, quatFromUp, type GamePhysics } from './physics';
 import { transportTangent } from './sphere';
+import { GLIDE_STEPS, MANTLE_STEPS, TraversalCap, TraversalProbe, releaseTraversal, steps, traversalMoveState, wallInput, type Grab, type WallHit } from './traversal';
+import { newWindSample, sampleWind } from './wind';
 
 const v3scaleLocal = (v: Vec3, factor: number): Vec3 => ({ x: v.x * factor, y: v.y * factor, z: v.z * factor });
 
@@ -66,6 +68,28 @@ export interface CharacterState {
   sprintSpeed?: number;
   /** One magical extra jump per flight, distinct from the normal double jump. */
   abilityJumpUsed?: boolean;
+  /**
+   * Vertical traversal mode (TraversalMode: ledge hang, mantle, climb, glide; docs/gameplay/TRAVERSAL_STATES.md).
+   * Replicated as MovementState; the wall, the ledge top and the mantle path are re-derived from the geometry each step.
+   */
+  traversal: TraversalMode;
+  /** Stamina (0..TRAVERSAL.stamina.max): hanging, climbing, mantling and gliding spend it, the ground refills it. */
+  stamina: number;
+  /** Whole fixed steps spent in the current traversal mode (mantle timeout, minimum hang). */
+  travSteps: number;
+  /** Whole fixed steps of glide used in this flight (refilled on the ground and in the water). */
+  glideSteps: number;
+  /** Whole fixed steps before another ledge or wall may be grabbed (no regrab spam, no height farming). */
+  grabCooldown: number;
+  /**
+   * Radial distance (m from the planet centre) of the ledge top being hung from or pulled up over (0: none). The
+   * edge's height decides every step of a hang and a mantle; replicated in mm so a client rebuilds the same ledge.
+   */
+  ledgeR: number;
+  /** Sprint was held in the previous command: its rising edge lets go of a ledge or a wall. */
+  sprintHeld: boolean;
+  /** Traversal this character may start (TraversalCap bits; absent = all). The server gives bots none for now. */
+  traversalCaps?: number;
 }
 
 export interface CharacterAbilityMovement {
@@ -104,6 +128,13 @@ export function createCharacterState(pos: Vec3, facing: Vec3): CharacterState {
     slow: 1,
     diving: false,
     swimming: false,
+    traversal: TraversalMode.NONE,
+    stamina: TRAVERSAL.stamina.max,
+    travSteps: 0,
+    glideSteps: 0,
+    grabCooldown: 0,
+    ledgeR: 0,
+    sprintHeld: false,
   };
 }
 
@@ -172,6 +203,18 @@ const CAPSULE_CENTER = MOVEMENT.capsuleHalfHeight + MOVEMENT.capsuleRadius;
 const SLOPE_MIN_COS = Math.cos((4 * Math.PI) / 180);
 const SLOPE_MAX_COS = Math.cos((MOVEMENT.maxSlopeClimbDeg * Math.PI) / 180);
 const PLAYER_GROUPS = groups(Group.PLAYER, Group.TERRAIN | Group.PROP | Group.CHEST | Group.BARRIER | Group.RAIL);
+/** Wall probe heights over the feet while climbing (knees to head). */
+const CLIMB_PROBES = [0.35, 0.9, 1.45] as const;
+/** Face probes from the knees to just under a ledge `edge` m over the feet, 0.15 m apart (a thin eave board or a slab's lip between two probes would let the capsule drift in under it). */
+const FACE_PROBES = Array.from({ length: 16 }, (_, i) => 0.05 + i * 0.15);
+const faceProbes = (edge: number): number[] => FACE_PROBES.filter((h) => h < edge - 0.02);
+/** Probes just under a ledge `edge` m over the feet: the face the hands hang over. */
+const ledgeProbes = (edge: number): number[] => [edge - 0.05, edge - 0.15, edge - 0.3, edge - 0.5];
+const HANG_MIN_STEPS = steps(0.12);
+const REGRAB = steps(TRAVERSAL.cooldown.regrab);
+const EXHAUST = steps(TRAVERSAL.cooldown.afterExhaust);
+const AFTER_MANTLE = steps(TRAVERSAL.cooldown.afterMantle);
+const UP_TRAVERSAL_SPEED = Math.max(TRAVERSAL.mantle.riseSpeed, TRAVERSAL.hang.snapSpeed);
 
 /** One character's Rapier objects: a parentless capsule collider moved by the shared kinematic controller. */
 export interface CharacterBody {
@@ -203,7 +246,19 @@ export class CharacterMotor {
     && (this.barrierFilter === null || !this.physics.barrierHandles.has(c.handle) || this.barrierFilter.has(c.handle))
     && (this.interactiveFilter === null || !this.physics.interactiveHandles.has(c.handle) || this.interactiveFilter.has(c.handle));
 
+  /** Traversal geometry queries (ledges, walls, room on top), through this motor's collider filter. */
+  readonly probe: TraversalProbe;
+  private readonly tmpDrop = v3();
+  /**
+   * Event winds blowing now (indices into physics.winds whose bell rings: interactives.ts); null = none. The room's
+   * InteractiveSystem owns the set (server), its mirror the client's.
+   */
+  windActive: ReadonlySet<number> | null = null;
+  private readonly windOn = (i: number): boolean => this.windActive?.has(i) ?? false;
+  private readonly wind = newWindSample();
+
   constructor(private readonly physics: GamePhysics) {
+    this.probe = new TraversalProbe(physics, () => (this.foreign() ? this.predicate : undefined));
     const c = physics.world.createCharacterController(MOVEMENT.skin);
     c.setMaxSlopeClimbAngle((MOVEMENT.maxSlopeClimbDeg * Math.PI) / 180);
     c.setMinSlopeSlideAngle((MOVEMENT.minSlopeSlideDeg * Math.PI) / 180);
@@ -212,6 +267,39 @@ export class CharacterMotor {
     c.setApplyImpulsesToDynamicBodies(false);
     c.setSlideEnabled(true);
     this.controller = c;
+  }
+
+  /** Does this world hold chests, barriers or crates of other rooms (then queries must filter them out)? */
+  private foreign(): boolean {
+    return (this.chestFilter !== null && this.physics.chestHandles.size > this.chestFilter.size)
+      || (this.barrierFilter !== null && this.physics.barrierHandles.size > this.barrierFilter.size)
+      || (this.interactiveFilter !== null && this.physics.interactiveHandles.size > this.interactiveFilter.size);
+  }
+
+  private setSnap(snap: boolean): void {
+    if (snap === this.snapping) return;
+    if (snap) this.controller.enableSnapToGround(MOVEMENT.snapToGround);
+    else this.controller.disableSnapToGround();
+    this.snapping = snap;
+  }
+
+  /**
+   * Moves the capsule by `desired` through the controller (no snapping), applies it; returns the motion done. The
+   * controller's own grounded flag is not used here: pressed against a wall it can report ground (traversal asks the
+   * ground explicitly, `probe.groundBelow`).
+   */
+  private traverseBy(body: CharacterBody, s: CharacterState, up: Vec3, desired: Vec3): Vec3 {
+    this.setSnap(false);
+    this.controller.setUp(up);
+    this.placeCollider(body.collider, s.pos);
+    this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS, this.foreign() ? this.predicate : undefined);
+    const m = this.controller.computedMovement();
+    const mv = { x: m.x, y: m.y, z: m.z };
+    s.pos.x += mv.x;
+    s.pos.y += mv.y;
+    s.pos.z += mv.z;
+    this.placeCollider(body.collider, s.pos);
+    return mv;
   }
 
   /**
@@ -235,6 +323,209 @@ export class CharacterMotor {
     const f = speed / al;
     v3set(desired, (ax * f + up.x * vs) * dt, (ay * f + up.y * vs) * dt, (az * f + up.z * vs) * dt);
     return true;
+  }
+
+  // ---------------------------------------------------------------------------------------------- traversal
+
+  /** Enters the mode a grab found: the body stops, faces the wall, and the step loop takes it from there. */
+  private beginGrab(s: CharacterState, grab: Grab): void {
+    if (s.abilityMovement?.mode === 'glide') delete s.abilityMovement;
+    s.traversal = grab.kind === 'mantle' ? TraversalMode.MANTLE : grab.kind === 'hang' ? TraversalMode.HANG : TraversalMode.CLIMB;
+    s.travSteps = 0;
+    s.grounded = false;
+    s.jumpBuffer = 0;
+    v3set(s.vel, 0, 0, 0);
+    v3set(s.facing, -grab.wall.flat.x, -grab.wall.flat.y, -grab.wall.flat.z);
+    s.ledgeR = grab.kind === 'climb' ? 0 : v3len(s.pos) + grab.top.height;
+    if (grab.kind === 'mantle') s.stamina = Math.max(0, s.stamina - TRAVERSAL.stamina.mantle);
+  }
+
+  /** Lets go: falls from where it is, no grab for `cooldown` steps. */
+  private drop(s: CharacterState, cooldown = REGRAB): void {
+    releaseTraversal(s, cooldown);
+    s.airTime = MOVEMENT.coyoteTime;
+  }
+
+  /** Jumps off a ledge or a wall: away from it and up. */
+  private jumpOff(s: CharacterState, wall: WallHit, up: Vec3): void {
+    const c = TRAVERSAL.climb;
+    v3set(s.vel, wall.flat.x * c.jumpOffSpeed + up.x * c.jumpOffLift, wall.flat.y * c.jumpOffSpeed + up.y * c.jumpOffLift, wall.flat.z * c.jumpOffSpeed + up.z * c.jumpOffLift);
+    v3assign(s.facing, wall.flat);
+    s.stamina = Math.max(0, s.stamina - TRAVERSAL.stamina.wallJump);
+    this.drop(s);
+  }
+
+  /** Starts pulling up over the ledge whose top is `top` m over the feet (the path is the controller's, step by step). */
+  private beginMantle(s: CharacterState, wall: WallHit, top: number): void {
+    s.traversal = TraversalMode.MANTLE;
+    s.travSteps = 0;
+    s.ledgeR = v3len(s.pos) + top;
+    v3set(s.facing, -wall.flat.x, -wall.flat.y, -wall.flat.z);
+    s.stamina = Math.max(0, s.stamina - TRAVERSAL.stamina.mantle);
+  }
+
+  /** Reaches the top of a mantle or the foot of a wall: ordinary locomotion again, standing. */
+  private stand(s: CharacterState, exitSpeed: number, cooldown: number): void {
+    s.traversal = TraversalMode.NONE;
+    s.travSteps = 0;
+    s.ledgeR = 0;
+    s.grounded = true;
+    s.airTime = 0;
+    s.airJumped = false;
+    s.abilityJumpUsed = false;
+    s.grabCooldown = Math.max(s.grabCooldown, cooldown);
+    v3set(s.vel, s.facing.x * exitSpeed, s.facing.y * exitSpeed, s.facing.z * exitSpeed);
+  }
+
+  /**
+   * One step of a ledge hang, a mantle or a climb (docs/gameplay/TRAVERSAL_STATES.md). Input edges (jump, sprint) come
+   * from the previous command's held state, like the ground jump. No aiming, no buffered jump out of a wall.
+   */
+  private stepTraversal(body: CharacterBody, s: CharacterState, inp: CharacterInput, dt: number, up: Vec3): void {
+    const jumpDown = (inp.buttons & InputButton.JUMP) !== 0;
+    const sprintDown = (inp.buttons & InputButton.SPRINT) !== 0;
+    const jumpEdge = jumpDown && !s.jumpHeld;
+    const sprintEdge = sprintDown && !s.sprintHeld;
+    s.jumpHeld = jumpDown;
+    s.sprintHeld = sprintDown;
+    s.jumpBuffer = 0;
+    s.aiming = false;
+    if (v3len(inp.aim) > 0.5) v3normalize(inp.aim, s.aim);
+    s.travSteps++;
+    const wish = v3projectOnPlane(inp.wish, up, this.tmpWish);
+    const wl = v3len(wish);
+    if (wl > 1) v3set(wish, wish.x / wl, wish.y / wl, wish.z / wl);
+    if (s.traversal === TraversalMode.MANTLE) this.stepMantle(body, s, dt, up);
+    else if (s.traversal === TraversalMode.HANG) this.stepHang(body, s, wish, jumpEdge, sprintEdge, dt, up);
+    else this.stepClimb(body, s, wish, jumpEdge, sprintEdge, dt, up);
+    if (s.traversal !== TraversalMode.NONE) s.moveState = traversalMoveState(s.traversal)!;
+    else s.moveState = s.grounded ? MovementState.IDLE : MovementState.FALL;
+  }
+
+  private stepHang(body: CharacterBody, s: CharacterState, wish: Vec3, jumpEdge: boolean, sprintEdge: boolean, dt: number, up: Vec3): void {
+    const r = TRAVERSAL.reach;
+    const h = TRAVERSAL.hang;
+    // The ledge is where it was grabbed: probe the face just under its top, then the top itself (it may slope along a
+    // shimmy: follow it).
+    const edge = s.ledgeR - v3len(s.pos);
+    const wall = this.probe.wall(s.pos, up, s.facing, ledgeProbes(edge), r.wallReach, r.wallMaxUp, r.reachBack);
+    const top = wall && wall.flags ? this.probe.ledgeTop(s.pos, up, wall, edge - 0.3, edge + 0.3) : null;
+    if (!wall || !top) return this.drop(s);
+    s.ledgeR = v3len(s.pos) + top.height;
+    s.stamina = Math.max(0, s.stamina - TRAVERSAL.stamina.hang * dt);
+    if (s.stamina <= 0) return this.drop(s, EXHAUST);
+    const input = wallInput(wish, wall.flat, up);
+    const caps = s.traversalCaps ?? TraversalCap.ALL;
+    if (jumpEdge) {
+      if (input.toward < -0.5) return this.jumpOff(s, wall, up);
+      if (this.probe.canMantle(s.pos, up, wall, top)) return this.beginMantle(s, wall, top.height);
+    }
+    if (sprintEdge) return this.drop(s);
+    if (input.toward > 0.5 && s.travSteps >= HANG_MIN_STEPS && this.probe.canMantle(s.pos, up, wall, top)) return this.beginMantle(s, wall, top.height);
+    if (input.toward < -0.5) {
+      if (wall.flags & SurfaceFlag.CLIMB && caps & TraversalCap.CLIMB) {
+        s.traversal = TraversalMode.CLIMB;
+        s.travSteps = 0;
+        s.ledgeR = 0;
+      } else return this.drop(s);
+    }
+    // Shimmy only where the ledge goes on (probed one step ahead along the wall).
+    let side = Math.abs(input.side) > 0.3 ? input.side : 0;
+    if (side !== 0) {
+      const ahead = v3addScaled(s.pos, input.right, Math.sign(side) * (MOVEMENT.capsuleRadius + 0.1), this.tmpTarget);
+      const e2 = s.ledgeR - v3len(ahead);
+      const w2 = this.probe.wall(ahead, up, s.facing, ledgeProbes(e2), r.wallReach, r.wallMaxUp, r.reachBack);
+      if (!w2 || !w2.flags || !this.probe.ledgeTop(ahead, up, w2, e2 - 0.3, e2 + 0.3)) side = 0;
+    }
+    // Slide into the hang place: the wall gap, the hands on the edge, plus the shimmy (all through the controller).
+    const k = UP_TRAVERSAL_SPEED * dt;
+    const into = Math.max(-k, Math.min(k, wall.dist - (MOVEMENT.capsuleRadius + h.gap)));
+    const lift = Math.max(-k, Math.min(k, top.height - h.depth));
+    const sideMove = side * h.shimmySpeed * dt;
+    const desired = v3set(this.tmpDesired,
+      -wall.flat.x * into + up.x * lift + input.right.x * sideMove,
+      -wall.flat.y * into + up.y * lift + input.right.y * sideMove,
+      -wall.flat.z * into + up.z * lift + input.right.z * sideMove);
+    const mv = this.traverseBy(body, s, up, desired);
+    v3set(s.vel, mv.x / dt, mv.y / dt, mv.z / dt);
+    v3set(s.facing, -wall.flat.x, -wall.flat.y, -wall.flat.z);
+    s.grounded = false;
+    // Hanging so low the feet touch the ground: just standing.
+    if (lift <= 0.01 && this.probe.groundBelow(s.pos, up, 0.06)) this.stand(s, 0, REGRAB);
+  }
+
+  private stepMantle(body: CharacterBody, s: CharacterState, dt: number, up: Vec3): void {
+    const m = TRAVERSAL.mantle;
+    const f = s.facing;
+    // Rise along the wall until the feet clear the top just past the face, then move forward onto it (once moving
+    // forward it keeps going: a pitched roof rising ahead is walked up, not risen to).
+    // Moving forward (and not rising: closing in on the wall while rising is not the forward phase).
+    const forward = v3dot(s.vel, f) > 0.5 * m.forwardSpeed && v3dot(s.vel, up) < 0.8 * m.riseSpeed;
+    // Rise until the feet clear the ledge that was grabbed, keeping the hang gap to the most prominent face under it (a
+    // slab's lip, an eave board, a cornice: closer would catch it on the way up).
+    const edge = s.ledgeR - v3len(s.pos);
+    const rising = !forward && edge > -m.clearance;
+    let into = 0;
+    if (rising) {
+      const r = TRAVERSAL.reach;
+      const face = this.probe.wall(s.pos, up, f, faceProbes(edge), r.wallReach, r.wallMaxUp, r.reachBack);
+      const dist = face ? face.dist : MOVEMENT.capsuleRadius + TRAVERSAL.hang.gap;
+      into = Math.max(-m.forwardSpeed * dt, Math.min(m.forwardSpeed * dt, dist - (MOVEMENT.capsuleRadius + TRAVERSAL.hang.gap)));
+    }
+    const desired = rising
+      ? v3set(this.tmpDesired, up.x * m.riseSpeed * dt + f.x * into, up.y * m.riseSpeed * dt + f.y * into, up.z * m.riseSpeed * dt + f.z * into)
+      // Forward with a little settling down onto the top (a pitched roof going up is climbed by the controller).
+      : v3set(this.tmpDesired, (f.x * m.forwardSpeed - up.x) * dt, (f.y * m.forwardSpeed - up.y) * dt, (f.z * m.forwardSpeed - up.z) * dt);
+    const mv = this.traverseBy(body, s, up, desired);
+    v3set(s.vel, mv.x / dt, mv.y / dt, mv.z / dt);
+    s.grounded = false;
+    // Blocked on the way up (a ceiling the start check could not see coming) or too long: let go.
+    if ((rising && v3dot(mv, up) < 0.3 * m.riseSpeed * dt) || s.travSteps > MANTLE_STEPS) return this.drop(s);
+    // Done when the back of the capsule stands over the top.
+    if (!rising) {
+      const back = v3addScaled(s.pos, f, -(MOVEMENT.capsuleRadius - 0.05), this.tmpTarget);
+      if (this.probe.groundBelow(back, up, 0.35)) this.stand(s, m.exitSpeed, AFTER_MANTLE);
+    }
+  }
+
+  private stepClimb(body: CharacterBody, s: CharacterState, wish: Vec3, jumpEdge: boolean, sprintEdge: boolean, dt: number, up: Vec3): void {
+    const c = TRAVERSAL.climb;
+    const st = TRAVERSAL.stamina;
+    const wall = this.probe.wall(s.pos, up, s.facing, CLIMB_PROBES, MOVEMENT.capsuleRadius + 0.6, c.wallMaxUp);
+    if (!wall || !(wall.flags & SurfaceFlag.CLIMB)) return this.drop(s);
+    const input = wallInput(wish, wall.flat, up);
+    const toward = Math.abs(input.toward) > 0.15 ? input.toward : 0;
+    const side = Math.abs(input.side) > 0.15 ? input.side : 0;
+    const drain = Math.max(st.climbIdle, (toward > 0 ? st.climbUp * toward : -st.climbDown * toward) + st.climbSide * Math.abs(side));
+    s.stamina = Math.max(0, s.stamina - drain * dt);
+    if (s.stamina <= 0) return this.drop(s, EXHAUST);
+    if (jumpEdge) return this.jumpOff(s, wall, up);
+    if (sprintEdge) return this.drop(s);
+    // Climbing up to where the wall ends near the hands: pull up over the top.
+    if (toward > 0.3) {
+      const top = this.probe.ledgeTop(s.pos, up, wall, 1.0, TRAVERSAL.reach.ledgeMax);
+      if (top && this.probe.canMantle(s.pos, up, wall, top)) return this.beginMantle(s, wall, top.height);
+    }
+    // Along the wall: its own up (a leaning slab is climbed along its slope) and right.
+    const n = wall.normal;
+    const nu = v3dot(n, up);
+    const wallUp = v3normalize({ x: up.x - n.x * nu, y: up.y - n.y * nu, z: up.z - n.z * nu });
+    const wallRight = v3normalize(v3cross(wallUp, n));
+    const vUp = toward >= 0 ? c.upSpeed * toward : c.downSpeed * toward;
+    const vSide = c.sideSpeed * side;
+    // Keep the capsule `gap` off the face (the gap measured across the face, not along the probe).
+    const gap = wall.dist * v3dot(wall.flat, n) - (MOVEMENT.capsuleRadius + c.gap);
+    const stick = Math.max(-c.stick * dt * 3, Math.min(c.stick * dt * 3, gap));
+    const desired = v3set(this.tmpDesired,
+      (wallUp.x * vUp + wallRight.x * vSide) * dt - n.x * stick,
+      (wallUp.y * vUp + wallRight.y * vSide) * dt - n.y * stick,
+      (wallUp.z * vUp + wallRight.z * vSide) * dt - n.z * stick);
+    const mv = this.traverseBy(body, s, up, desired);
+    v3set(s.vel, mv.x / dt, mv.y / dt, mv.z / dt);
+    v3set(s.facing, -wall.flat.x, -wall.flat.y, -wall.flat.z);
+    s.grounded = false;
+    // Climbing down onto the ground (or standing at the foot of the wall without pushing up): walk away.
+    if (toward <= 0.1 && this.probe.groundBelow(s.pos, up, 0.08)) this.stand(s, 0, REGRAB);
   }
 
   createBody(state: CharacterState): CharacterBody {
@@ -266,6 +557,7 @@ export class CharacterMotor {
     }
     const abilityMove = s.abilityMovement;
     if (s.rooted) s.dashSteps = 0;
+    if (s.grabCooldown > 0) s.grabCooldown--;
     // Water: touching the surface ends a dive; deep enough the character swims until the bottom lifts the feet near
     // the surface again (hysteresis, so wading at chest depth does not flicker in and out of swimming).
     const depth = waterDepth(s.pos);
@@ -274,11 +566,27 @@ export class CharacterMotor {
     else if (s.swimming && depth < MOVEMENT.swimExitDepth) s.swimming = false;
     const diving = s.diving;
     const swimming = s.swimming;
-    if (swimming) { s.airJumped = false; s.abilityJumpUsed = false; }
+    if (swimming) { s.airJumped = false; s.abilityJumpUsed = false; s.glideSteps = 0; }
+    // Hanging, mantling and climbing own the step; water, a dive, a snare, a dash or an ability's movement end them.
+    if (s.traversal === TraversalMode.HANG || s.traversal === TraversalMode.MANTLE || s.traversal === TraversalMode.CLIMB) {
+      if (swimming || diving || s.rooted || abilityMove || s.dashSteps > 0) releaseTraversal(s);
+      else {
+        this.stepTraversal(body, s, inp, dt, up);
+        return;
+      }
+    }
     const jumpDown = !diving && !s.rooted && (inp.buttons & InputButton.JUMP) !== 0;
     const sprint = !s.noSprint && (inp.buttons & InputButton.SPRINT) !== 0;
-    // Hands are spread while skydiving and stroking while swimming: no aiming, no firing pose.
-    const handsFree = !diving && !swimming && abilityMove?.mode !== 'flight';
+    s.sprintHeld = (inp.buttons & InputButton.SPRINT) !== 0;
+    // Universal glide: held jump while falling, closed by letting go, landing, water, any ability movement, a dash,
+    // a snare, or running out of glide time or stamina.
+    if (s.traversal === TraversalMode.GLIDE && (!jumpDown || s.grounded || swimming || diving || abilityMove || s.dashSteps > 0 || s.glideSteps >= GLIDE_STEPS || s.stamina <= 0)) {
+      s.traversal = TraversalMode.NONE;
+      s.travSteps = 0;
+    }
+    const gliding = s.traversal === TraversalMode.GLIDE;
+    // Hands are spread while skydiving, stroking while swimming and on the glider: no aiming, no firing pose.
+    const handsFree = !diving && !swimming && abilityMove?.mode !== 'flight' && !gliding;
     s.aiming = handsFree && (inp.buttons & InputButton.AIM) !== 0;
     const firing = handsFree && (inp.buttons & InputButton.FIRE) !== 0;
     if (v3len(inp.aim) > 0.5) v3normalize(inp.aim, s.aim);
@@ -296,7 +604,7 @@ export class CharacterMotor {
 
     const forwardish = wishLen > 0.1 ? v3dot(wish, s.facing) / Math.max(wishLen, 1e-6) : 0;
     const canSprint = handsFree && sprint && !s.aiming && !firing && forwardish > 0.3;
-    const maxSpeed = abilityMove?.mode === 'flight' || abilityMove?.mode === 'glide' ? abilityMove.speed * s.slow : diving
+    const maxSpeed = abilityMove?.mode === 'flight' || abilityMove?.mode === 'glide' ? abilityMove.speed * s.slow : gliding ? TRAVERSAL.glide.speed * s.slow : diving
       ? sprint
         ? MOVEMENT.diveFastSpeed
         : MOVEMENT.diveSpeed
@@ -305,12 +613,20 @@ export class CharacterMotor {
         : (s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed)
           * (canSprint ? Math.min(ABILITY_RULES.maxSpeedFactor, s.slow * (s.sprintSpeed ?? 1)) : s.slow) * (depth > 0 ? wadeFactor(depth) : 1);
     const dashing = s.dashSteps > 0;
+    // Wind volumes (wind.ts), in the air only. A directional wind moves the air itself: steering aims at the wish plus
+    // the wind's velocity, so a body with no input is carried along at its speed (a share of it without the glider);
+    // an updraft is applied to the vertical speed below. Each acts toward a target speed, so nothing piles up.
+    const kite = gliding || abilityMove?.mode === 'glide';
+    const windy = !s.grounded && !swimming && !diving && !dashing && !s.rooted && abilityMove?.mode !== 'flight' && abilityMove?.mode !== 'grapple' && this.physics.winds.length > 0;
+    const w = windy ? sampleWind(this.physics.winds, this.windOn, s.pos, up, this.wind) : null;
+    const push = w ? w.push * (kite ? 1 : TRAVERSAL.wind.noGlideShare) : 0;
     if (dashing) {
       // Dash: a fixed ground-plane velocity along the dash direction; no steering.
       const dd = v3normalize(v3projectOnPlane(s.dashDir, up, this.tmpTarget), this.tmpTarget);
       v3set(h, dd.x * s.dashSpeed, dd.y * s.dashSpeed, dd.z * s.dashSpeed);
     } else {
       const target = v3set(this.tmpTarget, wish.x * maxSpeed, wish.y * maxSpeed, wish.z * maxSpeed);
+      if (push > 0) v3addScaled(target, w!.dir, push, target);
       // Accelerate horizontal velocity toward the target.
       // A swimmer whose feet touch the bottom pushes off it like on land (climbing the shore slope out of a lake
       // would otherwise bleed the weak swim acceleration away).
@@ -322,7 +638,7 @@ export class CharacterMotor {
             ? wishLen > 0.05
               ? MOVEMENT.groundAccel
               : MOVEMENT.groundDecel
-            : MOVEMENT.airAccel * (s.airControl ?? 1) * (abilityMove?.airControl ?? 1);
+            : Math.max(gliding ? TRAVERSAL.glide.accel : MOVEMENT.airAccel, push > 0 ? TRAVERSAL.wind.pushAccel : 0) * (s.airControl ?? 1) * (abilityMove?.airControl ?? 1);
       const dx = target.x - h.x, dy = target.y - h.y, dz = target.z - h.z;
       const dl = Math.hypot(dx, dy, dz);
       const maxDv = accel * dt;
@@ -374,6 +690,11 @@ export class CharacterMotor {
           ? MOVEMENT.swimMaxRise
           : Math.max(-MOVEMENT.swimMaxRise, Math.min(MOVEMENT.swimFloatRise, (depth - MOVEMENT.swimFloatDepth) * MOVEMENT.swimBuoyancy));
       vs += (target - vs) * Math.min(1, MOVEMENT.swimDrag * dt);
+    } else if (gliding) {
+      // Under the glider: gravity eases toward the glide's fall speed, a faster fall is braked to it. Never upward.
+      const g = TRAVERSAL.glide;
+      if (vs > -g.fallSpeed) vs = Math.max(-g.fallSpeed, vs - PLANET.gravity * g.gravityFactor * dt);
+      else vs = Math.min(-g.fallSpeed, vs + (-g.fallSpeed - vs) * Math.min(1, g.brake * dt));
     } else if (!s.grounded || jumped) vs -= PLANET.gravity * (abilityMove?.gravityFactor ?? 1) * dt;
     else vs = -0.5; // keep contact; snap-to-ground does the rest
     if (diving) {
@@ -397,6 +718,17 @@ export class CharacterMotor {
         vs = v3dot(velocity, up);
       }
     }
+    // An updraft lifts a glider toward its rise speed, and only slows anyone else's fall (no rise without the kite).
+    const inUpdraft = !!w && w.lift > 0 && !jumped;
+    if (inUpdraft) {
+      const W = TRAVERSAL.wind;
+      if (kite) {
+        if (vs < w!.lift) vs = Math.min(w!.lift, vs + W.liftAccel * dt);
+      } else if (vs < -W.fallCapNoGlide) vs = Math.min(-W.fallCapNoGlide, vs + W.fallBrakeNoGlide * dt);
+    }
+    // The play zone's radial ceiling: no wind, flight or jump rises past it.
+    const altitude = v3len(s.pos) - PLANET.radius;
+    if (altitude > TRAVERSAL.ceiling) vs = Math.min(vs, altitude > TRAVERSAL.ceiling + 2 ? -2 : 0);
     if (s.rooted) v3set(h, 0, 0, 0);
 
     const desired = v3set(this.tmpDesired, (h.x + up.x * vs) * dt, (h.y + up.y * vs) * dt, (h.z + up.z * vs) * dt);
@@ -405,19 +737,11 @@ export class CharacterMotor {
     const onSlope = s.grounded && !jumped && !swimming && !diving && !abilityMove && !s.rooted && this.slopeAlong(s.pos, up, h, dt, vs, desired);
 
     // A floating body must not be pulled down onto the lake bed (the controller is shared: set it every step).
-    const snap = !s.swimming;
-    if (snap !== this.snapping) {
-      if (snap) this.controller.enableSnapToGround(MOVEMENT.snapToGround);
-      else this.controller.disableSnapToGround();
-      this.snapping = snap;
-    }
+    this.setSnap(!s.swimming);
     this.controller.setUp(up);
     this.placeCollider(body.collider, s.pos);
     // Another room's chests are invisible here (only checked when this world holds chests this motor does not own).
-    const foreign = (this.chestFilter !== null && this.physics.chestHandles.size > this.chestFilter.size)
-      || (this.barrierFilter !== null && this.physics.barrierHandles.size > this.barrierFilter.size)
-      || (this.interactiveFilter !== null && this.physics.interactiveHandles.size > this.interactiveFilter.size);
-    this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS, foreign ? this.predicate : undefined);
+    this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS, this.foreign() ? this.predicate : undefined);
     const mv = this.controller.computedMovement();
     const groundedNow = this.controller.computedGrounded();
 
@@ -462,6 +786,49 @@ export class CharacterMotor {
     }
     v3set(s.vel, actualH.x + newUp.x * vs, actualH.y + newUp.y * vs, actualH.z + newUp.z * vs);
 
+    // Traversal bookkeeping: the ground refills stamina and the glide; the glider spends both.
+    const st = TRAVERSAL.stamina;
+    if (s.grounded) {
+      // Landing folds the glider at once (the landing step already reads as on the ground).
+      if (s.traversal === TraversalMode.GLIDE) {
+        s.traversal = TraversalMode.NONE;
+        s.travSteps = 0;
+      }
+      s.glideSteps = 0;
+      if (!swimming) s.stamina = Math.min(st.max, s.stamina + (v3len(actualH) < st.restSpeed ? st.regenRest : st.regenGround) * dt);
+    }
+    if (s.traversal === TraversalMode.GLIDE) {
+      // Riding an updraft does not use up the glide (stamina still drains: no endless hover).
+      if (!inUpdraft) s.glideSteps++;
+      s.travSteps++;
+      s.stamina = Math.max(0, s.stamina - st.glide * dt);
+    }
+    const caps = s.traversalCaps ?? TraversalCap.ALL;
+    const airborne = !s.grounded && !swimming && !s.diving && !dashing && !s.rooted;
+    // Grabs: moving into a tagged wall in the air (a ledge to vault or hang from, a climbable face).
+    if (airborne && caps & (TraversalCap.LEDGE | TraversalCap.CLIMB) && s.grabCooldown === 0 && wishLen > 0.3
+      && (!s.abilityMovement || s.abilityMovement.mode === 'glide')) {
+      const dir = v3projectOnPlane(wish, newUp, this.tmpDrop);
+      if (v3len(dir) > 1e-3) {
+        const grab = this.probe.detect(s, newUp, v3normalize(dir, dir));
+        if (grab) {
+          this.beginGrab(s, grab);
+          s.moveState = traversalMoveState(s.traversal)!;
+          return;
+        }
+      }
+    }
+    // The glider opens on the way down with jump held, high enough over whatever is below; in an updraft the wind
+    // catches it at once (jump held a moment after leaving the ground), rising or not.
+    if (airborne && s.traversal === TraversalMode.NONE && caps & TraversalCap.GLIDE && jumpDown && !jumped && !s.abilityMovement
+      && s.glideSteps < GLIDE_STEPS && s.stamina >= st.minGlide
+      && (inUpdraft
+        ? s.airTime >= TRAVERSAL.wind.openAirTime
+        : s.airTime >= TRAVERSAL.glide.minAirTime && vs < -TRAVERSAL.glide.minFallSpeed && this.probe.clearBelow(s.pos, newUp, TRAVERSAL.glide.minClearance))) {
+      s.traversal = TraversalMode.GLIDE;
+      s.travSteps = 0;
+    }
+
     // Facing: transported, then turned toward aim (when aiming/firing) or toward movement.
     transportTangent(s.facing, up, newUp, s.facing);
     let turnTarget: Vec3 | null = null;
@@ -487,7 +854,8 @@ export class CharacterMotor {
 
     // Semantic movement state for animation and replication.
     const speed = v3len(actualH);
-    if (s.swimming) s.moveState = MovementState.SWIM;
+    if (s.traversal !== TraversalMode.NONE) s.moveState = traversalMoveState(s.traversal)!;
+    else if (s.swimming) s.moveState = MovementState.SWIM;
     else if (!s.grounded) s.moveState = vs > 0.5 ? MovementState.JUMP : MovementState.FALL;
     else if (speed < 0.35) s.moveState = MovementState.IDLE;
     else if (speed < MOVEMENT.walkThreshold) s.moveState = MovementState.WALK;

@@ -29,8 +29,9 @@ import {
   projectileReach,
   type AbilityActor,
   type ProjectileBody,
+  traversalAllowsCast,
 } from '@graao/game-core';
-import { ABILITIES, ULTIMATE_SLOT, isAbilityId, type AbilityDefinition, type AbilityEffect, type AbilityId, type Loadout } from '@graao/game-data';
+import { ABILITIES, TRAVERSAL_LABEL, ULTIMATE_SLOT, isAbilityId, type AbilityDefinition, type AbilityEffect, type AbilityId, type Loadout } from '@graao/game-data';
 import {
   AbilityReject,
   DIR_SCALE,
@@ -271,6 +272,13 @@ export class AbilityDirector {
     if (!app.input.locked) return;
     if (app.local.state.swimming && app.combat.alive) {
       app.hud.notice('NADANDO · SEM MAGIAS NA ÁGUA', 1.1);
+      app.hud.abilityDenied(slot);
+      app.audio.play('ab.denied');
+      return;
+    }
+    // On a ledge or a wall nothing is cast; on the glider only mobility (the server refuses the rest too).
+    if (app.combat.alive && !traversalAllowsCast(app.local.state.traversal, this.ctl.def(slot).id)) {
+      app.hud.notice(`${TRAVERSAL_LABEL[app.local.state.traversal]} · MÃOS OCUPADAS`, 0.9);
       app.hud.abilityDenied(slot);
       app.audio.play('ab.denied');
       return;

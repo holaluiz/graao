@@ -9,6 +9,8 @@
  * - Calls now and then: a sabiá's whistle and the chapel bell in the Vila, a bem-te-vi, pigeons and a bicycle bell in
  *   the Bairro, an egret on the lake, a hawk over the serras, crickets in the Bosque.
  * - Doors (a creak and the latch, a thud) and crates (a knock, the crunch of a break), placed by distance and side.
+ * - Wind volumes (WindDirector): a gusting bed whose level follows the nearest updraft or directional wind; the bells of
+ *   the floating islands, heard far over the planet.
  *
  * Levels stay low and the beds go through the ambience bus (ducked by the Tormenta, the ambience slider), so steps,
  * shots and warnings always come first.
@@ -18,7 +20,7 @@ import type { Placement } from '@graao/game-core';
 import type { Vec3 } from '@graao/shared';
 import type { GRAAudioManager } from './GRAAudioManager';
 
-type Bed = 'murmur' | 'water' | 'insects' | 'leaves' | 'crystal';
+type Bed = 'murmur' | 'water' | 'insects' | 'leaves' | 'crystal' | 'gust';
 type Call = 'sabia' | 'bemtevi' | 'pombo' | 'sino' | 'garca' | 'gaviao' | 'grilo' | 'bicicleta';
 
 interface Soundscape {
@@ -60,6 +62,8 @@ export class WorldAudio {
   private readonly water: { pos: Vec3; reach: number }[] = [];
   private readonly regions = REGIONS.filter((r) => SCAPES[r.key]).map((r) => ({ key: r.key, radius: r.radiusDeg, dir: dirOf(r.lat, r.lon) }));
   private time = 0;
+  /** Level of the wind volumes' gusting bed (0..1), set by the WindDirector every frame. */
+  private gust = 0;
 
   constructor(private readonly audio: GRAAudioManager, placements: readonly Placement[]) {
     for (const p of placements) {
@@ -84,7 +88,7 @@ export class WorldAudio {
       strongest = Math.max(strongest, w);
     }
     this.weights.campo = 1 - strongest;
-    const target: Record<Bed, number> = { murmur: 0, water: 0, insects: 0, leaves: 0, crystal: 0 };
+    const target: Record<Bed, number> = { murmur: 0, water: 0, insects: 0, leaves: 0, crystal: 0, gust: this.gust * 1.4 };
     for (const [key, w] of Object.entries(this.weights)) {
       if (w <= 0) continue;
       for (const [bed, v] of Object.entries(SCAPES[key]!.beds)) target[bed as Bed] += w * v;
@@ -120,6 +124,11 @@ export class WorldAudio {
     void right;
   }
 
+  /** How loud the wind volumes are where the listener is (0..1). */
+  wind(level: number): void {
+    this.gust = Math.max(0, Math.min(1, level));
+  }
+
   /** A door swung open (creak, latch) or shut (thud, latch) at `at`. */
   door(at: Vec3, open: boolean, ear: Vec3, right: Vec3): void {
     const v = this.place(at, ear, right, 34);
@@ -150,6 +159,35 @@ export class WorldAudio {
       this.knock(out, g, t, 170, 0.16, 0.9);
       this.knock(out, g, t + 0.02, 1400, 0.05, 0.4);
       this.knock(out, g, t + 0.09, 2800, 0.04, 0.3);
+    }
+  }
+
+  /**
+   * A bell rung at `at` (a floating island's sineira): four strokes of inharmonic partials, heard far over the planet
+   * (everyone learns that someone is up there).
+   */
+  bell(at: Vec3, ear: Vec3, right: Vec3): void {
+    const v = this.place(at, ear, right, 120);
+    const out = this.audio.output('loot');
+    if (!v || !out) return;
+    const { ctx } = out;
+    const t = ctx.currentTime + 0.01;
+    const g = this.voice(out, 0.25 + v.gain * 0.75, v.pan);
+    for (let k = 0; k < 4; k++) {
+      for (const [m, a] of [[1, 0.09], [2.0, 0.05], [2.4, 0.04], [3.0, 0.03], [4.2, 0.016], [5.4, 0.008]] as const) {
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        const f = 523.25 * m;
+        o.frequency.setValueAtTime(f, t + k * 0.9);
+        o.frequency.exponentialRampToValueAtTime(f * 0.997, t + k * 0.9 + 2.4);
+        const e = ctx.createGain();
+        e.gain.setValueAtTime(0, t + k * 0.9);
+        e.gain.linearRampToValueAtTime(a, t + k * 0.9 + 0.01);
+        e.gain.exponentialRampToValueAtTime(0.0006, t + k * 0.9 + 2.8 / Math.sqrt(m));
+        o.connect(e).connect(g);
+        o.start(t + k * 0.9);
+        o.stop(t + k * 0.9 + 3);
+      }
     }
   }
 
@@ -285,6 +323,24 @@ export class WorldAudio {
       g.gain.value = 0.35;
       lfo(0.13, 0.3, g.gain);
       loop().connect(hp).connect(lp).connect(g).connect(gain);
+    } else if (kind === 'gust') {
+      // Wind volumes: a low rush with a whistle on top, swelling in slow gusts.
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 700;
+      lfo(0.21, 260, lp.frequency);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 2400;
+      bp.Q.value = 6;
+      lfo(0.13, 500, bp.frequency);
+      const whistle = ctx.createGain();
+      whistle.gain.value = 0.18;
+      const g = ctx.createGain();
+      g.gain.value = 0.9;
+      lfo(0.17, 0.35, g.gain);
+      loop().connect(lp).connect(g).connect(gain);
+      loop().connect(bp).connect(whistle).connect(g);
     } else {
       // Crystals: two soft high tones beating slowly.
       for (const [f, a] of [[1318.5, 0.05], [1975.5, 0.035], [1320.8, 0.04]] as const) {

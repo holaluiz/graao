@@ -4,10 +4,11 @@
  * visuals from the same placements; the server builds only the colliders.
  * Local frame convention: X = side (up × forward), Y = local up, Z = forward.
  */
-import { GRAAO_MAP, KIT, KIT_PREFABS, MATCH_SPAWNS, PLANET, REGIONS, SCATTER, SPAWNS, SPAWN_CLEAR_DEG, resolvePrefab, type Biome, type GraaoMap, type KitBuilding, type KitColor, type KitPart, type KitPiece, type KitPrefab, type MapPlacement, type ScatterKind, type StructureKind } from '@graao/game-data';
+import { GRAAO_MAP, KIT, KIT_PREFABS, MATCH_SPAWNS, PLANET, REGIONS, SCATTER, SPAWNS, SPAWN_CLEAR_DEG, SurfaceFlag, resolvePrefab, surfaceFlags, type Biome, type GraaoMap, type KitBuilding, type KitColor, type KitPart, type KitPiece, type KitPrefab, type MapPlacement, type ScatterKind, type StructureKind, type TraversalSurface } from '@graao/game-data';
 import { v3, v3angle, v3cross, v3dot, v3normalize, v3rotateAxis, type Vec3 } from '@graao/shared';
 import { mulberry32 } from './rng';
 import { headingTangent, latLonToDir } from './sphere';
+import { resolveWinds, type WindVolume } from './wind';
 import type { Terrain } from './terrain';
 import { buildTrails, trailEdgeDistance } from './trails';
 
@@ -22,8 +23,11 @@ export type ColliderPrimitive =
   | { type: 'ball'; r: number; x: number; y: number; z: number; block?: 'move' }
   | { type: 'hull'; points: number[]; block?: 'move' };
 
-/** A kit part's collider also names what it is made of (its KitColor: 'madeira', 'calcamento'…), for footsteps. */
-export type SurfacedCollider = ColliderPrimitive & { surface?: string };
+/**
+ * A kit part's collider also names what it is made of (its KitColor: 'madeira', 'calcamento'…), for footsteps, and
+ * how it plays for traversal (`trav`: SurfaceFlag bits — grabbable ledges, climbable faces).
+ */
+export type SurfacedCollider = ColliderPrimitive & { surface?: string; trav?: number };
 
 export interface Quat {
   x: number;
@@ -106,7 +110,29 @@ export const STRUCTURE_DIMS = {
   shard: { radius: 5, depth: 7 },
 } as const;
 
-function structureColliders(kind: StructureKind, variant: number, s: number): { colliders: ColliderPrimitive[]; radius: number; centerHeight: number } {
+/**
+ * Traversal of the classic structures: houses, stone walls, arches, the well and the floating shard have grabbable
+ * edges; the tower's dome, the giant tree, lamps and crystals do not.
+ */
+const STRUCTURE_TRAVERSAL: Record<StructureKind, number> = {
+  house: SurfaceFlag.LEDGE,
+  wall: SurfaceFlag.LEDGE,
+  arch: SurfaceFlag.LEDGE,
+  well: SurfaceFlag.LEDGE,
+  floating_shard: SurfaceFlag.LEDGE,
+  tower: 0,
+  giant_tree: 0,
+  lamp: 0,
+  crystal_cluster: 0,
+};
+
+function structureColliders(kind: StructureKind, variant: number, s: number): { colliders: SurfacedCollider[]; radius: number; centerHeight: number } {
+  const c = structureShape(kind, variant, s);
+  const trav = STRUCTURE_TRAVERSAL[kind];
+  return { ...c, colliders: c.colliders.map((col) => (trav ? { ...col, trav } : col)) };
+}
+
+function structureShape(kind: StructureKind, variant: number, s: number): { colliders: ColliderPrimitive[]; radius: number; centerHeight: number } {
   switch (kind) {
     case 'house': {
       const v = HOUSE_VARIANTS[variant % HOUSE_VARIANTS.length]!;
@@ -212,10 +238,13 @@ export function quatRotate(q: Quat, x: number, y: number, z: number): [number, n
 
 const hasRotation = (p: KitPart) => !!(p.rx || p.ry || p.rz);
 
-/** Collider of one kit part at scale `s` (null for decoration). */
-function kitPartCollider(p: KitPart, s: number): SurfacedCollider | null {
+/** Collider of one kit part at scale `s` (null for decoration); `prefabTrav` is its prefab's traversal default. */
+function kitPartCollider(p: KitPart, s: number, prefabTrav?: TraversalSurface): SurfacedCollider | null {
   if ((p.solid ?? 'full') === 'none') return null;
-  const block = p.solid === 'move' ? { block: 'move' as const, surface: p.color } : { surface: p.color };
+  // Railings and fences (movement-only) are never ledges unless a part says so.
+  const trav = surfaceFlags(p.traversal ?? (p.solid === 'move' ? 'none' : prefabTrav));
+  const tag = trav ? { trav } : {};
+  const block = p.solid === 'move' ? { block: 'move' as const, surface: p.color, ...tag } : { surface: p.color, ...tag };
   const q = hasRotation(p) ? { q: quatFromEulerDeg(p.rx, p.ry, p.rz) } : {};
   switch (p.shape) {
     case 'box':
@@ -256,6 +285,8 @@ interface KitShape {
   colliders: ColliderPrimitive[];
   /** Anchor points (grapple targets) in the prefab frame. */
   anchors: [number, number, number][];
+  /** Bells (interactive) in the prefab frame. */
+  bells: [number, number, number][];
   /** Bounding sphere radius around (0, centerHeight, 0). */
   radius: number;
   centerHeight: number;
@@ -267,11 +298,13 @@ interface KitShape {
 export function kitShape(prefab: KitPrefab, s = 1): KitShape {
   const colliders: ColliderPrimitive[] = [];
   const anchors: [number, number, number][] = [];
+  const bells: [number, number, number][] = [];
   let minY = Infinity, maxY = -Infinity, reach = 0;
   for (const p of prefab.parts) {
-    const c = kitPartCollider(p, s);
+    const c = kitPartCollider(p, s, prefab.traversal);
     if (c) colliders.push(c);
     if (p.anchor) anchors.push([p.x * s, p.y * s, p.z * s]);
+    if (p.bell) bells.push([p.x * s, p.y * s, p.z * s]);
     const based = p.shape === 'gable' || p.shape === 'hip';
     const ext = p.shape === 'ball' ? p.hx : hasRotation(p) || based ? Math.hypot(p.hx, p.hy, p.hz) : 0;
     const ex = ext || p.hx, ez = ext || p.hz, ey = ext || p.hy;
@@ -282,7 +315,7 @@ export function kitShape(prefab: KitPrefab, s = 1): KitShape {
     reach = Math.max(reach, Math.hypot(Math.abs(p.x) + ex, Math.abs(p.z) + ez) * s);
   }
   const centerHeight = (minY + maxY) / 2;
-  return { colliders, anchors, centerHeight, radius: Math.hypot(reach, (maxY - minY) / 2), footprint: reach };
+  return { colliders, anchors, bells, centerHeight, radius: Math.hypot(reach, (maxY - minY) / 2), footprint: reach };
 }
 
 function scatterColliders(kind: PlacementKind, s: number): { colliders: ColliderPrimitive[]; radius: number; centerHeight: number } {
@@ -316,6 +349,18 @@ export interface WorldLayout {
   doors: DoorDef[];
   /** Breakable crates (placements with `breakable`), in map order: index = crate id on the wire. */
   crates: Placement[];
+  /** Wind volumes of the map (wind.ts), in map order: index = wind id on the wire. */
+  winds?: WindVolume[];
+  /** Interactive bells (kit parts marked `bell`), in map order: index = bell id on the wire. */
+  bells?: BellDef[];
+}
+
+/** An interactive bell: where it hangs (world) and the placement that owns it (winds name it as their `trigger`). */
+export interface BellDef {
+  id: number;
+  mapId: string;
+  position: Vec3;
+  up: Vec3;
 }
 
 // ------------------------------------------------------------------------------------------------ biomes
@@ -433,6 +478,33 @@ export function buildingSite(terrain: Terrain, b: KitBuilding, mp: Pick<MapPlace
   return { raise, low: lo - raise, high: hi - raise, extra, warnings };
 }
 
+/** The tangent frame the layout builds for a map placement (a building after its site's raise), with a local→world map. */
+export interface PlacementFrame {
+  up: Vec3;
+  forward: Vec3;
+  side: Vec3;
+  /** The (lifted, raised) base point. */
+  base: Vec3;
+  raise: number;
+  /** World point at local (x, y, z): X side, Y up, Z forward. */
+  at(x: number, y: number, z: number): Vec3;
+}
+
+export function frameOfPlacement(terrain: Terrain, mp: MapPlacement): PlacementFrame {
+  const up = latLonToDir(mp.lat, mp.lon);
+  const forward = headingTangent(up, mp.yaw);
+  const side = v3normalize(v3cross(up, forward));
+  const ref = resolvePrefab(mp.prefab);
+  const raise = ref?.type === 'building' ? buildingSite(terrain, ref.building, mp).raise : 0;
+  const r = PLANET.radius + terrain.heightAt(up) + (mp.lift ?? 0) + raise;
+  const base = { x: up.x * r, y: up.y * r, z: up.z * r };
+  const at = (x: number, y: number, z: number): Vec3 => ({
+    x: base.x + side.x * x + up.x * y + forward.x * z,
+    y: base.y + side.y * x + up.y * y + forward.y * z,
+    z: base.z + side.z * x + up.z * y + forward.z * z,
+  });
+  return { up, forward, side, base, raise, at };
+}
 
 export interface LayoutOptions {
   /** Include client-only decoration (grass, flowers, bushes). */
@@ -457,6 +529,7 @@ export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap
   const anchors: Vec3[] = [];
   const doors: DoorDef[] = [];
   const crates: Placement[] = [];
+  const bells: BellDef[] = [];
 
   // Authored map: classic structures, kit prefabs and kit buildings (one placement per piece).
   const structures: Placement[] = [];
@@ -466,6 +539,7 @@ export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap
     const id = nextId++;
     clear.push({ dir: v3normalize(position), rad: (shape.footprint + 0.4) / R });
     for (const [ax, ay, az] of shape.anchors) anchors.push({ x: position.x + side.x * ax + up.x * ay + forward.x * az, y: position.y + side.y * ax + up.y * ay + forward.y * az, z: position.z + side.z * ax + up.z * ay + forward.z * az });
+    for (const [bx, by, bz] of shape.bells) bells.push({ id: bells.length, mapId, up, position: { x: position.x + side.x * bx + up.x * by + forward.x * bz, y: position.y + side.y * bx + up.y * by + forward.y * bz, z: position.z + side.z * bx + up.z * by + forward.z * bz } });
     // Decoration without colliders (street tiles, lantern strings) is client-only, like grass; ids stay in step.
     if (!shape.colliders.length && !opts.includeVisual) return;
     const p: Placement = {
@@ -642,7 +716,7 @@ export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap
     }
   }
 
-  return { placements, structures, anchors, doors, crates };
+  return { placements, structures, anchors, doors, crates, winds: resolveWinds(terrain, map.winds ?? [], R), bells };
 }
 
 /** World position of a point given in a placement's local frame. */

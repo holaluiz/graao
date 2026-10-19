@@ -201,7 +201,10 @@ describe('the map', () => {
       physics.world.intersectionsWithShape(c.translation(), c.rotation(), shrink(c.shape), (o) => {
         const q = physics.propByCollider.get(o.handle);
         if (!q?.mapId || q.mapId === p.mapId) return true;
-        const joined = p.prefab === q.prefab || !!p.prefab?.startsWith('embasamento') || !!q.prefab?.startsWith('embasamento');
+        // Row houses: the eaves of two roofs meet over the alley (their eave boards, the ledge strip at the eave tip,
+        // reach into each other) — roof against roof is a joint, not a piece buried in another.
+        const roofs = !!p.prefab?.includes('telhado') && !!q.prefab?.includes('telhado');
+        const joined = roofs || p.prefab === q.prefab || !!p.prefab?.startsWith('embasamento') || !!q.prefab?.startsWith('embasamento');
         if (!joined) bad.add(`${[p.mapId, q.mapId].sort().join(' × ')} (${p.prefab} / ${q.prefab})`);
         return true;
       }, undefined, groups(0xffff, Group.PROP | Group.RAIL));

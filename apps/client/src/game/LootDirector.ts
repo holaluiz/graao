@@ -10,7 +10,7 @@
  */
 import * as THREE from 'three';
 import { GROUPS_WORLD_QUERY, newPassiveRuntime, passiveModifiers, addChestCollider, chestBasis, decodeDir, decodePos, refreshQueries, removeChestCollider } from '@graao/game-core';
-import { AMMO, AMMO_TYPES, ATTRIBUTES, CONSUMABLES, CONSUMABLE_ORDER, ITEMS, ITEM_IDS, LOOT_RULES, RARITY_ORDER, WEAPONS, type ItemId, type Rarity } from '@graao/game-data';
+import { AMMO, AMMO_TYPES, ATTRIBUTES, CONSUMABLES, CONSUMABLE_ORDER, ITEMS, ITEM_IDS, LOOT_RULES, RARITY_ORDER, TRAVERSAL_ACTIONS, WEAPONS, type ItemId, type Rarity } from '@graao/game-data';
 import { ChestState, LootAction, LootReject, type ChestTuple, type GameEvent, type ItemTuple, type LootDevMsg, type LootResultMsg, type LootStateMsg, type SelfStatusMsg } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import { Shape } from '../render/vfx/GRAVFXSystem';
@@ -352,7 +352,8 @@ export class LootDirector {
   /** Input → intents, interaction target, prompt, labels and belt. Runs before the CombatDirector (E/Q may be ours). */
   update(dt: number, time: number): void {
     const app = this.app;
-    const allowed = !!app.net && app.phase === 'MATCH' && app.combat.lootAllowed;
+    // Hands on a ledge, a wall or the glider: no chests, items or doors (the server refuses them too).
+    const allowed = !!app.net && app.phase === 'MATCH' && app.combat.lootAllowed && TRAVERSAL_ACTIONS[app.local.state.traversal].interact;
     const input = app.input;
     if (this.choice) {
       // The replacement card owns E and Q while it is open.

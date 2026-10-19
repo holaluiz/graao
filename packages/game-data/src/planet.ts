@@ -62,6 +62,9 @@ export const TERRAIN_FEATURES: TerrainFeature[] = [
   // Serra do Mirante (after the Serra do Curral): two crests from the Planalto toward the Fenda, a pass between them.
   { kind: 'ridge', lat1: 68.4, lon1: -63.5, lat2: 60.6, lon2: -83.5, widthDeg: 5.2, height: 6.2 },
   { kind: 'ridge', lat1: 57.9, lon1: -87.7, lat2: 49.1, lon2: -96.9, widthDeg: 4.6, height: 5.0 },
+  // The chapada the Serra do Mirante massif stands on (docs/world/SERRA_DO_MIRANTE.md): the first crest levelled under
+  // its foot and its trail ramp, so the rock rises from the ground on every side.
+  { kind: 'flatten', lat: 64.2, lon: -77.5, radiusDeg: 6.8, falloffDeg: 3.6, height: 6.2 },
   // Bosque dos Varais: the giant tree's hill; on its south flank the waterfall's pool terrace, the floor of the cleft
   // behind the falls (level with the pool, so the rock stair stands clear of the ground) and the shelf above the cliff.
   // The step from the cleft's floor to the shelf happens under the cliff's rock (cachoeira-paredao is 10 m deep).

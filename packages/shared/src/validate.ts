@@ -220,7 +220,8 @@ export function validateWorldUse(m: unknown): import('./protocol').WorldUseMsg |
   const o = m as Record<string, unknown>;
   if (!isInt(o.s) || (o.s as number) < 0 || (o.s as number) > 0x7fffffff) return null;
   if (!isInt(o.id) || (o.id as number) < 0 || (o.id as number) > 0xffff) return null;
-  return { s: o.s as number, id: o.id as number };
+  if (o.k !== undefined && o.k !== 0 && o.k !== 1) return null;
+  return o.k === 1 ? { s: o.s as number, id: o.id as number, k: 1 } : { s: o.s as number, id: o.id as number };
 }
 
 /** USE_ITEM shape check. */

@@ -120,6 +120,14 @@ export const MovementState = {
   FALL: 5,
   /** In deep water (moving or treading): also how a snapshot tells the client that the character swims. */
   SWIM: 6,
+  /**
+   * Vertical traversal (game-data TraversalMode, docs/gameplay/TRAVERSAL_STATES.md): hanging from a ledge, pulling up
+   * over it, climbing a wall, gliding. They are also how a snapshot tells the owner's prediction which mode to rebuild.
+   */
+  LEDGE_HANG: 7,
+  MANTLE: 8,
+  CLIMB: 9,
+  GLIDE: 10,
 } as const;
 export type MovementState = (typeof MovementState)[keyof typeof MovementState];
 
@@ -208,17 +216,24 @@ export const AIM_SCALE = 1000;
 
 /**
  * Per-player snapshot tuple (broadcast once per SNAPSHOT_HZ to everyone; each client reads its own ack from it):
- * `[index, px, py, pz, vx, vy, vz, fx, fy, fz, aimPitch, moveState, actionState, flags, ackSeq, health, shield, mana, weapon, simDt]`
+ * `[index, px, py, pz, vx, vy, vz, fx, fy, fz, aimPitch, moveState, actionState, flags, ackSeq, health, shield, mana, weapon, simDt, stamina, trav, ledge]`
  * - p: position in millimetres (ints).  v: velocity in cm/s (ints).
  * - f: facing tangent × 127.  aimPitch: radians × 100 relative to the local horizon.
  * - flags: bit 0 grounded, bit 1 alive, bit 2 aiming, bit 3 aboard the UFO, bit 4 diving, bit 5 double jump used.
  * - simDt: ms between the snapshot time and the moment this player's simulated state is valid (≤ 0). Each player is
  *   simulated in whole 1/60 s commands, so remotes interpolate on this per-player clock to move perfectly evenly.
+ * - stamina: traversal stamina × STAMINA_SCALE (int).  trav: traversal timers in whole simulation steps, packed by
+ *   game-core `packTraversal` (steps in the current mode, glide steps of this flight, grab cooldown). Both rebuild the
+ *   owner's prediction exactly; others only read moveState.  ledge: radius (mm from the planet centre) of the ledge
+ *   top being hung from or pulled up over, 0 when none.
  */
 export type PlayerSnap = [
   number, number, number, number, number, number, number, number, number, number,
   number, number, number, number, number, number, number, number, number, number,
+  number, number, number,
 ];
+
+export const STAMINA_SCALE = 100;
 
 /** The snapshot's `weapon` field (and SWITCH_WEAPON `w`) for empty hands: fighting with fists, weapons put away. */
 export const FISTS_SLOT = 2;
@@ -914,18 +929,26 @@ export type GameEvent =
   /** Door `id` (layout.doors index) was opened (1) or closed (0) by `by` (-1: the room). */
   | { e: 'door'; id: number; open: 0 | 1; by: number }
   /** Crate `id` (layout.crates index) took a hit from `by`; `hp` is what it has left (0: broken). */
-  | { e: 'crate'; id: number; hp: number; by: number };
+  | { e: 'crate'; id: number; hp: number; by: number }
+  /** Bell `id` (layout.bells index) rang (1: its event winds blow) or fell silent (0, `by` −1); `by` who rang it. */
+  | { e: 'bell'; id: number; on: 0 | 1; by: number };
 
-/** WORLD_USE intent: request sequence and the door (layout.doors index). */
+/** WORLD_USE intent: request sequence and the door (layout.doors index), or the bell (layout.bells index) when k = 1. */
 export interface WorldUseMsg {
   s: number;
   id: number;
+  /** What `id` names: 0 (or absent) a door, 1 a bell. */
+  k?: 0 | 1;
 }
 
-/** WORLD_STATE: the doors that are open, and every crate that is not whole (`[id, hp]`, hp 0 = broken). */
+/**
+ * WORLD_STATE: the doors that are open, every crate that is not whole (`[id, hp]`, hp 0 = broken) and the bells
+ * ringing now (`[id, ms left]`; absent from servers before protocol 11).
+ */
 export interface WorldStateMsg {
   o: number[];
   c: [number, number][];
+  b?: [number, number][];
 }
 
 export interface EventsMsg {

@@ -129,7 +129,8 @@ export class RemotePlayer {
     this.facing.addScaledVector(up, -this.facing.dot(up)).normalize();
     this.character.setPose(this.pos, up, this.facing);
     const v = b.vel.clone();
-    const speed = v.addScaledVector(up, -v.dot(up)).length();
+    const vertical = v.dot(up);
+    const speed = v.addScaledVector(up, -vertical).length();
     this.alive = (b.flags & SnapFlag.ALIVE) !== 0;
     this.inTormenta = (b.flags & SnapFlag.IN_TORMENTA) !== 0;
     this.label.classList.toggle('down', !this.alive);
@@ -151,6 +152,7 @@ export class RemotePlayer {
       airJumped: (b.flags & SnapFlag.AIR_JUMPED) !== 0,
       groundDist,
       waterDepth: waterDepth(this.pos),
+      vertical,
     });
     this.placeLabel(up, camera, viewport, physics);
   }

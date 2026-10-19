@@ -7,7 +7,9 @@
  *                 progress; "Vazio" until a chest gives a weapon); above them the consumable belt Z / X / C and the
  *                 pickup feed (LootHud)
  *   centre-low    interaction prompt [F], the weapon replacement card, the use bar (LootHud)
- *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs
+ *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs;
+ *                 the stamina wheel to its right while it is not full (climbing, hanging, gliding) with the glide time
+ *                 left as an inner arc
  *   top           place name, match status chip, room code, kill feed
  *   overlays      countdown / banners, elimination screen (the results card is its own screen: ResultsScreen)
  *   deploy        UFO / drop panel (bottom-centre): what to do, the jump key, the window bar, the altitude; combat
@@ -27,6 +29,7 @@ import { ABILITY_ICONS } from './abilityIcons';
 import { TormentaMap, type TormentaMapView } from './TormentaMap';
 import '../styles/tormenta.css';
 import '../styles/abilities-v2.css';
+import '../styles/traversal.css';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 /** The reticle follows the spread cone at this fraction of its true screen size: it still opens and closes with the
@@ -169,6 +172,11 @@ export class Hud {
       '<rect class="t t-left" x="-12" y="-1.5" width="7" height="3" rx="1.5"/><rect class="t t-right" x="5" y="-1.5" width="7" height="3" rx="1.5"/></g><circle class="dot" r="1.8"/>',
   );
   private readonly reticleCircle = svg('reticle circle', '-50 -50 100 100', '<circle class="ring" r="8"/><circle class="dot" r="1.8"/>');
+  /** Stamina wheel (traversal): outer ring = stamina, inner ring = glide time left (only while gliding). */
+  private readonly stamina = svg('stamina-wheel', '-20 -20 40 40',
+    '<circle class="track" r="15"/><circle class="fill" r="15" pathLength="100" transform="rotate(-90)"/>' +
+    '<circle class="glide-track" r="9.5"/><circle class="glide" r="9.5" pathLength="100" transform="rotate(-90)"/>');
+  private lastStamina = '';
   /** Empty hands: a short-range mark (four knuckles around a dot) that pops on a landed punch and droops on a miss. */
   private readonly reticleFists = svg(
     'reticle fists',
@@ -263,7 +271,7 @@ export class Hud {
   private lastVitals = { health: -1, shield: -1, mana: -1 };
 
   constructor() {
-    this.center.append(this.reticleCross, this.reticleCircle, this.reticleFists, this.blocked, this.hitmarker);
+    this.center.append(this.reticleCross, this.reticleCircle, this.reticleFists, this.blocked, this.hitmarker, this.stamina);
     const fistHead = el('div', 'slot-head', this.fistsEl);
     el('span', 'slot-rarity', fistHead, '✊');
     el('span', 'slot-name', fistHead, 'Socos');
@@ -568,6 +576,25 @@ export class Hud {
     const low = health > 0 && health <= maxHealth * 0.3;
     this.lowHealthEl.classList.toggle('on', low);
     this.healthRow.root.classList.toggle('critical', low);
+  }
+
+  /**
+   * Stamina wheel: `frac` 0..1 of stamina, `glide` 0..1 of the glide time left while gliding (null: not gliding), `show`
+   * false hides it (full and on the ground). Low stamina turns it red, an empty one blinks.
+   */
+  setStamina(frac: number, glide: number | null, show: boolean): void {
+    const key = show ? `${Math.round(frac * 100)}|${glide === null ? '-' : Math.round(glide * 100)}` : 'off';
+    if (key === this.lastStamina) return;
+    this.lastStamina = key;
+    this.stamina.classList.toggle('on', show);
+    if (!show) return;
+    const fill = this.stamina.querySelector<SVGCircleElement>('.fill')!;
+    fill.style.strokeDasharray = `${(frac * 100).toFixed(1)} 100`;
+    const g = this.stamina.querySelector<SVGCircleElement>('.glide')!;
+    g.style.strokeDasharray = `${((glide ?? 0) * 100).toFixed(1)} 100`;
+    this.stamina.classList.toggle('gliding', glide !== null);
+    this.stamina.classList.toggle('low', frac < 0.3 && frac > 0);
+    this.stamina.classList.toggle('out', frac <= 0);
   }
 
   /** Air left under water (0..1); null hides the meter (head out of the water and lungs full). */

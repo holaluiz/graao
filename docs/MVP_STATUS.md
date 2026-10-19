@@ -1,5 +1,26 @@
 # graao MVP status
 
+## 2026-10-19 — Vertical World & Traversal: escalada, planagem, vento, Serra do Mirante e ilhas
+
+Exploração vertical dentro do planeta de 100 m, no mesmo motor do cliente e do servidor
+([auditoria e resultado](gameplay/VERTICAL_TRAVERSAL_AUDIT.md)):
+
+- **Movimento:** agarrar e subir beiradas (telhados da vila pelos beirais), mantle de obstáculos baixos, escalada em
+  paredões marcados com stamina (100; 18/s subindo; recupera no chão), planagem universal com uma pipa (2,6 s,
+  queda 4,8 m/s), correntes ascendentes e ventos direcionais, teto radial de 42 m. Mãos ocupadas: sem tiro nem
+  magia pendurado/escalando; planando só magias de mobilidade.
+- **Mundo:** Serra do Mirante (maciço de três patamares, três rotas ao cume: trilha 12,2 s sem pulo, escalada 5,0 s,
+  corrente 4,3 s) e o Arquipélago dos Sinos (Ilha do Sino, do Oratório e da Torre; ponte suspensa, escada de pedras
+  flutuantes, dois sinos que acordam ventos por 24 s, três baús no alto).
+- **Rede:** protocolo 11 (stamina, temporizadores e beirada no snapshot; sino autoritativo). Testado com servidor
+  real + 2 clientes e no Chromium contra o servidor (correção ≤ 6 mm). O Graao Host 0.1.0 instalado não entra em
+  salas deste build até um instalador novo (publicar exige aprovação).
+- **Editor:** família VERTICAL, aba Ventos, colisores coloridos pela tag de travessia.
+- **Bots:** sobem a trilha; não escalam nem planam (ilhas fora do grafo deles).
+
+**Validação:** suíte 607/607 em 63 arquivos, typecheck completo. Pendente: input touch, partidas reais com combate
+vertical, latência simulada, redes externas, arte final ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)).
+
 ## 2026-10-19 — Ability v2: regressão e validação integrada
 
 As 40 magias (30 básicas + 10 Supremos) estão implementadas. Esta rodada corrigiu dano duplicado do Meteoro

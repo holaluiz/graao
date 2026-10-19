@@ -15,6 +15,7 @@ import { passiveModifiers } from './passives';
 import { Group, groups, GROUPS_WORLD_QUERY, type AbilityBarrierFrame, type GamePhysics } from './physics';
 import { transportTangent } from './sphere';
 import { abilityCloudVolume } from './abilityVolumes';
+import { releaseTraversal } from './traversal';
 import {
   applyHeal,
   applyKnockback,
@@ -733,6 +734,8 @@ export class GRAAbilitySystem {
         case 'mobility': {
           const dir = ctx.req?.dir ?? caster.state.facing;
           const up = v3normalize(caster.state.pos);
+          // Magic movement takes over any traversal (the glider folds; ledges and walls are let go of).
+          releaseTraversal(caster.state, 0);
           if (e.mode === 'jump') {
             if (caster.state.grounded || caster.state.abilityJumpUsed) break;
             const along = v3dot(caster.state.vel, up);

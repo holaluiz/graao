@@ -1,0 +1,15 @@
+/* Vertical traversal HUD (docs/gameplay/TRAVERSAL_STATES.md): the stamina wheel right of the reticle. */
+.stamina-wheel { position: absolute; left: 38px; top: -44px; width: 40px; height: 40px; overflow: visible; opacity: 0;
+  transform: scale(.85); transition: opacity .25s ease, transform .25s ease; pointer-events: none; }
+.stamina-wheel.on { opacity: 1; transform: scale(1); }
+.stamina-wheel circle { fill: none; }
+.stamina-wheel .track { stroke: rgba(42, 33, 48, .55); stroke-width: 6; }
+.stamina-wheel .fill { stroke: #8fd16a; stroke-width: 4; stroke-linecap: round; transition: stroke .2s ease; }
+.stamina-wheel .glide-track { stroke: rgba(42, 33, 48, .35); stroke-width: 3.5; opacity: 0; }
+.stamina-wheel .glide { stroke: #9fe3ef; stroke-width: 2.5; stroke-linecap: round; opacity: 0; }
+.stamina-wheel.gliding .glide, .stamina-wheel.gliding .glide-track { opacity: 1; }
+.stamina-wheel.low .fill { stroke: #f2c230; }
+.stamina-wheel.out .fill { stroke: #e8573f; }
+.stamina-wheel.out .track { animation: stamina-out .45s ease-in-out infinite alternate; }
+@keyframes stamina-out { from { stroke: rgba(232, 87, 63, .35); } to { stroke: rgba(232, 87, 63, .9); } }
+@media (prefers-reduced-motion: reduce) { .stamina-wheel.out .track { animation: none; stroke: rgba(232, 87, 63, .7); } }

@@ -10,7 +10,11 @@
  * - Baús: place, move and turn the chest spots of the existing loot system; each is checked like the server checks it.
  * - Waypoints: the bots' authored navigation points and their links (click places one linked to the selected one,
  *   Shift+click links or unlinks two).
- * - Colisões (C) draws the colliders around the camera: orange solid, cyan movement-only (railings), green
+ * - Ventos: the map's wind volumes (docs/gameplay/WIND_VOLUMES.md) drawn as columns — cyan updrafts, yellow directional
+ *   winds with their arrow, pink event winds (woken by a bell: `trigger`). Click places an updraft (on a roof or a deck
+ *   its base starts there); Q/E turn a directional wind, +/− its radius, PgUp/PgDn its base, [ ] its height.
+ * - Colisões (C) draws the colliders around the camera, by how they play: orange solid with grabbable edges (the
+ *   default), purple climbable faces, grey solid that is never grabbed, cyan movement-only (railings), green
  *   vegetation, yellow the selection. Trilhas (T) shows the painted trails.
  * - Ctrl+Z / Ctrl+Y undo and redo; Ctrl+S validates the map (validateMap and the building sites) and saves it through
  *   the dev server (vite.config.ts), bumping `mapVersion` and stamping `editedAt`; "Baixar JSON" gives the same file.
@@ -30,6 +34,8 @@ import {
   PLANET,
   REGIONS,
   STRUCTURE_PREFABS,
+  SurfaceFlag,
+  WIND_LIMITS,
   serializeMap,
   validateMap,
   type ChestSpotDef,
@@ -37,9 +43,10 @@ import {
   type KitCategory,
   type MapPlacement,
   type MapWaypoint,
+  type MapWind,
   type RegionDef,
 } from '@graao/game-data';
-import { GROUPS_TERRAIN_QUERY, buildLayout, buildingSite, dirToLatLon, headingTangent, latLonToDir, quatRotate, resolveChestSpot, type ColliderPrimitive, type Placement, type WorldLayout } from '@graao/game-core';
+import { GROUPS_TERRAIN_QUERY, buildLayout, buildingSite, dirToLatLon, headingTangent, latLonToDir, quatRotate, resolveChestSpot, resolveWinds, type ColliderPrimitive, type Placement, type SurfacedCollider, type WorldLayout } from '@graao/game-core';
 import type { Vec3 } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import { buildKitChunks, kitPrefabGeometry } from '../world/kitGeometry';
@@ -52,14 +59,14 @@ const VIEW_KEY = 'graao.editor.view';
 /** Kit cells (as PlanetView): Fibonacci points ≈ 45 m apart; an edit rebuilds only the cells it touches. */
 const CELLS = 64;
 
-type Mode = 'pecas' | 'baus' | 'waypoints';
-type Selection = { kind: 'placement' | 'chest' | 'waypoint'; id: string } | null;
+type Mode = 'pecas' | 'baus' | 'waypoints' | 'ventos';
+type Selection = { kind: 'placement' | 'chest' | 'waypoint' | 'wind'; id: string } | null;
 type Family = KitCategory | 'construcoes' | 'estruturas';
 
 interface Hit {
   point: THREE.Vector3;
   dist: number;
-  kind: 'terrain' | 'placement' | 'chest' | 'waypoint';
+  kind: 'terrain' | 'placement' | 'chest' | 'waypoint' | 'wind';
   id?: string;
 }
 
@@ -75,10 +82,10 @@ interface CellView {
 }
 
 /** Building modules (walls, slabs, foundations…) are listed only with "Mostrar módulos". */
-const MODULE = /^(fundacao|embasamento|soleira|laje|pilar|parapeito|telhado|col-(cunhal|telhado|assoalho|escada-interna|puxado|faixa|parede|janela|porta|sup-)|capela-|chafariz-|bica-|pavilhao-|espelho-dagua-|deck-pavilhao|pilotis-volume|rampa-pilotis|cachoeira-|viaduto-|escada-viaduto|patamar-|sitio-|varanda-|mureta-|escada-mercado|parede-)/;
+const MODULE = /^(fundacao|embasamento|soleira|laje|pilar|parapeito|telhado|col-(cunhal|telhado|assoalho|escada-interna|puxado|faixa|parede|janela|porta|sup-)|capela-|chafariz-|bica-|pavilhao-|espelho-dagua-|deck-pavilhao|pilotis-volume|rampa-pilotis|cachoeira-|viaduto-|escada-viaduto|patamar-|sitio-|varanda-|mureta-|escada-mercado|parede-|macico-)/;
 
 const FAMILY_NAMES: Record<Family, string> = { ...KIT_CATEGORY_NAMES, construcoes: 'CONSTRUÇÕES', estruturas: 'ESTRUTURAS' };
-const FAMILIES: Family[] = ['construcoes', 'colonial', 'urbano_bh', 'modernista', 'serra', 'bosque', 'props', 'rua', 'estruturas'];
+const FAMILIES: Family[] = ['construcoes', 'colonial', 'urbano_bh', 'modernista', 'serra', 'bosque', 'vertical', 'props', 'rua', 'estruturas'];
 const WAYPOINT_KINDS: NonNullable<MapWaypoint['kind']>[] = ['rua', 'porta', 'escada', 'telhado', 'ponte', 'mirante', 'interior', 'trilha'];
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
@@ -181,6 +188,7 @@ export class MapEditor {
     this.map = JSON.parse(JSON.stringify(GRAAO_MAP)) as GraaoMap;
     this.map.waypoints ??= [];
     this.map.trails ??= [];
+    this.map.winds ??= [];
     this.baseVersion = this.map.mapVersion;
   }
 
@@ -345,11 +353,12 @@ export class MapEditor {
     return this.map.placements.find((p) => p.id === id);
   }
 
-  private findSelected(): MapPlacement | ChestSpotDef | MapWaypoint | undefined {
+  private findSelected(): MapPlacement | ChestSpotDef | MapWaypoint | MapWind | undefined {
     if (!this.sel) return undefined;
     const id = this.sel.id;
     if (this.sel.kind === 'placement') return this.placementById(id);
     if (this.sel.kind === 'chest') return this.map.chestSpots.find((c) => c.id === id);
+    if (this.sel.kind === 'wind') return this.map.winds!.find((w) => w.id === id);
     return this.map.waypoints!.find((w) => w.id === id);
   }
 
@@ -419,6 +428,21 @@ export class MapEditor {
     this.changed('markers');
   }
 
+  /** A new updraft at the hit (its base on the roof or deck it was dropped on), 12 m tall. */
+  private addWind(hit: Hit): void {
+    const dir = hit.point.clone().normalize();
+    const { lat, lon } = dirToLatLon(dir);
+    const region = regionAt(dir)?.key ?? 'trilhas';
+    const id = this.uniqueId(`${region}-vento`, (x) => this.map.winds!.some((w) => w.id === x));
+    const h = this.heightAbove(hit.point);
+    const w: MapWind = { id, kind: 'updraft', lat: round(lat, 5), lon: round(lon, 5), base: hit.kind === 'placement' && h > 0.2 ? round(h, 2) : -0.5, height: 12, radius: 2.5, strength: 6.5, yaw: round(this.placeYaw, 1), region };
+    this.pushUndo();
+    this.map.winds!.push(w);
+    this.sel = { kind: 'wind', id };
+    this.changed('markers');
+    this.toast(`${id}: corrente ascendente (troque o tipo no painel)`);
+  }
+
   private toggleLink(a: string, b: string): void {
     if (a === b) return;
     const wa = this.map.waypoints!.find((w) => w.id === a);
@@ -450,6 +474,10 @@ export class MapEditor {
       if (KIT_PREFABS[p.prefab] && onProp && h > 0.2) p.lift = round(h, 3);
       else if (onProp === false && p.lift && !KIT_BUILDINGS[p.prefab]) delete p.lift;
       this.changed();
+    } else if (this.sel!.kind === 'wind') {
+      const w = s as MapWind;
+      if (onProp && h > 0.2) w.base = round(Math.min(WIND_LIMITS.base[1], h), 2);
+      this.changed('markers');
     } else if (this.sel!.kind === 'chest') {
       const c = s as ChestSpotDef;
       if (onProp && h > 0.3) {
@@ -491,12 +519,19 @@ export class MapEditor {
       return;
     }
     this.pushUndo();
-    const o = s as MapPlacement | ChestSpotDef;
+    const o = s as MapPlacement | ChestSpotDef | MapWind;
     o.yaw = round((((o.yaw ?? 0) + deg) % 360 + 360) % 360, 2);
     this.changed(this.sel!.kind === 'placement' ? 'layout' : 'markers');
   }
 
   private rescale(f: number): void {
+    if (this.sel?.kind === 'wind') {
+      const w = this.findSelected() as MapWind;
+      this.pushUndo();
+      w.radius = THREE.MathUtils.clamp(round(w.radius * f, 2), WIND_LIMITS.radius[0], WIND_LIMITS.radius[1]);
+      this.changed('markers');
+      return;
+    }
     if (this.sel?.kind !== 'placement') return;
     const p = this.placementById(this.sel.id)!;
     const k = KIT_PREFABS[p.prefab];
@@ -516,7 +551,11 @@ export class MapEditor {
     const s = this.findSelected();
     if (!s) return;
     this.pushUndo();
-    if (this.sel!.kind === 'placement') {
+    if (this.sel!.kind === 'wind') {
+      const w = s as MapWind;
+      w.base = THREE.MathUtils.clamp(round(w.base + dh, 2), WIND_LIMITS.base[0], WIND_LIMITS.base[1]);
+      this.changed('markers');
+    } else if (this.sel!.kind === 'placement') {
       const p = s as MapPlacement;
       const l = round((p.lift ?? 0) + dh, 3);
       if (Math.abs(l) < 1e-6) delete p.lift;
@@ -550,6 +589,12 @@ export class MapEditor {
       this.map.chestSpots.push(c);
       this.sel = { kind: 'chest', id: c.id };
       this.changed('markers');
+    } else if (this.sel.kind === 'wind') {
+      const w = { ...(s as MapWind), lat: round(lat, 5), lon: round(lon, 5) };
+      w.id = this.uniqueId(w.id.replace(/-\d+$/, ''), (x) => this.map.winds!.some((q) => q.id === x));
+      this.map.winds!.push(w);
+      this.sel = { kind: 'wind', id: w.id };
+      this.changed('markers');
     } else {
       const w = { ...(s as MapWaypoint), lat: round(lat, 5), lon: round(lon, 5), links: [(s as MapWaypoint).id] };
       w.id = this.uniqueId(w.id.replace(/-\d+$/, ''), (x) => this.map.waypoints!.some((q) => q.id === x));
@@ -570,6 +615,10 @@ export class MapEditor {
       this.changed();
     } else if (this.sel.kind === 'chest') {
       this.map.chestSpots = this.map.chestSpots.filter((c) => c.id !== id);
+      this.sel = null;
+      this.changed('markers');
+    } else if (this.sel.kind === 'wind') {
+      this.map.winds = this.map.winds!.filter((w) => w.id !== id);
       this.sel = null;
       this.changed('markers');
     } else {
@@ -757,6 +806,70 @@ export class MapEditor {
       g.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
       this.markerGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x4fd6e8, depthTest: false, transparent: true })));
     }
+    this.buildWindMarkers();
+  }
+
+  /**
+   * Wind volumes as the game resolves them (game-core resolveWinds): a column of rings and uprights, an arrow for a
+   * directional wind, a handle at the base to click.
+   */
+  private buildWindMarkers(): void {
+    const winds = this.map.winds!;
+    if (!winds.length) return;
+    const vols = resolveWinds(this.app.world.terrain, winds, R);
+    const handle = new THREE.OctahedronGeometry(0.45);
+    const pos: number[] = [];
+    const col: number[] = [];
+    const line = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Color) => {
+      pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      col.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    };
+    for (const [i, w] of winds.entries()) {
+      const v = vols[i]!;
+      const selected = this.sel?.kind === 'wind' && this.sel.id === w.id;
+      const color = new THREE.Color(selected ? 0xffffff : w.trigger ? 0xff7ad9 : w.kind === 'updraft' ? 0x7fe0ff : 0xffd35a);
+      const axis = v3of(v.axis);
+      const base = v3of(v.base);
+      const n = v3of(headingTangent(v.axis, 0));
+      const e = new THREE.Vector3().crossVectors(n, axis).normalize();
+      const ring = (h: number) => {
+        for (let k = 0; k < 20; k++) {
+          const a0 = (k / 20) * Math.PI * 2;
+          const a1 = ((k + 1) / 20) * Math.PI * 2;
+          const p0 = base.clone().addScaledVector(axis, h).addScaledVector(n, Math.cos(a0) * v.radius).addScaledVector(e, Math.sin(a0) * v.radius);
+          const p1 = base.clone().addScaledVector(axis, h).addScaledVector(n, Math.cos(a1) * v.radius).addScaledVector(e, Math.sin(a1) * v.radius);
+          line(p0, p1, color);
+        }
+      };
+      ring(0);
+      ring(v.height * 0.5);
+      ring(v.height);
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2;
+        const p = base.clone().addScaledVector(n, Math.cos(a) * v.radius).addScaledVector(e, Math.sin(a) * v.radius);
+        line(p, p.clone().addScaledVector(axis, v.height), color);
+      }
+      if (v.dir) {
+        const d = v3of(v.dir);
+        const mid = base.clone().addScaledVector(axis, v.height * 0.5);
+        const tip = mid.clone().addScaledVector(d, v.radius * 1.3);
+        line(mid.clone().addScaledVector(d, -v.radius * 0.8), tip, color);
+        const side = new THREE.Vector3().crossVectors(axis, d).normalize();
+        line(tip, tip.clone().addScaledVector(d, -0.9).addScaledVector(side, 0.6), color);
+        line(tip, tip.clone().addScaledVector(d, -0.9).addScaledVector(side, -0.6), color);
+      } else {
+        const top = base.clone().addScaledVector(axis, v.height);
+        line(top, top.clone().addScaledVector(axis, 1.2), color);
+      }
+      const mesh = new THREE.Mesh(handle, new THREE.MeshBasicMaterial({ color }));
+      mesh.position.copy(base).addScaledVector(axis, 0.5);
+      mesh.userData = { wind: w.id };
+      this.markerGroup.add(mesh);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    this.markerGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9 })));
   }
 
   private waypointPoint(w: MapWaypoint): THREE.Vector3 {
@@ -782,7 +895,11 @@ export class MapEditor {
       const near = (p: Placement) => v3of(p.position).distanceTo(this.target) < range + p.radius;
       const kit = this.layout.placements.filter((p) => p.colliders.length && near(p));
       const wild = this.app.world.layout.placements.filter((p) => p.kind !== 'kit' && !p.mapId && p.colliders.length && near(p));
-      for (const p of kit) addColliderLines(p, pos, col, (c) => (c.block === 'move' ? [0.31, 0.84, 0.91] : [0.98, 0.55, 0.2]));
+      // By how the collider plays: railings cyan, climbable faces purple, grabbable edges orange, never grabbed grey.
+      for (const p of kit) addColliderLines(p, pos, col, (c) => {
+        const trav = (c as SurfacedCollider).trav ?? 0;
+        return c.block === 'move' ? [0.31, 0.84, 0.91] : trav & SurfaceFlag.CLIMB ? [0.74, 0.42, 0.98] : trav & SurfaceFlag.LEDGE ? [0.98, 0.55, 0.2] : [0.62, 0.62, 0.7];
+      });
       for (const p of wild) addColliderLines(p, pos, col, () => [0.45, 0.85, 0.35]);
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -872,6 +989,7 @@ export class MapEditor {
       const obj = h.object;
       let hit: Hit | null = null;
       if (obj.userData.chest) hit = { point: h.point, dist: h.distance, kind: 'chest', id: obj.userData.chest as string };
+      else if (obj.userData.wind) hit = { point: h.point, dist: h.distance, kind: 'wind', id: obj.userData.wind as string };
       else if (obj.userData.waypoint) hit = { point: h.point, dist: h.distance, kind: 'waypoint', id: obj.userData.waypoint as string };
       else if (obj.userData.mapId) hit = { point: h.point, dist: h.distance, kind: 'placement', id: obj.userData.mapId as string };
       else {
@@ -901,7 +1019,7 @@ export class MapEditor {
     const s = this.findSelected();
     if (!s) return null;
     const d = latLonToDir(s.lat, s.lon);
-    const h = this.sel!.kind === 'placement' ? ((s as MapPlacement).lift ?? 0) : ((s as ChestSpotDef).height ?? 0);
+    const h = this.sel!.kind === 'placement' ? ((s as MapPlacement).lift ?? 0) : this.sel!.kind === 'wind' ? Math.max(0, (s as MapWind).base) : ((s as ChestSpotDef).height ?? 0);
     return v3of(d).multiplyScalar(R + this.app.world.terrain.heightAt(d) + h);
   }
 
@@ -1023,6 +1141,10 @@ export class MapEditor {
       this.addWaypoint(hit);
       return;
     }
+    if (this.mode === 'ventos' && hit.kind !== 'wind') {
+      this.addWind(hit);
+      return;
+    }
     if (this.mode === 'waypoints' && hit.kind === 'waypoint' && e.shiftKey && this.sel?.kind === 'waypoint') {
       this.toggleLink(this.sel.id, hit.id!);
       return;
@@ -1098,6 +1220,16 @@ export class MapEditor {
       case 'Digit1': this.setMode('pecas'); return;
       case 'Digit2': this.setMode('baus'); return;
       case 'Digit3': this.setMode('waypoints'); return;
+      case 'Digit4': this.setMode('ventos'); return;
+      case 'BracketLeft': case 'BracketRight': {
+        // The selected wind's height (Shift: finer).
+        if (this.sel?.kind !== 'wind') return;
+        const w = this.findSelected() as MapWind;
+        this.pushUndo();
+        w.height = THREE.MathUtils.clamp(round(w.height + (e.code === 'BracketRight' ? 1 : -1) * (fine ? 0.25 : 1), 2), WIND_LIMITS.height[0], WIND_LIMITS.height[1]);
+        this.changed('markers');
+        return;
+      }
     }
   }
 
@@ -1248,7 +1380,7 @@ export class MapEditor {
     modules.append(box, document.createTextNode(' Mostrar módulos de construção'));
     left.append(el('div', 'me-head', 'Editor do mapa'), this.tabs, this.families, search, modules, this.list);
     const help = el('div', 'me-help');
-    help.textContent = 'Botão direito gira · meio/Shift+direito arrasta · roda aproxima · WASD anda · clique seleciona · G move · setas empurram · Q/E gira · +/− escala · PgUp/PgDn eleva · Ctrl+D duplica · Del apaga · F foca · Ctrl+Z desfaz';
+    help.textContent = 'Botão direito gira · meio/Shift+direito arrasta · roda aproxima · WASD anda · clique seleciona · G move · setas empurram · Q/E gira · +/− escala (vento: raio) · PgUp/PgDn eleva (vento: base) · [ ] altura do vento · Ctrl+D duplica · Del apaga · F foca · Ctrl+Z desfaz · Colisões: laranja agarrável, roxo escalável, cinza sem agarre, ciano grade';
     this.report.hidden = true;
     this.ui.append(top, left, this.inspector, this.status, help, this.report, this.toastEl);
     document.body.appendChild(this.ui);
@@ -1260,7 +1392,7 @@ export class MapEditor {
 
   private buildUiTabs(): void {
     this.tabs.replaceChildren(
-      ...([['pecas', 'Peças (1)'], ['baus', 'Baús (2)'], ['waypoints', 'Waypoints (3)']] as const).map(([m, label]) => {
+      ...([['pecas', 'Peças (1)'], ['baus', 'Baús (2)'], ['waypoints', 'Waypoints (3)'], ['ventos', 'Ventos (4)']] as const).map(([m, label]) => {
         const b = button(label, () => this.setMode(m));
         b.classList.toggle('on', this.mode === m);
         return b;
@@ -1283,8 +1415,12 @@ export class MapEditor {
   private renderList(): void {
     this.list.replaceChildren();
     if (this.mode !== 'pecas') {
-      const items = this.mode === 'baus' ? this.map.chestSpots.map((c) => ({ id: c.id, label: `${c.id} · ${c.region}`, sel: { kind: 'chest' as const, id: c.id } })) : this.map.waypoints!.map((w) => ({ id: w.id, label: `${w.id} · ${w.kind ?? 'rua'} · ${w.links.length} lig.`, sel: { kind: 'waypoint' as const, id: w.id } }));
-      this.list.append(el('div', 'me-fine', this.mode === 'baus' ? 'Clique no chão, num piso ou num telhado para criar um ponto de baú. Os baús usam o sistema de loot do jogo.' : 'Clique para criar um waypoint ligado ao selecionado; Shift+clique em outro liga ou desliga os dois.'));
+      const items: { id: string; label: string; sel: Selection }[] = this.mode === 'baus'
+        ? this.map.chestSpots.map((c) => ({ id: c.id, label: `${c.id} · ${c.region}`, sel: { kind: 'chest' as const, id: c.id } }))
+        : this.mode === 'ventos'
+          ? this.map.winds!.map((w) => ({ id: w.id, label: `${w.id} · ${w.kind === 'updraft' ? 'ascendente' : 'direcional'}${w.trigger ? ' · sino' : ''}`, sel: { kind: 'wind' as const, id: w.id } }))
+          : this.map.waypoints!.map((w) => ({ id: w.id, label: `${w.id} · ${w.kind ?? 'rua'} · ${w.links.length} lig.`, sel: { kind: 'waypoint' as const, id: w.id } }));
+      this.list.append(el('div', 'me-fine', this.mode === 'baus' ? 'Clique no chão, num piso ou num telhado para criar um ponto de baú. Os baús usam o sistema de loot do jogo.' : this.mode === 'ventos' ? 'Clique para criar uma corrente ascendente (num telhado ou deck a base começa nele). Ciano: ascendente · amarelo: direcional · rosa: só sopra quando o sino toca.' : 'Clique para criar um waypoint ligado ao selecionado; Shift+clique em outro liga ou desliga os dois.'));
       for (const it of items.filter((i) => !this.search || i.label.toLowerCase().includes(this.search))) {
         const row = el('div', 'me-item', it.label);
         row.classList.toggle('on', this.sel?.id === it.id);
@@ -1333,11 +1469,12 @@ export class MapEditor {
       this.changed(what);
     };
     const target = kind === 'placement' ? 'layout' : 'markers';
-    box.append(el('div', 'me-head', kind === 'placement' ? 'Peça' : kind === 'chest' ? 'Ponto de baú' : 'Waypoint'));
+    box.append(el('div', 'me-head', kind === 'placement' ? 'Peça' : kind === 'chest' ? 'Ponto de baú' : kind === 'wind' ? 'Vento' : 'Waypoint'));
     box.append(field('id', s.id, edit((v) => {
       const id = v.trim();
       if (!id || id === s.id) return;
       if (kind === 'placement' && this.placementById(id)) return this.toast('Esse id já existe', true);
+      if (kind === 'wind' && this.map.winds!.some((w) => w.id === id)) return this.toast('Esse id já existe', true);
       if (kind === 'waypoint') for (const w of this.map.waypoints!) w.links = w.links.map((l) => (l === s.id ? id : l));
       s.id = id;
       this.sel = { kind, id };
@@ -1353,9 +1490,34 @@ export class MapEditor {
     }
     box.append(field('lat', String(s.lat), edit((v) => (s.lat = round(Number(v) || 0, 5)), target)));
     box.append(field('lon', String(s.lon), edit((v) => (s.lon = round(Number(v) || 0, 5)), target)));
-    if (kind !== 'waypoint') {
-      const o = s as MapPlacement | ChestSpotDef;
-      box.append(field('rotação °', String(o.yaw ?? 0), edit((v) => (o.yaw = round(((Number(v) || 0) % 360 + 360) % 360, 2)), target)));
+    if (kind !== 'waypoint' && !(kind === 'wind' && (s as MapWind).kind === 'updraft')) {
+      const o = s as MapPlacement | ChestSpotDef | MapWind;
+      box.append(field(kind === 'wind' ? 'direção °' : 'rotação °', String(o.yaw ?? 0), edit((v) => (o.yaw = round(((Number(v) || 0) % 360 + 360) % 360, 2)), target)));
+    }
+    if (kind === 'wind') {
+      const w = s as MapWind;
+      const type = el('select') as HTMLSelectElement;
+      type.append(new Option('corrente ascendente', 'updraft', false, w.kind === 'updraft'), new Option('vento direcional', 'directional', false, w.kind === 'directional'));
+      type.addEventListener('change', () => edit((v) => {
+        w.kind = v as MapWind['kind'];
+        if (w.kind === 'directional') w.yaw ??= 0;
+      }, 'markers')(type.value));
+      box.append(labeled('tipo', type));
+      const num = (label: string, key: 'base' | 'height' | 'radius' | 'strength') => field(label, String(w[key]), edit((v) => {
+        const [a, b] = WIND_LIMITS[key];
+        w[key] = THREE.MathUtils.clamp(round(Number(v) || 0, 2), a, b);
+      }, 'markers'));
+      box.append(num('base m (sobre o chão)', 'base'), num('altura m', 'height'), num('raio m', 'radius'), num('força m/s', 'strength'));
+      const bells = this.layout.bells ?? [];
+      const trigger = el('select') as HTMLSelectElement;
+      trigger.append(new Option('sempre soprando', '', false, !w.trigger));
+      for (const id of [...new Set(bells.map((b) => b.mapId))]) trigger.append(new Option(`sino de ${id}`, id, false, w.trigger === id));
+      trigger.addEventListener('change', () => edit((v) => {
+        if (v) w.trigger = v;
+        else delete w.trigger;
+      }, 'markers')(trigger.value));
+      box.append(labeled('gatilho', trigger));
+      box.append(el('div', 'me-fine', w.kind === 'updraft' ? 'Ergue quem plana até a força (m/s) e só freia a queda de quem não plana.' : 'Carrega quem está no ar na direção, até a força (m/s); menos sem a pipa.'));
     }
     if (kind === 'placement') {
       const p = s as MapPlacement;
@@ -1399,7 +1561,7 @@ export class MapEditor {
       box.append(labeled('sob um teto', covered));
       const spot = resolveChestSpot(this.app.world, c);
       box.append(el('div', spot.ok ? 'me-ok' : 'me-err', spot.ok ? `Aceito pelo servidor${spot.moved ? ` (empurrado ${spot.moved.toFixed(1)} m)` : ''}` : `Recusado: ${spot.reason}`));
-    } else {
+    } else if (kind === 'waypoint') {
       const w = s as MapWaypoint;
       const kindSel = el('select') as HTMLSelectElement;
       for (const k of WAYPOINT_KINDS) kindSel.append(new Option(k, k, false, k === (w.kind ?? 'rua')));
@@ -1429,7 +1591,7 @@ export class MapEditor {
 
   private refreshTitle(): void {
     const m = this.map;
-    this.title.textContent = `${m.mapId} v${m.mapVersion}${this.dirty ? ' • não salvo' : ''} · ${m.placements.length} peças · ${m.chestSpots.length} baús · ${m.waypoints!.length} waypoints · ${m.trails!.length} trilhas`;
+    this.title.textContent = `${m.mapId} v${m.mapVersion}${this.dirty ? ' • não salvo' : ''} · ${m.placements.length} peças · ${m.chestSpots.length} baús · ${m.waypoints!.length} waypoints · ${m.trails!.length} trilhas · ${m.winds!.length} ventos`;
   }
 
   private toast(text: string, error = false): void {

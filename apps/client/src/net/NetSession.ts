@@ -7,7 +7,7 @@
  */
 import * as THREE from 'three';
 import { Client } from '@colyseus/sdk';
-import { createCharacterState, type CharacterState, type PlayerHitTarget } from '@graao/game-core';
+import { createCharacterState, traversalOfMoveState, unpackTraversal, type CharacterState, type PlayerHitTarget } from '@graao/game-core';
 import { MAP_HASH } from '@graao/game-data';
 import {
   type ActionState,
@@ -20,6 +20,7 @@ import {
   NoticeCode,
   PITCH_SCALE,
   POS_SCALE,
+  STAMINA_SCALE,
   PROTOCOL_VERSION,
   ROOM_NAME,
   S2C,
@@ -468,6 +469,11 @@ export class NetSession {
         st.airTime = st.grounded ? 0 : 1;
         st.moveState = move as CharacterState['moveState'];
         st.swimming = move === MovementState.SWIM;
+        // Traversal: the mode rides on moveState, stamina and the step timers on their own fields (older servers: none).
+        st.traversal = traversalOfMoveState(move);
+        if (s[20] !== undefined) st.stamina = s[20] / STAMINA_SCALE;
+        if (s[21] !== undefined) unpackTraversal(s[21], st);
+        if (s[22] !== undefined) st.ledgeR = s[22] / POS_SCALE;
         st.aim = { ...this.app.local.state.aim };
         const localAbility = this.app.local.state;
         st.rooted = localAbility.rooted;

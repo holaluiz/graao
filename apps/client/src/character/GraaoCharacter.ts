@@ -19,6 +19,7 @@ import { buildSkeleton, type BoneName, type GRARig } from './rig/GRARig';
 import { buildPalette, geometryKey, type CharacterPartLibrary } from './CharacterAppearanceController';
 import { CharacterAnimationController, type AnimInput } from './CharacterAnimationController';
 import type { GRAAnimationLibrary } from './animation/GRAAnimationLibrary';
+import { GliderKite } from './GliderKite';
 
 export class GraaoCharacter {
   readonly root = new THREE.Group();
@@ -39,6 +40,10 @@ export class GraaoCharacter {
   private tilt = 0;
   private static readonly TILT_PIVOT = 0.95;
   private static readonly TILT_DIVE = 1.3;
+  /** Forward lean under the glider (rad). */
+  private static readonly TILT_GLIDE = 0.55;
+  /** The universal glider's kite, opened while gliding (presentation only). */
+  readonly kite = new GliderKite();
   /** Double jump: a forward flip about the same hips pivot, FLIP_TIME s long (progress 0..1, 1 = done). */
   private flip = 1;
   private wasAirJumped = false;
@@ -85,6 +90,7 @@ export class GraaoCharacter {
     this.root.name = 'PlayerRoot';
     this.visualRoot.name = 'CharacterVisualRoot';
     this.root.add(this.visualRoot);
+    this.visualRoot.add(this.kite.group);
     this.appearance = { ...appearance };
     this.rebuild(appearance, true);
     this.outline.visible = (opts.outline ?? true) && !INK_STATE.post;
@@ -168,8 +174,9 @@ export class GraaoCharacter {
   update(dt: number, s: AnimInput): void {
     // Skydive: belly-down, flaring back to feet-first over the last metres so the landing reads.
     const flare = s.groundDist === undefined ? 1 : THREE.MathUtils.smoothstep(s.groundDist, 2.5, 10);
-    const target = s.diving ? THREE.MathUtils.lerp(0.15, GraaoCharacter.TILT_DIVE, flare) : 0;
-    this.tilt += (target - this.tilt) * (1 - Math.exp(-dt * (s.diving ? 5 : 9)));
+    const gliding = s.moveState === MovementState.GLIDE;
+    const target = s.diving ? THREE.MathUtils.lerp(0.15, GraaoCharacter.TILT_DIVE, flare) : gliding ? GraaoCharacter.TILT_GLIDE : 0;
+    this.tilt += (target - this.tilt) * (1 - Math.exp(-dt * (s.diving || gliding ? 5 : 9)));
     if (Math.abs(this.tilt) < 1e-4 && target === 0) this.tilt = 0;
     // Double jump (rising edge of the spent flag while airborne): a tucked forward flip, fast out and easing in.
     const airJumped = !!s.airJumped && !s.grounded;
@@ -193,6 +200,7 @@ export class GraaoCharacter {
     this.visualRoot.rotation.set(pitch, 0, 0);
     this.visualRoot.position.set(0, h * (1 - Math.cos(pitch)) + this.swimLift, -h * Math.sin(pitch));
     this.updateWetness(dt, s.waterDepth, swimming);
+    this.kite.update(dt, gliding, this.tilt);
     this.resetProcedural();
     this.anim.update(dt, s);
     this.applyProcedural(dt, s, swimming);
@@ -228,7 +236,9 @@ export class GraaoCharacter {
         }
       }
     }
-    this.armForward = THREE.MathUtils.damp(this.armForward, s.aiming || s.diving ? 0 : 1, 10, dt);
+    // The aim clips, the skydive and the traversal poses (hands on a ledge, a wall, the kite's bar) own the arms.
+    const traversing = s.moveState >= MovementState.LEDGE_HANG;
+    this.armForward = THREE.MathUtils.damp(this.armForward, s.aiming || s.diving || traversing ? 0 : 1, 10, dt);
     if (this.armForward > 0.01) {
       const q = this.tmpQ.setFromAxisAngle(GraaoCharacter.X_AXIS, -0.13 * this.armForward);
       for (const name of ['LeftArm', 'RightArm'] as BoneName[]) this.bones.get(name)?.quaternion.premultiply(q);

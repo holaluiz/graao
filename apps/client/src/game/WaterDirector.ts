@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { headUnderWater, latLonToDir, northTangent, waterDepth } from '@graao/game-core';
 import { ATTRIBUTES, MOVEMENT, SPAWNS } from '@graao/game-data';
+import { MovementState } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import type { GraaoCharacter } from '../character/GraaoCharacter';
 import { Shape } from '../render/vfx/GRAVFXSystem';
@@ -103,8 +104,9 @@ export class WaterDirector {
     const app = this.app;
     this.frameId++;
     this.ripples.update(dt);
-    // Swimmers' hands are stroking: the weapon is stowed in the water.
-    app.combat.holder.setVisible(app.phase === 'MATCH' && !app.local.state.swimming);
+    // Swimmers' hands are stroking: the weapon is stowed in the water; on a ledge, a wall or the glider the hands hold
+    // on (docs/gameplay/TRAVERSAL_STATES.md): stowed too.
+    app.combat.holder.setVisible(app.phase === 'MATCH' && !app.local.state.swimming && app.local.state.traversal === 0);
     if (app.phase === 'MATCH' && !app.deploy.riding && app.character.root.visible) {
       const s = app.local.state;
       this.track(app.character, app.character.root.position, s.swimming, s.diving, true, dt);
@@ -112,7 +114,7 @@ export class WaterDirector {
     } else app.hud.setBreath(null);
     if (app.net) {
       for (const r of app.net.remotePlayers) {
-        r.holder.setVisible(app.phase === 'MATCH' && !r.swimming);
+        r.holder.setVisible(app.phase === 'MATCH' && !r.swimming && r.moveState < MovementState.LEDGE_HANG);
         if (r.character.root.visible) this.track(r.character, r.pos, r.swimming, r.diving, false, dt);
       }
     }

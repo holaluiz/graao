@@ -22,6 +22,8 @@
  * 1.6 m tall (capsule radius 0.3), jumps ≈ 1.3 m and ≈ 2.4 m with the double jump.
  */
 
+import type { TraversalSurface } from '../traversal';
+
 // ------------------------------------------------------------------------------------------------ palette
 
 /**
@@ -171,13 +173,20 @@ export interface KitPart {
   lod?: 'near' | 'far';
   /** A grapple point (Linha de Varal and other anchors): the part's centre is exported in layout.anchors. */
   anchor?: boolean;
+  /** How the part plays for climbing and ledges (TraversalSurface); default: the prefab's, else 'ledge' when solid. */
+  traversal?: TraversalSurface;
+  /**
+   * An interactive bell (docs/world/FLOATING_ISLANDS.md): the part's centre is exported in layout.bells; ringing it
+   * (F, server-authoritative) wakes the map's winds whose `trigger` is this placement for a while.
+   */
+  bell?: boolean;
 }
 
 /** How a prefab plays in a fight (docs/world/MG_ARCHITECTURE_KITS.md). */
 export type KitCover = 'alta' | 'baixa' | 'destrutivel' | 'ocultacao' | 'passagem' | 'estrutura' | 'decoracao';
 
 /** Editor families (COLONIAL, URBANO_BH, MODERNISTA, SERRA, BOSQUE, PROPS_BRASILEIROS) and street tiles. */
-export type KitCategory = 'colonial' | 'urbano_bh' | 'modernista' | 'serra' | 'bosque' | 'props' | 'rua';
+export type KitCategory = 'colonial' | 'urbano_bh' | 'modernista' | 'serra' | 'bosque' | 'props' | 'rua' | 'vertical';
 
 export const KIT_CATEGORY_NAMES: Record<KitCategory, string> = {
   colonial: 'COLONIAL',
@@ -187,6 +196,7 @@ export const KIT_CATEGORY_NAMES: Record<KitCategory, string> = {
   bosque: 'BOSQUE',
   props: 'PROPS_BRASILEIROS',
   rua: 'RUAS_E_TRILHAS',
+  vertical: 'VERTICAL',
 };
 
 export interface KitPrefab {
@@ -204,6 +214,12 @@ export interface KitPrefab {
   length?: number;
   /** Drawn with the animated water material (streams, waterfalls, fountain basins); always decoration. */
   material?: 'water';
+  /**
+   * How its solid parts play for climbing and ledges (TraversalSurface, docs/gameplay/CLIMBING.md): default 'ledge'
+   * (edges grabbable where the geometry allows); 'climb' for rock faces and cliffs; 'none' for what must not be
+   * grabbed. A part's own `traversal` wins.
+   */
+  traversal?: TraversalSurface;
   /**
    * Door wall modules: the opening holds a door the game opens and closes (game-core interactives.ts). The module's
    * own parts leave the opening empty; the leaves are drawn and collided per room, from these numbers.
@@ -633,10 +649,29 @@ export function gabledRoof(w: number, d: number, riseH: number, o: { tile?: KitC
     box(0, cy, -cz, w / 2 + e, th, len / 2, tile, { rx: -ang / DEG, solid: 'none' }),
     // One convex collider for both planes (no seam at the ridge), from the eaves to the ridge.
     { shape: 'gable', x: 0, y: -drop, z: 0, hx: w / 2 + e, hy: riseH + drop + th * 1.5, hz: half, color: tile, visible: false },
+    ...eaveBoards(w / 2 + e, half, -drop, ['front', 'back'], tile),
     { shape: 'gable', x: w / 2, y: 0, z: 0, hx: KIT.wallT / 2, hy: riseH, hz: d / 2, color: o.gable ?? 'reboco' },
     { shape: 'gable', x: -w / 2, y: 0, z: 0, hx: KIT.wallT / 2, hy: riseH, hz: d / 2, color: o.gable ?? 'reboco' },
     box(0, riseH + th * 2.2, 0, w / 2 + e + 0.05, 0.07, 0.13, o.ridge ?? tile, deco),
   ];
+}
+
+/**
+ * Eave boards (testeira): collider-only strips along the eave edges of a pitched roof (half extents hx × hz, eave tip at
+ * height y). The roof collider ends in a knife edge there; the board gives the eave a short vertical face, so the edge
+ * can be grabbed and pulled up over like any ledge (docs/gameplay/CLIMBING.md) — from outside the eave, never under it.
+ */
+function eaveBoards(hx: number, hz: number, y: number, sides: ('front' | 'back' | 'left' | 'right')[], color: KitColor): KitPart[] {
+  const t = 0.05;
+  const lo = 0.22;
+  const hi = 0.03;
+  const cy = y + (hi - lo) / 2;
+  const hh = (hi + lo) / 2;
+  const o = { ...ghost, traversal: 'ledge' as const };
+  return sides.map((s) =>
+    s === 'front' || s === 'back'
+      ? box(0, cy, (s === 'front' ? 1 : -1) * (hz - t), hx, hh, t, color, o)
+      : box((s === 'right' ? 1 : -1) * (hx - t), cy, 0, t, hh, hz - 2 * t, color, o));
 }
 
 /** Hipped roof (telhado de quatro águas) over a w × d box; origin at the wall top. Eaves `e` m out. */
@@ -646,6 +681,7 @@ export function hippedRoof(w: number, d: number, riseH: number, tile: KitColor, 
   const k = riseH / (d / 2);
   return [
     { shape: 'hip', x: 0, y: -e * k, z: 0, hx, hy: riseH + e * k, hz, color: tile },
+    ...eaveBoards(hx, hz, -e * k, ['front', 'back', 'left', 'right'], tile),
     // Ridge cap.
     box(0, riseH + 0.05, 0, Math.max(0.15, hx - hz), 0.06, 0.12, 'telhaEscura', deco),
   ];

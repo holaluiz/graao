@@ -65,6 +65,32 @@ export interface MapTrail {
   region?: string;
 }
 
+/**
+ * A wind volume (docs/gameplay/WIND_VOLUMES.md): a column standing on the terrain at (lat, lon), from `base` m over the
+ * ground to `base + height`, `radius` m wide. An updraft lifts gliders and slows anyone's fall; a directional wind
+ * carries whoever is in the air toward `yaw`. Client prediction and the server run the same volumes from this data, so
+ * the force is the simulation's, never something a client claims.
+ */
+export interface MapWind {
+  id: string;
+  kind: 'updraft' | 'directional';
+  lat: number;
+  lon: number;
+  /** Bottom of the column over the terrain under its centre (m), and its height (m). */
+  base: number;
+  height: number;
+  radius: number;
+  /** Directional winds: where they blow, degrees clockwise from the local north at the centre. */
+  yaw?: number;
+  /** m/s: an updraft's rise speed for a glider, a directional wind's speed along its direction. */
+  strength: number;
+  /** Off until the bell of this placement rings (an event wind: the bell's placement id). */
+  trigger?: string;
+  region?: string;
+}
+
+export const WIND_LIMITS = { radius: [1, 20], height: [1, 50], base: [-2, 40], strength: [0.5, 14] } as const;
+
 export interface GraaoMap {
   mapId: string;
   /** Bumped on any layout change. */
@@ -84,6 +110,8 @@ export interface GraaoMap {
   waypoints?: MapWaypoint[];
   /** Dirt trails painted on the terrain between and inside the regions. */
   trails?: MapTrail[];
+  /** Wind volumes (updrafts, directional winds); absent in maps older than mapVersion 5 (= none). */
+  winds?: MapWind[];
 }
 
 /**
@@ -146,6 +174,17 @@ export function validateMap(m: GraaoMap): string[] {
     if (t.points.length < 2 || !t.points.every(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180)) out.push(`${t.id}: pontos inválidos`);
     if (!(t.width > 0.4 && t.width < 8)) out.push(`${t.id}: largura ${t.width} fora de 0,4–8 m`);
   }
+  const winds = new Set<string>();
+  const inside = (v: number, [a, b]: readonly [number, number]) => Number.isFinite(v) && v >= a && v <= b;
+  for (const w of m.winds ?? []) {
+    if (winds.has(w.id)) out.push(`vento repetido: ${w.id}`);
+    winds.add(w.id);
+    if (w.kind !== 'updraft' && w.kind !== 'directional') out.push(`${w.id}: tipo de vento ${String(w.kind)}`);
+    if (![w.lat, w.lon].every(Number.isFinite) || Math.abs(w.lat) > 90 || Math.abs(w.lon) > 180) out.push(`${w.id}: posição inválida`);
+    for (const k of ['radius', 'height', 'base', 'strength'] as const) if (!inside(w[k], WIND_LIMITS[k])) out.push(`${w.id}: ${k} ${w[k]} fora de ${WIND_LIMITS[k].join('–')}`);
+    if (w.kind === 'directional' && !Number.isFinite(w.yaw)) out.push(`${w.id}: vento direcional sem direção (yaw)`);
+    if (w.trigger && !ids.has(w.trigger)) out.push(`${w.id}: gatilho ${w.trigger} não é uma peça do mapa`);
+  }
   return out;
 }
 
@@ -159,7 +198,7 @@ export const GRAAO_MAP: GraaoMap = MAP_FILE as unknown as GraaoMap;
 export function serializeMap(m: GraaoMap): string {
   const head = JSON.stringify({ mapId: m.mapId, mapVersion: m.mapVersion, ...(m.editedAt ? { editedAt: m.editedAt } : {}), geometryVersion: m.geometryVersion, collisionVersion: m.collisionVersion }, null, 2).slice(0, -2);
   const list = (items: unknown[]) => (items.length ? `[\n    ${items.map((i) => JSON.stringify(i)).join(',\n    ')}\n  ]` : '[]');
-  return `${head},\n  "placements": ${list(m.placements)},\n  "chestSpots": ${list(m.chestSpots)},\n  "waypoints": ${list(m.waypoints ?? [])},\n  "trails": ${list(m.trails ?? [])}\n}\n`;
+  return `${head},\n  "placements": ${list(m.placements)},\n  "chestSpots": ${list(m.chestSpots)},\n  "waypoints": ${list(m.waypoints ?? [])},\n  "trails": ${list(m.trails ?? [])},\n  "winds": ${list(m.winds ?? [])}\n}\n`;
 }
 
 /** FNV-1a (32 bit) of a string, as 8 hex digits. */

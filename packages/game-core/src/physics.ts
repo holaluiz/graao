@@ -7,6 +7,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import type { Vec3 } from '@graao/shared';
 import type { ColliderPrimitive, Placement, SurfacedCollider, WorldLayout } from './layout';
 import type { TerrainMesh } from './terrain';
+import type { WindVolume } from './wind';
 
 export type Rapier = typeof RAPIER;
 
@@ -102,6 +103,13 @@ export interface GamePhysics {
   propByCollider: Map<number, Placement>;
   /** Collider handle → what that kit part is made of (its KitColor), when it says (footsteps). */
   surfaceByCollider: Map<number, string>;
+  /**
+   * Collider handle → traversal SurfaceFlag bits (grabbable ledge, climbable face) for static props and run-time crates;
+   * absent = neither (the terrain, trees, chests). Ability barriers are ledges by membership in `barrierHandles`.
+   */
+  traversalByCollider: Map<number, number>;
+  /** The map's wind volumes (wind.ts): the motor samples them in the air. */
+  winds: readonly WindVolume[];
   terrainHandle: number;
   /** Every chest collider currently in this world (any room's). */
   chestHandles: Set<number>;
@@ -120,6 +128,8 @@ export interface GamePhysics {
   boxOverlaps(center: Vec3, half: Vec3, side: Vec3, up: Vec3, forward: Vec3, filterGroups: number, predicate?: (collider: RAPIER.Collider) => boolean): boolean;
   /** True when a ball overlaps any collider in `filterGroups`. */
   ballOverlaps(center: Vec3, r: number, filterGroups: number, predicate?: (collider: RAPIER.Collider) => boolean): boolean;
+  /** True when a capsule (axis along `up`, centred at `center`) overlaps any collider in `filterGroups`. */
+  capsuleOverlaps(center: Vec3, up: Vec3, halfHeight: number, r: number, filterGroups: number, predicate?: (collider: RAPIER.Collider) => boolean): boolean;
   dispose(): void;
 }
 
@@ -132,6 +142,7 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
 
   const propByCollider = new Map<number, Placement>();
   const surfaceByCollider = new Map<number, string>();
+  const traversalByCollider = new Map<number, number>();
   for (const p of layout.placements) {
     // Breakable crates get per-room colliders (interactiveSystem.ts).
     if (p.visualOnly || p.colliders.length === 0 || p.breakable) continue;
@@ -139,8 +150,9 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
     placementColliderDescs(R, p).forEach((desc, i) => {
       const col = world.createCollider(desc);
       propByCollider.set(col.handle, p);
-      const surface = (p.colliders[i] as SurfacedCollider | undefined)?.surface;
-      if (surface) surfaceByCollider.set(col.handle, surface);
+      const c = p.colliders[i] as SurfacedCollider | undefined;
+      if (c?.surface) surfaceByCollider.set(col.handle, c.surface);
+      if (c?.trav) traversalByCollider.set(col.handle, c.trav);
     });
   }
   // Build the broad phase once so scene queries see the static world.
@@ -152,6 +164,8 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
     world,
     propByCollider,
     surfaceByCollider,
+    traversalByCollider,
+    winds: layout.winds ?? [],
     terrainHandle: terrain.handle,
     chestHandles: new Set(),
     barrierHandles: new Set(),
@@ -179,6 +193,14 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
     ballOverlaps(center, r, filterGroups, predicate) {
       let any = false;
       world.intersectionsWithShape(center, { x: 0, y: 0, z: 0, w: 1 }, new R.Ball(r), () => {
+        any = true;
+        return false;
+      }, undefined, filterGroups, undefined, undefined, predicate);
+      return any;
+    },
+    capsuleOverlaps(center, up, halfHeight, r, filterGroups, predicate) {
+      let any = false;
+      world.intersectionsWithShape(center, quatFromUp(up), new R.Capsule(halfHeight, r), () => {
         any = true;
         return false;
       }, undefined, filterGroups, undefined, undefined, predicate);

@@ -8,8 +8,8 @@
  * (ProfileService): the cloud row wins at startup unless the player already changed something this session.
  */
 import * as THREE from 'three';
-import { createGameWorld, latLonToDir, mulberry32, waterDepth, type GameWorld } from '@graao/game-core';
-import { ABILITIES, DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance, validateAppearance, type AbilityId } from '@graao/game-data';
+import { GLIDE_STEPS, createGameWorld, latLonToDir, mulberry32, waterDepth, type GameWorld } from '@graao/game-core';
+import { ABILITIES, DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, TRAVERSAL, TRAVERSAL_ACTIONS, TraversalMode, migrateAppearance, randomAppearance, validateAppearance, type AbilityId } from '@graao/game-data';
 import { ActionState, MatchPhase, MovementState, isRoomCode, sanitizeHostSettings, v3angle, type CharacterAppearance, type DraftStateMsg, type NoticeMsg, type RoomListing, type RoomStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
@@ -32,6 +32,7 @@ import { Obstruction } from '../game/Obstruction';
 import { SpectatorDirector } from '../game/SpectatorDirector';
 import { TormentaDirector } from '../game/TormentaDirector';
 import { WaterDirector } from '../game/WaterDirector';
+import { WindDirector } from '../game/WindDirector';
 import { Footsteps } from '../audio/Footsteps';
 import { GRARenderer, type Quality } from '../render/GRARenderer';
 import { GRAVFXSystem, Shape } from '../render/vfx/GRAVFXSystem';
@@ -115,6 +116,7 @@ export class GraaoApp {
   deploy!: DeployDirector;
   /** Lakes and sea around characters: splashes, swim strokes, drips, the underwater view. */
   water!: WaterDirector;
+  winds!: WindDirector;
   /** Everybody's feet on the ground under them: grass, earth, sand, stone, wood, metal. */
   private footsteps!: Footsteps;
   /** The match's shrinking safe region: world pigment, curtain, HUD, sound (mirrors the server). */
@@ -187,6 +189,7 @@ export class GraaoApp {
     this.audio.setEffectsVolume(savedSettings.effectsVolume);
     this.audio.setAmbienceVolume(savedSettings.ambienceVolume);
     this.camera.setShakeIntensity(savedSettings.shakeIntensity);
+    this.camera.reducedMotion = savedSettings.reducedCameraMotion;
     this.input.sensitivity = savedSettings.sensitivity;
     this.input.invertY = savedSettings.invertY;
     this.input.setBindings(savedSettings.keyBindings);
@@ -278,6 +281,7 @@ export class GraaoApp {
     this.combat = new CombatDirector(this);
     this.deploy = new DeployDirector(this);
     this.water = new WaterDirector(this);
+    this.winds = new WindDirector(this);
     this.footsteps = new Footsteps(this.audio, this.world.physics, this.world.terrain, this.r.camera);
     this.tormenta = new TormentaDirector(this);
     this.spectator = new SpectatorDirector(this);
@@ -476,7 +480,7 @@ export class GraaoApp {
       quality: this.r.quality, fpsCap: this.limiter.cap, volume: this.audio.volume,
       effectsVolume: this.audio.effectsVolume, ambienceVolume: this.audio.ambienceVolume,
       sensitivity: this.input.sensitivity, invertY: this.input.invertY,
-      shakeIntensity: this.camera.shakeIntensity, keyBindings: this.input.bindings,
+      shakeIntensity: this.camera.shakeIntensity, reducedCameraMotion: this.camera.reducedMotion, keyBindings: this.input.bindings,
     };
   }
 
@@ -491,6 +495,7 @@ export class GraaoApp {
     this.audio.setEffectsVolume(settings.effectsVolume);
     this.audio.setAmbienceVolume(settings.ambienceVolume);
     this.camera.setShakeIntensity(settings.shakeIntensity);
+    this.camera.reducedMotion = settings.reducedCameraMotion;
     this.input.sensitivity = settings.sensitivity;
     this.input.invertY = settings.invertY;
     this.input.setBindings(settings.keyBindings);
@@ -893,13 +898,22 @@ export class GraaoApp {
         feet.copy(this.deploy.focus);
       } else {
         if (!this.spectator.following) this.camera.look(look.yaw, look.pitch);
-        this.camera.aim = this.input.isDown('aim') && this.combat.alive && !this.deploy.diving && !this.local.state.swimming;
+        this.camera.aim = this.input.isDown('aim') && this.combat.alive && !this.deploy.diving && !this.local.state.swimming && TRAVERSAL_ACTIONS[this.local.state.traversal].fire;
+        const tm = this.local.state.traversal;
+        this.camera.traversal = tm === TraversalMode.GLIDE ? 'glide' : tm === TraversalMode.NONE ? 'none' : 'wall';
         const frame = this.camera.frame;
         const alpha = this.local.update(dt, this.input, frame, !!this.net, this.combat.frozen);
         this.net?.update(dt);
         this.local.renderPosition(alpha, feet);
         facing = this.local.renderFacing(alpha, facing);
         if (!this.spectator.following) this.camera.update(dt, feet, this.world.physics);
+      }
+      // Stamina wheel: while traversing, or until the ground has refilled it.
+      {
+        const s = this.local.state;
+        const gliding = s.traversal === TraversalMode.GLIDE;
+        this.hud.setStamina(s.stamina / TRAVERSAL.stamina.max, gliding ? 1 - s.glideSteps / GLIDE_STEPS : null,
+          !riding && this.combat.alive && (s.traversal !== TraversalMode.NONE || s.stamina < TRAVERSAL.stamina.max - 0.5));
       }
       // Loot first: its weapon replacement card may own E and Q this frame.
       this.loot.update(dt, this.time);
@@ -921,6 +935,7 @@ export class GraaoApp {
         airJumped: s.airJumped,
         groundDist: this.deploy.groundDist,
         waterDepth: waterDepth(feet),
+        vertical: s.vel.x * up.x + s.vel.y * up.y + s.vel.z * up.z,
       };
       if (!riding) this.obstruction.update(dt, this.r.camera.position, viewFocus, this.spectator.following ? viewFocus.clone().normalize() : up);
       this.updatePlace(viewFocus);
@@ -944,6 +959,7 @@ export class GraaoApp {
     this.water.update(dt);
     this.tormenta.update(dt);
     this.interactives.update(dt, this.time);
+    this.winds.update(dt);
     this.presentAirJumps();
     this.presentFootsteps(anim.moveState);
     for (const c of this.lineup) c.update(dt, { moveState: MovementState.IDLE, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE });
@@ -1147,6 +1163,7 @@ export class GraaoApp {
       'tris OVNI': this.deploy?.ufo.triangles ?? 0,
       posição: s ? `lat ${lat.toFixed(1)} lon ${lon.toFixed(1)} r ${Math.hypot(s.pos.x, s.pos.y, s.pos.z).toFixed(2)}` : '-',
       movimento: s ? `${stateName(s.moveState)} ${this.local.speed().toFixed(2)} m/s ${s.grounded ? 'no chão' : 'no ar'}${waterDepth(s.pos) > 0 ? ` · água ${waterDepth(s.pos).toFixed(2)} m` : ''}` : '-',
+      travessia: s ? this.traversalStats() : '-',
       planeta: `R ${PLANET.radius} m`,
       'carga ms': Object.entries(this.loadMs).map(([k, v]) => `${k} ${v}`).join(' · '),
       animações: this.anims.report ? `${this.anims.clips.size} clipes, ${this.anims.report.ms.toFixed(0)} ms, fonte ${[...new Set(Object.values(this.anims.report.source))].join('/')}` : '-',
@@ -1154,9 +1171,25 @@ export class GraaoApp {
     if (this.net) Object.assign(out, this.net.stats());
     return out;
   }
+
+  /**
+   * F3 traversal line: mode, stamina, glide time, grab cooldown, and the three heights the design separates — radial
+   * altitude over the nominal sphere, distance to whatever supports the feet below, and what that support is.
+   */
+  private traversalStats(): string {
+    const s = this.local.state;
+    const up = { x: s.pos.x, y: s.pos.y, z: s.pos.z };
+    const r = Math.hypot(up.x, up.y, up.z);
+    const down = { x: -up.x / r, y: -up.y / r, z: -up.z / r };
+    const hit = this.world.physics.castRay(s.pos, down, 200);
+    const physics = this.world.physics;
+    const support = !hit ? 'nada' : hit.handle === physics.terrainHandle ? 'terreno' : physics.propByCollider.get(hit.handle)?.prefab ?? physics.propByCollider.get(hit.handle)?.kind ?? 'objeto';
+    return `${TRAVERSAL_NAMES[s.traversal]} · stamina ${s.stamina.toFixed(0)} · planar ${(s.glideSteps / 60).toFixed(1)} s · espera ${s.grabCooldown} · alt. radial ${(r - PLANET.radius).toFixed(1)} m · suporte ${hit ? hit.toi.toFixed(2) : '∞'} m (${support})`;
+  }
 }
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+const TRAVERSAL_NAMES = ['—', 'PENDURADO', 'SUBINDO', 'ESCALANDO', 'PLANANDO'];
 /**
  * Lets the loading card paint between preparation steps without depending on animation frames: a tab in the
  * background gets none, and one player switching windows during the draft must not hold everyone's match.

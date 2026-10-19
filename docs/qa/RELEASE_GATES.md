@@ -47,6 +47,7 @@ Sempre antes de entregar: `pnpm typecheck`, `pnpm build`, `pnpm exec vitest run`
 | C | M3 Draft visual | 10 participantes visíveis; 40 magias acessíveis sem abas; 4 escolhas válidas; bots finalizam; nenhum Draft trava; mobile utilizável | NOT_STARTED |
 | D | M6–M7 Oficina + Arsenal | Montar e salvar arma; baús normais; ganhar Suprimentos; pedir, receber e equipar; outro jogador contesta; inventário consistente em multiplayer | NOT_STARTED |
 | E | M4 Áudio | Sons distinguíveis; espacial funcional; volumes; sem picos nem duplicados; performance medida | PARTIAL |
+| V | Vertical World & Traversal | Agarrar, subir, escalar, planar e vento com autoridade do servidor; Serra com 3 rotas; ilha acessível sem magia e com saída; editor de ventos; bots sem rotas impossíveis; medido; mobile e partida real | TESTING em 19/10/2026 ([relatório](VERTICAL_TRAVERSAL_TEST_REPORT.md)): falta touch, partida real com combate vertical, latência simulada e redes externas |
 
 ## Release público (M11)
 

@@ -27,7 +27,11 @@ const PACKS = [
   {
     src: 'assets/animations/quaternius/UAL2_Standard.glb',
     out: `${OUT}/ual2-clips.glb`,
-    clips: ['A_TPose', 'Hit_Knockback', 'Idle_Shield_Loop', 'Idle_Shield_Break', 'OverhandThrow', 'Shield_Dash', 'NinjaJump_Idle_Loop', 'NinjaJump_Land', 'Yes', 'Idle_FoldArms_Loop', 'Shield_OneShot'],
+    clips: [
+      'A_TPose', 'Hit_Knockback', 'Idle_Shield_Loop', 'Idle_Shield_Break', 'OverhandThrow', 'Shield_Dash', 'NinjaJump_Idle_Loop', 'NinjaJump_Land', 'Yes', 'Idle_FoldArms_Loop', 'Shield_OneShot',
+      // Vertical traversal: an in-place pull-up cycle (mantle, and the climbing loop).
+      'ClimbUp_1m',
+    ],
   },
 ];
 

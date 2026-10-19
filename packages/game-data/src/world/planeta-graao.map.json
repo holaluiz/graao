@@ -1,8 +1,8 @@
 {
   "mapId": "planeta-graao",
-  "mapVersion": 4,
-  "geometryVersion": 4,
-  "collisionVersion": 4,
+  "mapVersion": 5,
+  "geometryVersion": 5,
+  "collisionVersion": 5,
   "placements": [
     {"id":"vila-largo-0","prefab":"pe-de-moleque-4x4","lat":7.9748,"lon":-4.57816,"yaw":359.36,"region":"vila"},
     {"id":"vila-largo-1","prefab":"pe-de-moleque-4x4","lat":10.23917,"lon":-4.60612,"yaw":359.27,"region":"vila"},
@@ -280,7 +280,7 @@
     {"id":"planalto-marco","prefab":"marco-trilha","lat":71.90647,"lon":-59.65593,"yaw":240.35,"region":"planalto"},
     {"id":"serra-mirante","prefab":"mirante-madeira","lat":58.72767,"lon":-85.93145,"yaw":226.61,"region":"serra"},
     {"id":"serra-crista-0","prefab":"crista-itabirito","lat":54.93696,"lon":-84.81262,"yaw":287.62,"region":"serra"},
-    {"id":"serra-crista-1","prefab":"crista-itabirito","lat":62.49144,"lon":-85.70728,"yaw":16.74,"region":"serra"},
+    {"id":"serra-crista-1","prefab":"crista-itabirito","lat":66.70918,"lon":-57.53732,"yaw":214.93,"region":"serra"},
     {"id":"serra-crista-2","prefab":"crista-itabirito","lat":59.5381,"lon":-97.05959,"yaw":236.94,"region":"serra"},
     {"id":"serra-lapa","prefab":"lapa-pedra","lat":52.97376,"lon":-93.07518,"yaw":350.71,"region":"serra"},
     {"id":"serra-marco-passo","prefab":"marco-trilha","lat":57.59991,"lon":-89.50437,"yaw":223.56,"region":"serra"},
@@ -331,7 +331,20 @@
     {"id":"fenda-cristais-norte","prefab":"cristais","lat":41.624,"lon":-118.201,"yaw":10,"scale":1.4,"region":"fenda"},
     {"id":"fenda-cristais-meio","prefab":"cristais","lat":37.2,"lon":-98.6,"yaw":80,"scale":1,"region":"fenda"},
     {"id":"fenda-cristais-sul","prefab":"cristais","lat":33,"lon":-91,"yaw":140,"scale":1.2,"region":"fenda"},
-    {"id":"lasca","prefab":"lasca-flutuante","lat":2,"lon":-150,"yaw":0,"scale":1,"lift":16,"region":"lasca"}
+    {"id":"lasca","prefab":"lasca-flutuante","lat":2,"lon":-150,"yaw":0,"scale":1,"lift":16,"region":"lasca"},
+    {"id":"vert-serra-macico","prefab":"serra-do-mirante","lat":64.2,"lon":-77.5,"yaw":180,"region":"serra"},
+    {"id":"vert-ilha-do-sino","prefab":"ilha-do-sino","lat":58.67888,"lon":-59.84849,"yaw":195.55,"lift":14.68,"region":"serra"},
+    {"id":"vert-ilha-do-oratorio","prefab":"ilha-do-oratorio","lat":55.72285,"lon":-45.79642,"yaw":207.69,"lift":14.35,"region":"serra"},
+    {"id":"vert-ilha-da-torre","prefab":"ilha-da-torre","lat":64.71077,"lon":-50.53088,"yaw":204.42,"lift":20.45,"region":"serra"},
+    {"id":"vert-ponte-sino-oratorio","prefab":"ponte-tabuas","lat":57.21512,"lon":-51.6887,"yaw":111.57,"lift":14.53,"region":"serra"},
+    {"id":"vert-pedra-0","prefab":"plataforma-pedra","lat":58.07643,"lon":-44.50384,"yaw":0,"lift":15.14,"region":"serra"},
+    {"id":"vert-pedra-1","prefab":"plataforma-pedra","lat":58.92251,"lon":-46.24475,"yaw":37,"lift":16.03,"region":"serra"},
+    {"id":"vert-pedra-2","prefab":"plataforma-pedra","lat":60.28086,"lon":-46.33324,"yaw":74,"lift":16.73,"region":"serra"},
+    {"id":"vert-pedra-3","prefab":"plataforma-pedra","lat":60.88487,"lon":-48.77024,"yaw":111,"lift":17.77,"region":"serra"},
+    {"id":"vert-pedra-4","prefab":"plataforma-pedra","lat":62.20372,"lon":-48.95067,"yaw":148,"lift":18.51,"region":"serra"},
+    {"id":"vert-pedra-5","prefab":"plataforma-pedra","lat":62.92875,"lon":-50.9412,"yaw":185,"lift":19.59,"region":"serra"},
+    {"id":"vert-marco-trilha","prefab":"marco-trilha","lat":59.18165,"lon":-66.14587,"yaw":350.01,"region":"serra"},
+    {"id":"vert-pedra-mirante-0","prefab":"plataforma-pedra","lat":62.04934,"lon":-66.66264,"yaw":174.67,"region":"serra","lift":8.6,"scale":1.3}
   ],
   "chestSpots": [
     {"id":"vila-sobrado-cima","region":"Vila das Lanternas","hint":"no andar de cima do sobrado","yaw":180,"surface":"prop","covered":true,"lat":12.14643,"lon":-2.86068,"height":3.38},
@@ -384,9 +397,22 @@
     {"id":"trilha-oeste","region":"Trilhas","lat":-18,"lon":-100,"hint":"entre o lago e a lasca","yaw":250},
     {"id":"trilha-nordeste","region":"Trilhas","lat":50,"lon":125,"hint":"no campo do nordeste","yaw":40},
     {"id":"trilha-antipoda","region":"Trilhas","lat":12,"lon":175,"hint":"do outro lado do planeta","yaw":0},
-    {"id":"trilha-sudoeste","region":"Trilhas","lat":-45,"lon":-125,"hint":"no vale do sudoeste","yaw":150}
+    {"id":"trilha-sudoeste","region":"Trilhas","lat":-45,"lon":-125,"hint":"no vale do sudoeste","yaw":150},
+    {"id":"vert-cume-mirante","region":"Trilhas","lat":64.00392,"lon":-78.16581,"hint":"Cume da Serra do Mirante: exposto, alcançável pelas três rotas","surface":"prop","height":11.6,"yaw":179.4},
+    {"id":"vert-ilha-sino-capelinha","region":"Trilhas","lat":59.17081,"lon":-61.97882,"hint":"Ilha do Sino: dentro da capelinha (coberto, uma entrada)","surface":"prop","height":12.9,"yaw":103.7,"covered":true},
+    {"id":"vert-ilha-torre","region":"Trilhas","lat":64.42405,"lon":-50.11847,"hint":"Ilha da Torre: a mais alta, sem cobertura","surface":"prop","height":20.45,"yaw":204.76}
   ],
-  "waypoints": [],
+  "waypoints": [
+    {"id":"vert-wp-pe-trilha","lat":58.91894,"lon":-66.86591,"links":["vert-wp-rampa1-pe"],"region":"serra","kind":"trilha"},
+    {"id":"vert-wp-rampa1-pe","lat":59.97373,"lon":-67.91499,"links":["vert-wp-pe-trilha","vert-wp-rampa1-topo"],"region":"serra","kind":"trilha"},
+    {"id":"vert-wp-rampa1-topo","lat":66.67013,"lon":-65.80827,"height":4.7,"links":["vert-wp-rampa1-pe","vert-wp-t1-fundo-oeste"],"region":"serra","kind":"trilha"},
+    {"id":"vert-wp-t1-fundo-oeste","lat":66.73188,"lon":-86.7066,"height":4.55,"links":["vert-wp-rampa1-topo","vert-wp-rampa2-topo"],"region":"serra","kind":"trilha"},
+    {"id":"vert-wp-rampa2-topo","lat":61.99137,"lon":-84.98131,"height":8.28,"links":["vert-wp-t1-fundo-oeste","vert-wp-t2-frente"],"region":"serra","kind":"trilha"},
+    {"id":"vert-wp-t2-frente","lat":62.7283,"lon":-75.31062,"height":8.05,"links":["vert-wp-rampa2-topo","vert-wp-rampa3-pe"],"region":"serra","kind":"trilha"},
+    {"id":"vert-wp-rampa3-pe","lat":62.41562,"lon":-73.60117,"height":8.14,"links":["vert-wp-t2-frente","vert-wp-rampa3-topo"],"region":"serra","kind":"trilha"},
+    {"id":"vert-wp-rampa3-topo","lat":65.89064,"lon":-73.21343,"height":11.71,"links":["vert-wp-rampa3-pe","vert-wp-cume"],"region":"serra","kind":"trilha"},
+    {"id":"vert-wp-cume","lat":64.10255,"lon":-77.27728,"height":11.6,"links":["vert-wp-rampa3-topo"],"region":"serra","kind":"mirante"}
+  ],
   "trails": [
     {"id":"vila-estrada-bairro","points":[[-3.11261,-2.70725],[-5.95772,-5.64184],[-8.24058,-9.04003]],"width":2.6,"region":"vila"},
     {"id":"bairro-estrada-vila","points":[[-1.02203,-11.07064],[4.07972,-8.03596]],"width":2.6,"region":"bairro"},
@@ -397,5 +423,12 @@
     {"id":"trilha-bairro-fenda-0","points":[[-6,-32],[30,-92]],"width":2.4,"region":"trilhas"},
     {"id":"trilha-lago-serra-0","points":[[-18,-52],[52,-88]],"width":2.4,"region":"trilhas"},
     {"id":"trilha-bosque-arcos-0","points":[[17,62],[2,62]],"width":2.4,"region":"trilhas"}
+  ],
+  "winds": [
+    {"id":"vert-corrente-mirante-subida","kind":"updraft","radius":2.4,"strength":6.5,"lat":64.00732,"lon":-90.97155,"base":-0.5,"height":18.1,"region":"serra"},
+    {"id":"vert-corrente-mirante-travessia","kind":"directional","radius":3.6,"strength":6,"lat":64.35626,"lon":-86.49177,"base":12.6,"height":6.5,"region":"serra","yaw":81.9},
+    {"id":"vert-corrente-do-sino","kind":"updraft","radius":2.3,"strength":6.5,"lat":59.22419,"lon":-67.3808,"base":-0.5,"height":15.41,"region":"serra"},
+    {"id":"vert-corrente-cume-ilha","kind":"directional","radius":5.2,"strength":9,"trigger":"vert-serra-macico","yaw":130.76,"lat":61.46489,"lon":-67.55383,"base":8.4,"height":7.2,"region":"serra"},
+    {"id":"vert-corrente-torre","kind":"updraft","radius":2.2,"strength":6.5,"trigger":"vert-ilha-do-sino","lat":61.87633,"lon":-55.0783,"base":11.27,"height":13.5,"region":"serra"}
   ]
 }

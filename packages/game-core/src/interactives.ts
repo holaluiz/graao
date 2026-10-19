@@ -1,11 +1,15 @@
 /**
- * World interactivity (docs/world/WORLD_DESIGN.md, "Interatividade"): the doors of the houses and the breakable crates.
+ * World interactivity (docs/world/WORLD_DESIGN.md, "Interatividade"): the doors of the houses, the breakable crates and
+ * the bells of the floating islands.
  *
  * - Doors come from the kit's door modules (layout.doors: one per opening, ids in map order). A door is closed or
  *   open; a closed door has one box collider filling the opening (it stops people, shots and sight), an open one has
  *   none (its leaves stand folded against the inside wall). About one door in three starts a match open.
  * - Crates are the kit placements whose cover is 'destrutivel' (layout.crates). They have no static collider: every
  *   room adds its own and takes them away when the crate breaks (hit points, shots and punches).
+ * - Bells are kit parts marked `bell` (layout.bells). Ringing one wakes, for INTERACTIVES.bell.ringSeconds, the map's
+ *   event winds whose `trigger` is the bell's placement (`windsOn`, the room motor's CharacterMotor.windActive); the
+ *   server times them out (`update`) and tells everyone.
  * - The server's physics world is shared by every room: each room's colliders live in `physics.interactiveHandles`,
  *   and the room's motor (CharacterMotor.interactiveFilter) and queries (`predicate`) only meet its own.
  *
@@ -15,7 +19,7 @@
  */
 import { INTERACTIVES, KIT } from '@graao/game-data';
 import { v3cross, v3dot, v3normalize, type GameEvent, type Vec3, type WorldStateMsg, type WorldUseMsg } from '@graao/shared';
-import type { DoorDef, Placement, WorldLayout } from './layout';
+import type { BellDef, DoorDef, Placement, SurfacedCollider, WorldLayout } from './layout';
 import { GROUPS_WORLD_QUERY, Group, groups, placementColliderDescs, quatFromBasis, refreshQueries, type GamePhysics } from './physics';
 
 /** A box in the world: centre, half extents along its own side / up / forward axes. */
@@ -97,9 +101,11 @@ export function addBoxCollider(physics: GamePhysics, b: OrientedBox, register = 
 
 /** Adds a crate's colliders (its prefab's, posed like the static world's). */
 export function addCrateColliders(physics: GamePhysics, p: Placement, register = true): number[] {
-  return placementColliderDescs(physics.R, p).map((desc) => {
+  return placementColliderDescs(physics.R, p).map((desc, i) => {
     const col = physics.world.createCollider(desc);
     if (register) physics.interactiveHandles.add(col.handle);
+    const trav = (p.colliders[i] as SurfacedCollider | undefined)?.trav;
+    if (trav) physics.traversalByCollider.set(col.handle, trav);
     return col.handle;
   });
 }
@@ -109,6 +115,7 @@ export function removeColliders(physics: GamePhysics, handles: Iterable<number>)
     const col = physics.world.getCollider(h);
     if (col) physics.world.removeCollider(col, false);
     physics.interactiveHandles.delete(h);
+    physics.traversalByCollider.delete(h);
   }
 }
 
@@ -123,7 +130,7 @@ export interface InteractiveActor {
 
 export interface InteractiveHost {
   physics: GamePhysics;
-  layout: Pick<WorldLayout, 'doors' | 'crates'>;
+  layout: Pick<WorldLayout, 'doors' | 'crates' | 'bells' | 'winds'>;
   /** Every character of the room standing in the world (a door does not close on someone in its opening). */
   actors(): Iterable<InteractiveActor>;
   emit(e: GameEvent): void;
@@ -138,6 +145,13 @@ export class InteractiveSystem {
   private readonly crateHandles: number[][];
   private readonly crateOf = new Map<number, number>();
   private readonly lastUse = new Map<number, number>();
+  /** Which bells ring now, and (server) until when (ms, the `now` of `ring`/`update`). */
+  readonly bellOn: boolean[];
+  private readonly bellUntil: number[];
+  /** Event winds each bell wakes (indices into layout.winds). */
+  private readonly bellWinds: number[][];
+  /** Event winds blowing now (CharacterMotor.windActive). */
+  readonly windsOn = new Set<number>();
   /** True for a collider of this room or none of the rooms (a query predicate for the shared server world). */
   readonly predicate = (c: { handle: number }): boolean => !this.host.physics.interactiveHandles.has(c.handle) || this.colliders.has(c.handle);
 
@@ -147,7 +161,15 @@ export class InteractiveSystem {
     this.doorHandle = doors.map(() => -1);
     this.crateHp = crates.map(() => 0);
     this.crateHandles = crates.map(() => []);
+    const bells = host.layout.bells ?? [];
+    this.bellOn = bells.map(() => false);
+    this.bellUntil = bells.map(() => 0);
+    this.bellWinds = bells.map((b) => (host.layout.winds ?? []).filter((w) => w.trigger === b.mapId).map((w) => w.index));
     this.reset();
+  }
+
+  get bells(): readonly BellDef[] {
+    return this.host.layout.bells ?? [];
   }
 
   get doors(): readonly DoorDef[] {
@@ -162,17 +184,20 @@ export class InteractiveSystem {
   reset(): void {
     for (let i = 0; i < this.doorOpen.length; i++) this.placeDoor(i, doorStartsOpen(i));
     for (let i = 0; i < this.crateHp.length; i++) this.placeCrate(i, INTERACTIVES.crate.hp);
+    for (let i = 0; i < this.bellOn.length; i++) this.setBell(i, false);
     this.lastUse.clear();
     refreshQueries(this.host.physics);
   }
 
-  /** The state a joining client needs. */
-  view(): WorldStateMsg {
+  /** The state a joining client needs (`now`: the clock of `ring`/`update`, for the bells' time left). */
+  view(now?: number): WorldStateMsg {
     const o: number[] = [];
     for (let i = 0; i < this.doorOpen.length; i++) if (this.doorOpen[i]) o.push(i);
     const c: [number, number][] = [];
     for (let i = 0; i < this.crateHp.length; i++) if (this.crateHp[i]! < INTERACTIVES.crate.hp) c.push([i, this.crateHp[i]!]);
-    return { o, c };
+    const b: [number, number][] = [];
+    for (let i = 0; i < this.bellOn.length; i++) if (this.bellOn[i]) b.push([i, Math.max(0, Math.round(this.bellUntil[i]! - (now ?? this.bellUntil[i]!)))]);
+    return { o, c, b };
   }
 
   /** Client: takes the server's state as a whole. */
@@ -181,6 +206,8 @@ export class InteractiveSystem {
     for (let i = 0; i < this.doorOpen.length; i++) this.placeDoor(i, open.has(i));
     const hp = new Map(m.c);
     for (let i = 0; i < this.crateHp.length; i++) this.placeCrate(i, hp.get(i) ?? INTERACTIVES.crate.hp);
+    const ringing = new Set((m.b ?? []).map(([id]) => id));
+    for (let i = 0; i < this.bellOn.length; i++) this.setBell(i, ringing.has(i));
     refreshQueries(this.host.physics);
   }
 
@@ -194,7 +221,52 @@ export class InteractiveSystem {
       if (this.placeCrate(e.id, e.hp)) refreshQueries(this.host.physics);
       return true;
     }
+    if (e.e === 'bell') {
+      this.setBell(e.id, e.on === 1);
+      return true;
+    }
     return false;
+  }
+
+  /** The bell closest to `pos` (feet) within reach; −1 when none. */
+  bellNear(pos: Vec3, range: number = INTERACTIVES.bell.useRange): number {
+    const up = v3normalize(pos);
+    let best = -1;
+    let bestD = range;
+    for (const b of this.bells) {
+      const d = Math.hypot(b.position.x - (pos.x + up.x), b.position.y - (pos.y + up.y), b.position.z - (pos.z + up.z));
+      if (d <= bestD) {
+        bestD = d;
+        best = b.id;
+      }
+    }
+    return best;
+  }
+
+  /** A player rings bell `id` (validated: within reach, not too often, not already ringing). */
+  ring(a: InteractiveActor, id: number, now: number): WorldReject {
+    const b = this.bells[id];
+    if (!b) return WorldReject.UNKNOWN;
+    const last = this.lastUse.get(a.index) ?? -Infinity;
+    if (now - last < INTERACTIVES.bell.intervalMs) return WorldReject.RATE;
+    const up = v3normalize(a.state.pos);
+    const d = Math.hypot(b.position.x - (a.state.pos.x + up.x), b.position.y - (a.state.pos.y + up.y), b.position.z - (a.state.pos.z + up.z));
+    if (d > INTERACTIVES.bell.useRange + 0.35) return WorldReject.FAR;
+    this.lastUse.set(a.index, now);
+    if (this.bellOn[id]) return WorldReject.BLOCKED;
+    this.bellUntil[id] = now + INTERACTIVES.bell.ringSeconds * 1000;
+    this.setBell(id, true);
+    this.host.emit({ e: 'bell', id, on: 1, by: a.index });
+    return WorldReject.OK;
+  }
+
+  /** Server: silences the bells whose time is up (their winds stop with them). */
+  update(now: number): void {
+    for (let i = 0; i < this.bellOn.length; i++) {
+      if (!this.bellOn[i] || now < this.bellUntil[i]!) continue;
+      this.setBell(i, false);
+      this.host.emit({ e: 'bell', id: i, on: 0, by: -1 });
+    }
   }
 
   /** The door closest to `pos` (feet) within reach, the one ahead first when `look` is given; −1 when none. */
@@ -222,6 +294,7 @@ export class InteractiveSystem {
 
   /** A player's WORLD_USE (validated: a known door within reach, not too often, nobody in the way when closing). */
   use(a: InteractiveActor, m: WorldUseMsg, now: number): WorldReject {
+    if (m.k === 1) return this.ring(a, m.id, now);
     const d = this.doors[m.id];
     if (!d) return WorldReject.UNKNOWN;
     const last = this.lastUse.get(a.index) ?? -Infinity;
@@ -310,6 +383,15 @@ export class InteractiveSystem {
   }
 
   // ------------------------------------------------------------------------------------------------ colliders
+
+  /** Sets a bell ringing or silent, and the event winds it wakes. */
+  private setBell(id: number, on: boolean): void {
+    if (this.bellOn[id] === undefined) return;
+    this.bellOn[id] = on;
+    if (!on) this.bellUntil[id] = 0;
+    this.windsOn.clear();
+    for (let i = 0; i < this.bellOn.length; i++) if (this.bellOn[i]) for (const w of this.bellWinds[i]!) this.windsOn.add(w);
+  }
 
   /** Sets a door's state and collider; true when it changed. */
   private placeDoor(id: number, open: boolean): boolean {
