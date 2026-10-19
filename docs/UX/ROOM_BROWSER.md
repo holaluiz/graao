@@ -67,6 +67,8 @@ Criar sala envia, junto das opções normais de versão, nome e aparência:
 
 A sala normaliza o nome (até 56 caracteres; `Sala de [nome do host]` quando vazio). O formulário limita a 40, mostra a conta “Você + N bots = N+1 de 10 participantes” e, no modo hospedado, avisa que o host mantém a sala na própria aba. No modo dedicado com servidor fora do ar, a alternativa **Criar sala privada neste navegador** continua disponível quando há signaling.
 
+O build publicado tem um botão só, **Criar sala**, que hospeda na aba. Com `VITE_GRAAO_HOST=on` o botão principal vira **Criar e hospedar** (Graao Host) e a aba passa a ser a alternativa “Ou hospedar nesta aba do navegador (sem instalar)”; desligado desde 19/10/2026 (ADR-006 em [MASTER_GAME_DESIGN_2.md](../product/MASTER_GAME_DESIGN_2.md#decisões-adrs-curtos)).
+
 Entrar pela lista usa o código real da linha. Entrar por código atende também salas privadas.
 
 ## Estados

@@ -1,9 +1,15 @@
-# M2 — Validação do Graao Host em redes reais
+# M2 — Validação da hospedagem em redes reais
 
-Protocolo do Gate B. O que já foi testado num PC só (três hosts por túnel quick, central de produção, app empacotado)
-está em [GRAAO_HOST_TEST_REPORT.md](../hosting/GRAAO_HOST_TEST_REPORT.md); aqui fica o que falta provar **entre
-máquinas e redes diferentes**, como medir e o que precisa do dono do projeto. Resultados vão para
-`docs/qa/EXTERNAL_ALPHA_REPORT.md` — nada é marcado como feito sem as máquinas.
+Protocolo do Gate B. Desde 19/10/2026 o site só oferece **sala hospedada na aba de quem cria** (WebRTC + sinalização
+Supabase, [BROWSER_HOSTED_ROOMS.md](../architecture/BROWSER_HOSTED_ROOMS.md)); o Graao Host está desligado no site
+(`VITE_GRAAO_HOST`, ADR-006 em [MASTER_GAME_DESIGN_2.md](../product/MASTER_GAME_DESIGN_2.md#decisões-adrs-curtos)).
+Aqui fica o que falta provar **entre máquinas e redes diferentes**, como medir e o que precisa do dono do projeto.
+Resultados vão para `docs/qa/EXTERNAL_ALPHA_REPORT.md` — nada é marcado como feito sem as máquinas.
+
+Já provado num PC só: host + convidado em duas abas até a partida e de volta ao lobby, convidado reconectando em
+0,9 s na mesma vaga, sala do host seguindo no ritmo com a aba em segundo plano, e o site no ar (PR #7) hospedando até
+o Draft com convidado em outra aba. O histórico do Graao Host (três hosts por túnel quick, central de produção, app
+empacotado) está em [GRAAO_HOST_TEST_REPORT.md](../hosting/GRAAO_HOST_TEST_REPORT.md).
 
 ## O que o dono do projeto precisa providenciar
 
@@ -12,11 +18,10 @@ máquinas e redes diferentes**, como medir e o que precisa do dono do projeto. R
 | **PC B em outra rede** (outra casa, ou o mesmo PC num celular roteando 4G/5G) com Chrome ou Edge | Convidado real fora da rede do host | Gate B |
 | **PC C (e D)** para três hosts reais, idealmente em três redes | Três hosts independentes | Gate B (parte 2) |
 | Uma pessoa em cada máquina durante ~40 min (ou acesso remoto) | Jogar Draft → partida → lobby | Gate B |
-| Conta/zona Cloudflare + token mínimo (*Tunnel Edit*, *DNS Edit*) | Túnel gerenciado (hostname estável) em vez do quick de teste | Produção, não o Gate B |
-| Certificado de assinatura de código (opcional) | Tirar o aviso do SmartScreen | Lançamento |
+| Um convidado numa rede restrita (4G de operadora, rede de empresa ou escola) | Saber se a conexão direta basta ou se é preciso TURN | Decisão sobre TURN |
+| Serviço TURN (só se o cenário 7 falhar) | Retransmitir quando a conexão direta é bloqueada; é serviço externo, **pedir aprovação** (custo) | Convidados em NAT restrito |
 
-O Gate B pode ser cumprido com **túnel quick** (`tunnel_mode = quick-test`, já em produção): ele é suficiente para
-provar a partida entre redes, não para escala.
+Conta Cloudflare e certificado de assinatura só voltam a importar se o Graao Host for religado.
 
 ## Antes da sessão (dá para fazer agora, sem máquinas)
 
@@ -25,44 +30,45 @@ provar a partida entre redes, não para escala.
       pela biblioteca supabase-js).
 - [x] RLS habilitado em todas as tabelas `public` (`profiles`, `matches`, `match_players`, `host_installations`,
       `host_tickets`, `host_rooms`) e nas `private` do host; `private.server_keys` fica fora da API.
-- [x] Superfície pelo túnel: o servidor do host escuta só em `127.0.0.1`; pela borda saem `/health`, `/rooms` e o
-      matchmaking do Colyseus. Criar sala pela rede é recusado em `HOST_MODE=DESKTOP` (só o app, com a chave do
-      processo); dono da sala só com a chave do dono. O app Electron não abre outro servidor HTTP.
-- [x] Electron: `contextIsolation`, `sandbox`, `nodeIntegration: false`, `webSecurity` na janela; IPC pelo preload.
 - [x] Mensagens C2S: cada tipo passa por um validador de `@graao/shared/validate.ts` antes de tocar o estado; tipos
-      desconhecidos são só registrados.
+      desconhecidos são só registrados. A sala na aba é o mesmo `GraaoMatchRoom`.
 - [x] Versões: protocolo (`VERSION_MISMATCH`) e, desde 19/10/2026, mapa (`MAP_MISMATCH`) recusados antes de criar
       estado na sala, com mensagem em português.
-- [ ] Publicar um instalador com a checagem de mapa (o `host-v0.1.0` é anterior a ela). **Publicação externa: pedir
-      aprovação.** Enquanto isso, site novo + host 0.1.0 continuam compatíveis (o host antigo ignora o campo `map`).
+- [ ] Build publicado com `VITE_SUPABASE_*` (vem de `apps/client/.env.production`, PR #7 em `main`) e sem
+      `VITE_GRAAO_HOST`: conferir no chunk `GraaoApp-*.js` que `supabase.co` aparece e que o formulário mostra só
+      **Criar sala**.
+- [ ] `VITE_ICE_SERVERS` vazio = só STUN (Google, Cloudflare). Anotar no relatório que a sessão rodou sem TURN.
 
 ## Roteiro da sessão
 
-Abra o F3 em todos os clientes (ping, quedas de conexão, tick do servidor, snapshot) e anote no relatório.
+Abra o F3 em todos os clientes (ping, quedas de conexão, tick do servidor, snapshot) e anote no relatório. Anote
+também o tipo de rede de cada PC (fibra doméstica, 4G, empresa).
 
 | # | Cenário | Passos | Medir | Passa se |
 |---|---|---|---|---|
-| 1 | 1 host + 1 convidado, redes diferentes | PC A: site → Criar e hospedar → app vincula. PC B: lista → entrar. Os dois: Pronto → Draft → OVNI → partida até o fim → Voltar ao lobby | RTT (F3) no lobby e na partida, jitter (variação do ping), quedas, tempo de "sala pronta" | partida termina, os dois voltam ao lobby, 0 quedas |
-| 2 | 1 host + vários convidados (+ bots até 10) | Repetir 1 com 2–4 pessoas e o resto bots | upload do host (painel técnico do app), CPU, tick | tick < 16 ms, nenhum convidado cai |
+| 1 | 1 host + 1 convidado, redes diferentes | PC A: site → Jogar → Criar sala (a sala roda na aba). PC B: lista → Entrar. Os dois: Pronto → Draft → OVNI → partida até o fim → Voltar ao lobby | tempo entre Entrar e o lobby, RTT (F3) no lobby e na partida, jitter (variação do ping), quedas | partida termina, os dois voltam ao lobby, 0 quedas |
+| 2 | 1 host + vários convidados (+ bots até 10) | Repetir 1 com 2–4 pessoas e o resto bots | tick (F3), CPU da aba do host (Gerenciador de tarefas do navegador, Shift+Esc), upload do host | tick < 16 ms, nenhum convidado cai, o host continua jogável |
 | 3 | Três hosts simultâneos | PCs A, C, D hospedam ao mesmo tempo; convidados em cada | o mesmo por sala | três partidas completas e independentes |
-| 4 | Queda do host | Fechar o Graao Host no meio da partida; noutra rodada, desligar o Wi-Fi do host | tempo até o aviso "O HOST ENCERROU A PARTIDA" e até a sala sumir da lista | aviso claro, lista limpa em ≤ 30 s |
-| 5 | Reconexão do convidado | Desligar a rede do PC B por 5 s e religar | F3 "quedas conexão", volta à mesma vaga | volta sem perder a partida (janela de 20 s, `RECONNECT_SECONDS`) |
-| 6 | Versão incompatível | Host 0.1.0 × site com protocolo novo (ou mapa novo, quando o host novo existir) | mensagem mostrada | entrada bloqueada com explicação, sem estado parcial |
-| 7 | Atualização do app | Instalar a versão nova por cima da 0.1.0 | vínculo e salas continuam | sem reinstalar do zero |
+| 4 | Queda do host | Fechar a aba do host no meio da partida; noutra rodada, desligar o Wi-Fi do host | tempo até o aviso "Quem criou a sala saiu: a sala fechou." e até a sala sumir da lista | aviso claro, lista limpa em ≤ 30 s |
+| 5 | Reconexão do convidado | Desligar a rede do PC B por 5 s e religar | F3 "quedas conexão", volta à mesma vaga | volta sem perder a partida (janela de `RECONNECT_SECONDS`) |
+| 6 | Host em segundo plano | O host troca de aba (ou minimiza) por 30 s no meio da partida | tick e RTT dos convidados nesse intervalo | convidados seguem jogando sem travar |
+| 7 | Rede restrita | Convidado no 4G (celular roteando) ou rede de empresa entra numa sala de PC A | conecta ou mostra "a rede de um de vocês bloqueia conexões diretas" | conecta; se falhar, registrar a rede: é o dado para decidir sobre TURN |
+| 8 | Versão incompatível | Host com a aba aberta antes de um deploy × convidado com o build novo | mensagem mostrada | entrada bloqueada com "recarreguem a página", sem estado parcial |
 
 ## Critérios de rede (primeira referência, a confirmar com os dados)
 
-- RTT de jogo ≤ 120 ms jogável; ≤ 60 ms bom (medido hoje no mesmo PC: 23–31 ms pela borda `gig`).
+- RTT de jogo ≤ 120 ms jogável; ≤ 60 ms bom.
 - Jitter (desvio do RTT) ≤ 20 ms; mais que isso aparece como extrapolação (F3 "extrap. remoto").
-- Upload do host com 10 participantes ≈ 1,2 Mbit/s médio (medido no mesmo PC): conferir na rede doméstica real.
+- Upload do host: um canal de dados por convidado. Referência medida no mesmo PC com o servidor do Graao Host
+  (mesma sala, mesmos snapshots): ≈ 1,2 Mbit/s médio com 10 participantes. Conferir na rede doméstica real.
 
-## Se o túnel não atender
+## Se a conexão direta não atender
 
-Não migrar para WebRTC por preferência nem mudar a topologia antes de esgotar a avaliação. Ordem de alternativas,
-todas atrás da interface `TunnelFactory` (`apps/host/src/main/tunnel.ts`), sem mexer no jogo:
+Ordem de alternativas, sem mexer no jogo (a sala é a mesma nos três caminhos):
 
-1. Túnel **gerenciado** da Cloudflare (hostname estável, sem os limites do quick) — já implementado, falta a conta.
-2. Outro provedor de túnel/relay (ex.: relay WSS próprio numa VPS pequena) publicando o mesmo endpoint na central.
-3. Só então: salas no navegador (WebRTC, já existem para regressão) como caminho de convidados com NAT difícil.
-
-Custos de qualquer alternativa paga: pedir aprovação antes.
+1. **TURN** para quem não conecta direto: `VITE_ICE_SERVERS` com um `RTCIceServer` de retransmissão. Serviço
+   externo: **pedir aprovação** antes (custo).
+2. Religar o **Graao Host** (`VITE_GRAAO_HOST=on` no build): o túnel funciona em qualquer rede, mas o host instala o
+   app. Antes, publicar um instalador com a checagem de mapa (o `host-v0.1.0` é anterior a ela) e, para produção,
+   o túnel gerenciado da Cloudflare — **publicação externa e conta: pedir aprovação**.
+3. Servidor dedicado pago: pedir aprovação.

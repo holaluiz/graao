@@ -6,6 +6,9 @@
  * The central service is the graao Supabase project (RPCs), or a development central (VITE_GRAAO_HOST_API). Guests
  * never send their Supabase token to a host's PC: a Graao Host room only ever learns a display name, and the owner's
  * key (the ticket secret) that makes them its host.
+ *
+ * Off on the site unless the build sets VITE_GRAAO_HOST=on (since 2026-10-19 rooms are hosted in the creator's browser
+ * tab, docs/architecture/BROWSER_HOSTED_ROOMS.md): with it off, nothing here is listed, offered or contacted.
  */
 import {
   HOST_TICKET_TTL_S,
@@ -25,8 +28,10 @@ import {
 const API = ((import.meta.env.VITE_GRAAO_HOST_API as string | undefined) || (import.meta.env.VITE_SUPABASE_URL as string | undefined) || '').replace(/\/+$/, '');
 const KEY = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined) ?? (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? '';
 
-/** Can this build list and create Graao Host rooms? */
-export const hostApiConfigured = (): boolean => !!API && !!KEY;
+const ENABLED = /^(on|1|true)$/i.test((import.meta.env.VITE_GRAAO_HOST as string | undefined) ?? '');
+
+/** Can this build list and create Graao Host rooms? (Turned on, and a central service to talk to.) */
+export const hostApiConfigured = (): boolean => ENABLED && !!API && !!KEY;
 
 let anon: HostCentral | null = null;
 const central = (): HostCentral => (anon ??= createHostCentral({ url: API, key: KEY, timeoutMs: 6000 }));

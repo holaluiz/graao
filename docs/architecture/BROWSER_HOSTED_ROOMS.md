@@ -1,9 +1,14 @@
 # Browser-hosted rooms (the player who creates the match is the server)
 
-Default online mode: no match server to deploy. Whoever presses **Criar partida** runs the match room in their own
-browser; friends join with the room code and connect straight to that browser (WebRTC). **Jogar solo** with bots
-runs the same way, offline. A dedicated Colyseus server is still supported (`?server=ws://…`, or a build with
-`VITE_SERVER_URL`): tests, the network bot (`pnpm bot`) and measurements use it.
+Default online mode: no match server to deploy. Whoever presses **Criar sala** runs the match room in their own
+browser; friends join from the room list or with the room code and connect straight to that browser (WebRTC).
+**Jogar solo** with bots runs the same way, offline. A dedicated Colyseus server is still supported (`?server=ws://…`,
+or a build with `VITE_SERVER_URL`): tests, the network bot (`pnpm bot`) and measurements use it.
+
+Since 2026-10-19 this is the only hosting the published site offers (ADR-006 in
+[MASTER_GAME_DESIGN_2.md](../product/MASTER_GAME_DESIGN_2.md#decisões-adrs-curtos)). Graao Host (a desktop app that runs
+the room on the host's PC, [docs/hosting](../hosting/GRAAO_HOST_ARCHITECTURE.md)) stays in the code, off unless the
+build sets `VITE_GRAAO_HOST=on` (`hostApiConfigured()` in `apps/client/src/net/graaoHost/hostSite.ts`).
 
 ## Pieces
 
@@ -53,7 +58,8 @@ inputs, fire, ready… ◄═══ [type, payload] ═════════�
 - **Trust:** the host runs the authoritative room, so the host could cheat; fine among friends. Everyone joins as a
   guest (no identity tokens leave a browser) and **nothing is saved to the history**: results can only be written by
   a server that holds the secret.
-- **Connectivity:** STUN only by default (Google, Cloudflare). Some networks (mobile carriers, corporate) cannot
+- **Connectivity:** STUN only by default (Google, Cloudflare); the published build has no TURN yet (a paid or
+  quota-limited outside service: needs the owner's approval). Some networks (mobile carriers, corporate) cannot
   connect directly; a TURN relay fixes that: set `VITE_ICE_SERVERS` to a JSON array of `RTCIceServer`
   (e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`). The guest sees "a rede de um de
   vocês bloqueia conexões diretas" when it fails.

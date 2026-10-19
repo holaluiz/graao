@@ -11,8 +11,8 @@ reescrevem o mesmo contrato.
 - [x] F3: creeps, colisores, bots, quedas de conexão, heap JS.
 - [ ] Mostrar "mapa incompatível" já na lista de salas (hoje o protocolo aparece na lista e o mapa só no join, com
       mensagem clara). `shared/validate.ts parseRoomListing` + `map` na metadata da sala; para salas do Graao Host
-      exige coluna na central (migration nova) e nova versão do app — fazer junto com a próxima release do host.
-      Feito quando uma sala de outro mapa aparece indisponível na lista nas três origens (dedicado, navegador, host).
+      (desligado no site, ADR-006) exige coluna na central (migration nova) e nova versão do app — só se ele voltar.
+      Feito quando uma sala de outro mapa aparece indisponível na lista nas origens ligadas (dedicado, navegador).
 - [ ] Merge de `origin/main` (PR #7, `.env.production`) nesta branch antes do próximo PR.
 
 ## M2 — Alfa externa
@@ -21,7 +21,9 @@ Ver [HOST_VALIDATION.md](../networking/HOST_VALIDATION.md). Bloqueado por máqui
 
 - [ ] Partida completa entre dois PCs em redes domésticas diferentes (host + convidado), com medidas de RTT/jitter.
 - [ ] Host + vários convidados; três hosts simultâneos em máquinas reais.
-- [ ] Queda inesperada do host, reconexão do convidado, atualização do app, versão incompatível (agora também mapa).
+- [ ] Queda inesperada do host, reconexão do convidado, host em segundo plano, versão incompatível (agora também mapa).
+- [ ] Convidado em rede restrita (4G, empresa): conecta direto ou precisa de TURN (`VITE_ICE_SERVERS`; serviço
+      externo, pedir aprovação).
 - [ ] `docs/qa/EXTERNAL_ALPHA_REPORT.md` com resultados reais.
 
 ## M3 — Ability Draft visual

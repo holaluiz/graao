@@ -1,5 +1,11 @@
 # Graao Host — arquitetura
 
+> **Desligado no site desde 19/10/2026 (ADR-006 em [MASTER_GAME_DESIGN_2.md](../product/MASTER_GAME_DESIGN_2.md#decisões-adrs-curtos)).**
+> O site só oferece sala hospedada na aba ([BROWSER_HOSTED_ROOMS.md](../architecture/BROWSER_HOSTED_ROOMS.md)). App,
+> central, túnel e testes continuam como estão; um build com `VITE_GRAAO_HOST=on` traz de volta "Criar e hospedar",
+> as salas do Graao Host na lista e os links `/?sala=` do app. O launch `graao-client-hosting` já liga a chave. Os
+> documentos desta pasta descrevem o sistema como ele funciona quando ligado.
+
 **Quem quer jogar abre o site. Quem quer hospedar instala o Graao Host uma vez.** Cada host contribui com o próprio PC
 para executar uma partida; o graao só autoriza, lista e conecta.
 

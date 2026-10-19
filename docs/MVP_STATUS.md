@@ -1,5 +1,14 @@
 # graao MVP status
 
+## 2026-10-19 — Site só com hospedagem na aba do navegador
+
+O formulário **Criar sala** tinha dois caminhos ("Criar e hospedar" com o Graao Host e "Ou hospedar nesta aba do
+navegador"). Agora o site oferece só a sala na aba (WebRTC, [BROWSER_HOSTED_ROOMS](architecture/BROWSER_HOSTED_ROOMS.md)):
+o Graao Host fica atrás de `VITE_GRAAO_HOST=on` (`hostApiConfigured()`), desligado por padrão — sem botão, sem salas
+dele na lista, sem consulta à central por código ou `/?sala=`. App, central, túnel e testes continuam no código; o
+launch `graao-client-hosting` liga a chave. O roteiro do M2 ([HOST_VALIDATION](networking/HOST_VALIDATION.md)) passou
+a validar a sala na aba, com um cenário de rede restrita para decidir sobre TURN (ADR-006).
+
 ## 2026-10-19 — Vertical World & Traversal: escalada, planagem, vento, Serra do Mirante e ilhas
 
 Exploração vertical dentro do planeta de 100 m, no mesmo motor do cliente e do servidor

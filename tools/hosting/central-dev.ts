@@ -4,7 +4,8 @@
  *
  *   pnpm exec tsx tools/hosting/central-dev.ts [--port 54330] [--tunnel direct-dev|quick-test]
  *
- * Point the client at it with VITE_GRAAO_HOST_API=http://127.0.0.1:54330 and the app with
+ * Point the client at it with VITE_GRAAO_HOST=on and VITE_GRAAO_HOST_API=http://127.0.0.1:54330 (the launch config
+ * `graao-client-hosting` sets both) and the app with
  * GRAAO_HOST_CENTRAL_URL=http://127.0.0.1:54330. Identity: `Authorization: Bearer dev.<uuid>` (tests), or a real
  * Supabase access token of the graao project, verified against its public keys (the site's anonymous session).
  * Data lives in memory: restarting forgets every installation, ticket and room. Development only.

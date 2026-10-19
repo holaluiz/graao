@@ -3,9 +3,13 @@
 A tela **Salas disponíveis** junta três fontes reais (nunca linhas de exemplo). Todas passam por validação de
 contagem (humanos + bots ≤ capacidade ≤ 10) antes de aparecer.
 
+Desde 19/10/2026 o site publicado não liga o Graao Host (ADR-006): a lista mostra só as salas no navegador, e o
+código digitado e o link `/?sala=` não consultam a central. O resto deste documento vale para builds com
+`VITE_GRAAO_HOST=on` (por exemplo o launch `graao-client-hosting`).
+
 | Fonte | Quando | Quem é autoridade | Atualização |
 |---|---|---|---|
-| **Graao Host** (`host_public_rooms`) | Build com `VITE_SUPABASE_URL` (ou `VITE_GRAAO_HOST_API`) | O servidor no PC do host; a central só repete o heartbeat (5 s) | A cada 5 s com a tela aberta |
+| **Graao Host** (`host_public_rooms`) | Build com `VITE_GRAAO_HOST=on` e `VITE_SUPABASE_URL` (ou `VITE_GRAAO_HOST_API`) | O servidor no PC do host; a central só repete o heartbeat (5 s) | A cada 5 s com a tela aberta |
 | Salas no navegador (Presence `graao-rooms`) | Sem servidor dedicado, com Supabase | A sala no Web Worker do host | Ao vivo (Realtime) |
 | Servidor dedicado (`GET /rooms`) | `VITE_SERVER_URL` ou `?server=` | O servidor | A cada 5 s |
 
