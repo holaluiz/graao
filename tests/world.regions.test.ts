@@ -7,7 +7,7 @@
  * Region positions come from the same authoring planes as the map (tools/world/author.ts).
  */
 import { describe, expect, it } from 'vitest';
-import { CHEST_SPOTS, GRAAO_MAP, KIT, KIT_BUILDINGS, MAP_HASH, MOVEMENT, PLANET, validateMap } from '@graao/game-data';
+import { CHEST_SPOTS, GRAAO_MAP, KIT, KIT_BUILDINGS, KIT_PREFABS, MAP_HASH, MOVEMENT, PLANET, mapDigest, validateMap, type GraaoMap } from '@graao/game-data';
 import { CharacterMotor, GROUPS_WORLD_QUERY, Group, groups, buildingSite, createCharacterState, createGameWorld, newInput, placementToWorld, resolveChestSpots, waterDepth, type CharacterBody, type CharacterState, type Placement } from '@graao/game-core';
 import { InputButton, v3dot, v3len, v3normalize, v3projectOnPlane, type Vec3 } from '@graao/shared';
 import { regionPlane } from '../tools/world/author';
@@ -137,6 +137,19 @@ describe('the map', () => {
     expect(validateMap(GRAAO_MAP)).toEqual([]);
     expect(MAP_HASH).toMatch(/^planeta-graao@\d+\.\d+\.\d+#[0-9a-f]{8}$/);
     expect(GRAAO_MAP.mapVersion).toBeGreaterThanOrEqual(2);
+  });
+
+  it('hashes the same map to the same MAP_HASH on every JS engine, and a real edit to another one', () => {
+    const data = [GRAAO_MAP, KIT_PREFABS, KIT_BUILDINGS];
+    expect(MAP_HASH.endsWith(`#${mapDigest(data)}`)).toBe(true);
+    // Another engine's trigonometry: every fractional number a few ulps away (Node 24 vs Chromium differ like this).
+    const ulps = (k: number) => JSON.parse(JSON.stringify(data), (_key, v: unknown) => (typeof v === 'number' && !Number.isInteger(v) ? v * (1 + k * Number.EPSILON) : v));
+    expect(mapDigest(ulps(3))).toBe(mapDigest(data));
+    expect(mapDigest(ulps(-3))).toBe(mapDigest(data));
+    // Moving one placement by 0.001° (≈ 1.7 mm on the 100 m planet) is a different map.
+    const moved = JSON.parse(JSON.stringify(data)) as [GraaoMap, unknown, unknown];
+    moved[0].placements[0]!.lat += 1e-3;
+    expect(mapDigest(moved)).not.toBe(mapDigest(data));
   });
 
   it('has every main region built (buildings, landmarks, chest spots)', () => {

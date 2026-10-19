@@ -65,7 +65,8 @@ export const hostPolicy = {
     if (state.mode !== 'DESKTOP') return;
     const key = options?.[HOST_CREATE_KEY_OPTION];
     const ok = typeof key === 'string' && key.length <= 256 && state.createKeyHash !== '' && sameDigest(await sha256Hex(key), state.createKeyHash);
-    if (!ok) throw new ServerError(4003, 'Salas deste host são abertas pelo aplicativo Graao Host.');
+    // An HTTP status: room creation answers the matchmaking request (a 4xxx code would reach the client as a bare 500).
+    if (!ok) throw new ServerError(403, 'Salas deste host são abertas pelo aplicativo Graao Host.');
   },
 
   /**

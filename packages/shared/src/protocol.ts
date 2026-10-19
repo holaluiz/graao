@@ -76,6 +76,8 @@ export type S2CType = (typeof S2C)[keyof typeof S2C];
 /** Reasons the server refuses a join. Sent as the ServerError message prefix. */
 export const JoinError = {
   VERSION_MISMATCH: 'VERSION_MISMATCH',
+  /** Same protocol, different authoritative map (layout, prefabs or colliders). */
+  MAP_MISMATCH: 'MAP_MISMATCH',
   ROOM_FULL: 'ROOM_FULL',
   IN_PROGRESS: 'IN_PROGRESS',
   BAD_APPEARANCE: 'BAD_APPEARANCE',
@@ -161,6 +163,12 @@ export interface JoinOptions {
   loadout?: string[];
   /** Graao Host rooms: the session's owner key (proves the room's host; never a Supabase token). */
   hostKey?: string;
+  /**
+   * The client's `MAP_HASH` (game-data): map id, versions and a digest of the layout and prefabs. A server on another
+   * map refuses the join (MAP_MISMATCH): client prediction and the server would collide against different geometry.
+   * Absent from clients older than the check; the protocol version still screens those.
+   */
+  map?: string;
 }
 
 /** First message after joining. Carries the server clock and rates so the client can sync. */
@@ -173,6 +181,8 @@ export interface WelcomeMsg {
   server: string;
   tickHz: number;
   snapshotHz: number;
+  /** The server's `MAP_HASH` (absent from servers older than the map check). */
+  map?: string;
 }
 
 // ------------------------------------------------------------------------------------------------ input

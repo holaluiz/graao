@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { Client } from '@colyseus/sdk';
 import { createCharacterState, type CharacterState, type PlayerHitTarget } from '@graao/game-core';
+import { MAP_HASH } from '@graao/game-data';
 import {
   type ActionState,
   MovementState,
@@ -74,6 +75,9 @@ export interface RoomConnectOptions {
 
 function friendlyError(e: unknown, hosted = false): Error {
   const msg = (e as Error)?.message ?? String(e);
+  if (msg.includes(JoinError.MAP_MISMATCH)) {
+    return new Error(hosted ? 'Quem criou a sala está com outra versão do mapa do graao. Atualizem o graao (e o Graao Host) e tentem de novo.' : 'Este servidor roda outra versão do mapa do graao. Recarregue a página.');
+  }
   if (msg.includes(JoinError.VERSION_MISMATCH)) {
     return new Error(hosted ? 'Quem criou a sala está com outra versão do graao. Recarreguem a página.' : 'Este servidor roda outra versão do graao. Recarregue a página.');
   }
@@ -114,6 +118,8 @@ export class NetSession {
   private serverTick = 0;
   private lastServerTickMs = 0;
   private left = false;
+  /** Socket drops in this session (each one the SDK tried to recover), for the F3 overlay. */
+  private drops = 0;
   private closeReason = '';
   private active = false;
   private presentation = false;
@@ -178,12 +184,12 @@ export class NetSession {
     let useDedicated = !settings.endpoint && !settings.hosted && (settings.forceDedicated || dedicatedServer());
     if (settings.endpoint) {
       // A Graao Host room runs on another player's PC: no identity token goes there, only a name (and the owner key).
-      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(settings.hostKey ? { hostKey: settings.hostKey } : {}) };
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, map: MAP_HASH, name, appearance: app.appearance, ...(settings.hostKey ? { hostKey: settings.hostKey } : {}) };
       try {
         room = await new Client(settings.endpoint).joinById(code.toUpperCase(), options);
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e);
-        throw /fetch|network|ECONN|timeout|failed/i.test(msg) && !/full|locked|VERSION|IN_PROGRESS/i.test(msg)
+        throw /fetch|network|ECONN|timeout|failed/i.test(msg) && !/full|locked|VERSION|MAP_MISMATCH|IN_PROGRESS/i.test(msg)
           ? new Error('Não foi possível conectar ao PC que hospeda essa sala. A hospedagem pode ter sido encerrada.')
           : friendlyError(e, true);
       }
@@ -194,18 +200,18 @@ export class NetSession {
       // A signed-in player proves who they are with the Supabase access token (the server verifies it); else a guest.
       // Only the build's own server ever receives it (a ?server= link plays as a guest).
       const token = target.official ? await app.profile.accessToken() : null;
-      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...(token ? { token } : {}), ...roomOptions };
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, map: MAP_HASH, name, appearance: app.appearance, ...(token ? { token } : {}), ...roomOptions };
       try {
         room = kind === 'join' ? await client.joinById(code.toUpperCase(), options) : await client.create(ROOM_NAME, options);
       } catch (e) {
         const message = (e as Error).message || String(e);
-        if (kind === 'join' && settings.fallbackHosted && signalingConfigured() && !/VERSION_MISMATCH|ROOM_FULL|IN_PROGRESS|AUTH_FAILED|BAD_APPEARANCE|full|locked/i.test(message)) useDedicated = false;
+        if (kind === 'join' && settings.fallbackHosted && signalingConfigured() && !/VERSION_MISMATCH|MAP_MISMATCH|ROOM_FULL|IN_PROGRESS|AUTH_FAILED|BAD_APPEARANCE|full|locked/i.test(message)) useDedicated = false;
         else throw friendlyError(e);
       }
     }
     if (!useDedicated && !settings.endpoint) {
       // Hosted by a player: no identity token leaves this browser (the host is just another player).
-      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: app.appearance, ...roomOptions };
+      const options: JoinOptions = { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, map: MAP_HASH, name, appearance: app.appearance, ...roomOptions };
       try {
         if (kind === 'join') room = await PeerLink.connect(code.toUpperCase(), options);
         else {
@@ -237,6 +243,11 @@ export class NetSession {
       const timeout = setTimeout(() => reject(new Error('O servidor não respondeu.')), 8000);
       room.onMessage(S2C.WELCOME, (m: WelcomeMsg & { spawn: [number, number, number] }) => {
         clearTimeout(timeout);
+        // The server checks the map on join; this covers the other direction (a newer server, an older page).
+        if (m.map && m.map !== MAP_HASH) {
+          reject(new Error('Esta sala roda outra versão do mapa do graao. Recarregue a página.'));
+          return;
+        }
         this.code = m.code;
         this.myIndex = m.index;
         this.clockOffset = m.serverTime - Date.now();
@@ -294,6 +305,7 @@ export class NetSession {
       });
       // A dropped socket is not the end: the SDK reconnects on its own and the server keeps the seat for a while.
       room.onDrop(() => {
+        this.drops++;
         if (!this.left) this.app.onConnectionDrop(true);
       });
       room.onReconnect(() => {
@@ -605,6 +617,8 @@ export class NetSession {
       'rede entra/sai': `${(this.rateIn / 1024).toFixed(2)} / ${(this.rateOut / 1024).toFixed(2)} KB/s`,
       snapshot: `${this.lastSnapshotBytes} B (#${this.snapshots}, tick ${this.serverTick})`,
       entidades: this.remotes.size + 1,
+      bots: this.latestRoom?.players.filter((p) => p.bot).length ?? 0,
+      'quedas conexão': this.drops,
       'tick servidor': `${this.lastServerTickMs.toFixed(2)} ms`,
       reconciliação: `reexecutados ${this.app.local.stats.replayed} · erro ${(this.app.local.stats.lastCorrection * 100).toFixed(1)} cm`,
       'extrap. remoto': `${extrap.toFixed(0)} ms`,

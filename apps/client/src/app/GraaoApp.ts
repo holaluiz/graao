@@ -1137,6 +1137,9 @@ export class GraaoApp {
       grama: this.planet.stats.grassInstances,
       'props dissolvendo': this.obstruction.stats.fading,
       'VFX ativos': this.vfx.active,
+      creeps: this.creeps?.count ?? 0,
+      colisores: this.world.physics.world.colliders.len(),
+      memória: jsHeap(),
       habilidades: this.combat.abilities.stats(),
       tormenta: this.tormenta.stats(),
       loot: this.loot.stats(),
@@ -1171,4 +1174,9 @@ const breathe = () =>
     channel.port1.onmessage = () => (document.hidden ? finish() : setTimeout(finish, 100));
     channel.port2.postMessage(0);
   });
+/** JS heap in use (Chromium only: `performance.memory` is non-standard; other browsers show "-"). */
+const jsHeap = (): string => {
+  const m = (performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+  return m ? `${(m.usedJSHeapSize / 1048576).toFixed(0)} / ${(m.jsHeapSizeLimit / 1048576).toFixed(0)} MB (heap JS)` : '-';
+};
 const stateName = (v: number) => Object.keys(MovementState).find((k) => MovementState[k as keyof typeof MovementState] === v) ?? String(v);

@@ -4,10 +4,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, type Room } from '@colyseus/sdk';
-import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, PLANET, UFO, WEAPONS, randomAppearance } from '@graao/game-data';
-import { castOrigin, chestOf, diveStart, tormentaCircleAt, tormentaEdgeMeters, tormentaInside, ufoPosition, ufoSpeed } from '@graao/game-core';
+import { ABILITIES, DEFAULT_APPEARANCE, DEFAULT_LOADOUTS, MAP_HASH, PLANET, UFO, WEAPONS, randomAppearance } from '@graao/game-data';
+import { Group, castOrigin, chestOf, diveStart, groups, latLonToDir, northTangent, tormentaCircleAt, tormentaEdgeMeters, tormentaInside, ufoPosition, ufoSpeed, waterDepth } from '@graao/game-core';
 import { SnapshotInterpolator } from '../apps/client/src/net/SnapshotInterpolator';
-import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MAX_PLAYERS, MAX_SOLO_BOTS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, v3angle, v3normalize, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
+import { AIM_SCALE, AbilityReject, C2S, DeployState, InputButton, CLIENT_VERSION, HitKind, INTERPOLATION_DELAY_MS, MAX_PLAYERS, MAX_SOLO_BOTS, MatchPhase, NoticeCode, PROTOCOL_VERSION, SnapFlag, ROOM_NAME, S2C, WISH_SCALE, v3angle, v3cross, v3normalize, v3projectOnPlane, type MatchSummaryMsg, type NoticeMsg, type AbilityRequestMsg, type AbilityResultMsg, type DraftStateMsg, type EventsMsg, type GameEvent, type InputCmd, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
 import type { RecordMatchPayload } from '@graao/database';
 import { createGraaoServer } from '../apps/server/src/app';
 import { setAuthVerifier } from '../apps/server/src/auth/SupabaseAuth';
@@ -48,6 +48,69 @@ function waitFor<T>(room: Room, type: number, pred: (m: T) => boolean = () => tr
   });
 }
 
+/**
+ * A world-space wish (× WISH_SCALE, as sent in InputCmd) along which a runner standing at `feet` stays clear of props,
+ * rails, chests and water for `meters`. The server re-projects that constant wish onto each step's tangent plane, so
+ * the path is simulated the same way. The authored map changes with the editor: movement tests that measure timing
+ * must not depend on where its walls happen to be (a Vila das Lanternas wall stopped the runner after 2026-10-19).
+ */
+async function clearWish(feet: Vec3, meters: number): Promise<[number, number, number]> {
+  const wish = await findClearWish(feet, meters);
+  if (!wish) throw new Error(`no clear ${meters} m run from ${JSON.stringify(feet)}`);
+  return wish;
+}
+
+async function findClearWish(feet: Vec3, meters: number): Promise<[number, number, number] | null> {
+  const w = await getWorld();
+  const blockers = groups(0xffff, Group.PROP | Group.RAIL | Group.CHEST | Group.BARRIER);
+  const up0 = v3normalize(feet);
+  const e1 = northTangent(up0);
+  const e2 = v3cross(up0, e1);
+  const step = 0.5;
+  for (let k = 0; k < 24; k++) {
+    const angle = (k / 24) * Math.PI * 2;
+    const wish = v3normalize({ x: e1.x * Math.cos(angle) + e2.x * Math.sin(angle), y: e1.y * Math.cos(angle) + e2.y * Math.sin(angle), z: e1.z * Math.cos(angle) + e2.z * Math.sin(angle) });
+    let p = feet;
+    let clear = true;
+    for (let s = 0; s < meters && clear; s += step) {
+      const up = v3normalize(p);
+      const d = v3normalize(v3projectOnPlane(wish, up));
+      const side = v3cross(up, d);
+      for (const lateral of [-0.45, 0, 0.45]) {
+        for (const h of [0.35, 1.2]) {
+          const o = { x: p.x + up.x * h + side.x * lateral, y: p.y + up.y * h + side.y * lateral, z: p.z + up.z * h + side.z * lateral };
+          if (w.physics.castRay(o, d, step + 0.6, blockers)) clear = false;
+        }
+      }
+      p = w.terrain.surfaceAt(v3normalize({ x: p.x + d.x * step, y: p.y + d.y * step, z: p.z + d.z * step }));
+      if (waterDepth(p) > 0) clear = false;
+    }
+    if (clear) return [Math.round(wish.x * WISH_SCALE), Math.round(wish.y * WISH_SCALE), Math.round(wish.z * WISH_SCALE)];
+  }
+  return null;
+}
+
+/** Open ground (no water) with a clear `meters` run in some direction: a spawn for timing tests, wherever the map's buildings are. */
+async function openSpot(meters: number, skip: { lat: number; lon: number }[] = []): Promise<{ lat: number; lon: number }> {
+  const w = await getWorld();
+  for (let lat = -60; lat <= 60; lat += 7.5) {
+    for (let lon = -180; lon < 180; lon += 7.5) {
+      if (skip.some((s) => Math.abs(s.lat - lat) < 15 && Math.abs(s.lon - lon) < 15)) continue;
+      const feet = w.terrain.surfaceAt(latLonToDir(lat, lon));
+      if (waterDepth(feet) > 0) continue;
+      if (await findClearWish(feet, meters * 1.5)) return { lat, lon };
+    }
+  }
+  throw new Error(`no open ${meters} m ground on the planet`);
+}
+
+/** Feet of player `index` in the next snapshot `room` receives. */
+async function feetOf(room: Room, index: number): Promise<Vec3> {
+  const s = await waitFor<SnapshotMsg>(room, S2C.SNAPSHOT, (m) => m.p.some((p) => p[0] === index));
+  const p = s.p.find((q) => q[0] === index)!;
+  return { x: p[1]! / 1000, y: p[2]! / 1000, z: p[3]! / 1000 };
+}
+
 /** Fires aimed Sunbeam shots from `a`'s head toward `ib`'s chest using the latest snapshot positions. */
 function shooter(a: Room, ia: () => number, ib: () => number) {
   async function positions(): Promise<{ pa: number[]; pb: number[] }> {
@@ -81,8 +144,11 @@ describe('two clients in one graao room', () => {
   let welcomeB: WelcomeMsg;
 
   it('creates a room with a short code and lets a second client join by that code', async () => {
+    // A stands in the open with nothing in the way (the timing tests below run it ~20 m), and no creeps chase it.
+    const spawnA = await openSpot(26);
+    const spawnB = await openSpot(26, [spawnA]);
     const ca = new Client(url);
-    a = await ca.create(ROOM_NAME, { ...opts('A'), maxPlayers: 2 });
+    a = await ca.create(ROOM_NAME, { ...opts('A'), maxPlayers: 2, freeRoamSpawns: [spawnA, spawnB], creepCount: 0 });
     welcomeA = await waitFor<WelcomeMsg>(a, S2C.WELCOME);
     expect(welcomeA.code).toMatch(/^GR-[2-9A-HJ-NP-Z]{4}$/);
     const cb = new Client(url);
@@ -116,6 +182,8 @@ describe('two clients in one graao room', () => {
   }, 15000);
 
   it('advances a steadily moving player uniformly per snapshot despite send jitter (smooth remotes)', async () => {
+    // 3.1 s at ≈ 5.6 m/s, plus margin: a run that meets no wall, so any speed disagreement is timing.
+    const [wx, wy, wz] = await clearWish(await feetOf(b, welcomeA.index), 22);
     let seq = 100000;
     let sending = true;
     const t0 = Date.now();
@@ -124,7 +192,7 @@ describe('two clients in one graao room', () => {
       while (sending) {
         // Like the browser client: a real-time accumulator produces exactly 60 commands per second on average.
         const due = Math.floor(((Date.now() - t0) / 1000) * 60) - sent;
-        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, WISH_SCALE, 0, 0, 0, 0, AIM_SCALE, 0] as InputCmd);
+        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, wx, wy, wz, 0, 0, AIM_SCALE, 0] as InputCmd);
         sent += cmds.length;
         if (cmds.length) a.send(C2S.PLAYER_INPUT, { i: cmds });
         // 33 ms ± 12 ms jitter, like a real browser on Wi-Fi.
@@ -162,6 +230,8 @@ describe('two clients in one graao room', () => {
   }, 15000);
 
   it('renders a remote smoothly at 60 Hz from real snapshot arrivals (client interpolation)', async () => {
+    // 3.5 s at ≈ 5.6 m/s, plus margin: wall contacts would be real speed changes, not interpolation hitches.
+    const [wx, wy, wz] = await clearWish(await feetOf(b, welcomeA.index), 24);
     let seq = 200000;
     let sending = true;
     const t0 = Date.now();
@@ -169,7 +239,7 @@ describe('two clients in one graao room', () => {
     void (async () => {
       while (sending) {
         const due = Math.floor(((Date.now() - t0) / 1000) * 60) - sent;
-        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, -WISH_SCALE, 0, 0, 0, 0, AIM_SCALE, 0] as InputCmd);
+        const cmds: InputCmd[] = Array.from({ length: Math.min(10, due) }, () => [seq++, wx, wy, wz, 0, 0, AIM_SCALE, 0] as InputCmd);
         sent += cmds.length;
         if (cmds.length) a.send(C2S.PLAYER_INPUT, { i: cmds });
         await new Promise((r) => setTimeout(r, 33 + (Math.random() - 0.5) * 24));
@@ -219,6 +289,10 @@ describe('two clients in one graao room', () => {
   it('rejects a client speaking another protocol version', async () => {
     const cc = new Client(url);
     await expect(cc.create(ROOM_NAME, opts('C', PROTOCOL_VERSION + 99))).rejects.toThrow(/VERSION_MISMATCH/);
+    // Same protocol, another map build (e.g. a Graao Host installed before a map edit): refused before any state.
+    await expect(new Client(url).create(ROOM_NAME, { ...opts('C'), map: `${MAP_HASH}-outro` })).rejects.toThrow(/MAP_MISMATCH/);
+    // The welcome names the server's map, so a page can tell the other way round too.
+    expect(welcomeA.map).toBe(MAP_HASH);
     // An explicitly configured two-player room still refuses a third player.
     await expect(new Client(url).joinById(welcomeA.code, opts('D'))).rejects.toThrow(/locked|full/);
   });
@@ -1026,7 +1100,8 @@ describe('solo matches with server-controlled bots', () => {
   });
 
   it.each([-1, '2', true, null, Infinity, NaN])('rejects an invalid solo bot count (%s)', async (soloBots) => {
-    await expect(new Client(url).create(ROOM_NAME, { ...opts('A'), soloBots })).rejects.toThrow();
+    // The reason reaches the client (not a bare 500 from the HTTP router).
+    await expect(new Client(url).create(ROOM_NAME, { ...opts('A'), soloBots })).rejects.toThrow(/invalid solo bot count/);
   });
 
   it('waits for the human, completes the draft promptly and lets bots jump from the UFO', async () => {

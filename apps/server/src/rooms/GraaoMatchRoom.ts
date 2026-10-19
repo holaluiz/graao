@@ -117,7 +117,7 @@ import {
   type PlayerHitTarget,
   type TormentaConfig,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MAP_HASH, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
 import {
   AbilityReject,
   AIM_SCALE,
@@ -274,6 +274,8 @@ export interface RoomCreateOptions {
   tormentaFinal?: { lat: number; lon: number };
   tormentaOff?: boolean;
   matchSpawns?: { lat: number; lon: number }[];
+  /** Dev/tests only: free-roam (legacy warmup) spawn points by player index instead of `SPAWNS`. */
+  freeRoamSpawns?: { lat: number; lon: number }[];
   /** Dev/tests only: a fixed loot seed (every generation uses it), spot ids that must hold a chest, and the chest count. */
   lootSeed?: number;
   lootSpots?: string[];
@@ -437,6 +439,7 @@ export class GraaoMatchRoom extends Room {
   private tormentaOff = false;
   private tormentaFinal: Vec3 | undefined;
   private matchSpawns: { lat: number; lon: number }[] | null = null;
+  private freeRoamSpawns: { lat: number; lon: number }[] | null = null;
   /** The running match's own record (boarding → end); null outside a match. */
   private ledger: MatchLedger | null = null;
   /** Who each participant of the running match is (identity and look at the start), for persistence. */
@@ -467,7 +470,9 @@ export class GraaoMatchRoom extends Room {
     await hostPolicy.admitCreate(options as Record<string, unknown>);
     const desktop = hostPolicy.mode === 'DESKTOP';
     const botCount = (v: unknown, what: string): number => {
-      if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new ServerError(4004, `invalid ${what} count`);
+      // onCreate and onAuth answer the HTTP matchmaking request: their codes are HTTP statuses (a 4xxx one makes the
+      // router throw a RangeError and the client gets a bare 500 without this message). onJoin's are WebSocket codes.
+      if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new ServerError(400, `invalid ${what} count`);
       return v ? Math.max(1, Math.min(MAX_SOLO_BOTS, Math.floor(v))) : 0;
     };
     const soloBots = botCount(options.soloBots, 'solo bot');
@@ -561,7 +566,7 @@ export class GraaoMatchRoom extends Room {
     const token = context?.token || (typeof options?.token === 'string' ? options.token : '');
     const verifier = authVerifier();
     const user = token && verifier ? await verifier.verify(token) : null;
-    if (!user && serverConfig().requireAuth) throw new ServerError(4004, `${JoinError.AUTH_FAILED}: sign in to play on this server`);
+    if (!user && serverConfig().requireAuth) throw new ServerError(401, `${JoinError.AUTH_FAILED}: sign in to play on this server`);
     if (token && verifier && !user) log('auth: token refused, joining as guest', { code: this.roomId });
     return { profileId: user?.id ?? null, owner: await hostPolicy.ownerJoin(options, this.ownerKeyHash) };
   }
@@ -570,6 +575,10 @@ export class GraaoMatchRoom extends Room {
     if (this.solo && this.players.size) throw new ServerError(4004, 'solo practice is private');
     if (!options || options.protocol !== PROTOCOL_VERSION) {
       throw new ServerError(4001, `${JoinError.VERSION_MISMATCH}: server speaks protocol ${PROTOCOL_VERSION}`);
+    }
+    // Same protocol is not enough: a Graao Host installed before a map edit simulates other colliders than the site.
+    if (options.map !== undefined && options.map !== MAP_HASH) {
+      throw new ServerError(4001, `${JoinError.MAP_MISMATCH}: server runs map ${MAP_HASH}`);
     }
     if (!validateAppearance(options.appearance)) throw new ServerError(4003, `${JoinError.BAD_APPEARANCE}: unknown appearance ids`);
     if (!this.legacyWarmup && this.phase !== MatchPhase.LOBBY) throw new ServerError(4004, `${JoinError.IN_PROGRESS}: a partida já começou`);
@@ -604,6 +613,7 @@ export class GraaoMatchRoom extends Room {
       server: CLIENT_VERSION,
       tickHz: SERVER_TICK_HZ,
       snapshotHz: SNAPSHOT_HZ,
+      map: MAP_HASH,
       spawn: [state.pos.x, state.pos.y, state.pos.z],
     };
     client.send(S2C.WELCOME, welcome);
@@ -802,7 +812,7 @@ export class GraaoMatchRoom extends Room {
     return true;
   }
 
-  /** Dev/tests: Tormenta overrides (validated and clamped; a bad value keeps the default). */
+  /** Dev/tests: Tormenta and spawn overrides (validated and clamped; a bad value keeps the default). */
   private configureTormenta(o: RoomCreateOptions): void {
     const num = (v: unknown, lo: number, hi: number): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : undefined);
     const latLon = (v: unknown): { lat: number; lon: number } | null => {
@@ -833,6 +843,10 @@ export class GraaoMatchRoom extends Room {
       const spawns = o.matchSpawns.map(latLon);
       if (spawns.length && spawns.every((s) => s)) this.matchSpawns = spawns as { lat: number; lon: number }[];
     }
+    if (Array.isArray(o.freeRoamSpawns) && o.freeRoamSpawns.length <= MAX_PLAYERS) {
+      const spawns = o.freeRoamSpawns.map(latLon);
+      if (spawns.length && spawns.every((s) => s)) this.freeRoamSpawns = spawns as { lat: number; lon: number }[];
+    }
   }
 
   /** Dev/tests: loot overrides (validated; a bad value keeps the default). */
@@ -854,11 +868,12 @@ export class GraaoMatchRoom extends Room {
       const toC = Math.hypot(flat.x, flat.y, flat.z) > 1e-4 ? v3normalize(flat) : northTangent(dir);
       return createCharacterState({ x: ground.x + dir.x * 0.1, y: ground.y + dir.y * 0.1, z: ground.z + dir.z * 0.1 }, toC);
     }
-    let spawn = SPAWNS[index % SPAWNS.length]!;
+    const spawns = this.freeRoamSpawns ?? SPAWNS;
+    let spawn = spawns[index % spawns.length]!;
     if (avoid) {
       // Respawn at the spawn point farthest from the eliminator.
       let best = -Infinity;
-      for (const s of SPAWNS) {
+      for (const s of spawns) {
         const d = latLonToDir(s.lat, s.lon);
         const dist = -(d.x * avoid.x + d.y * avoid.y + d.z * avoid.z);
         if (dist > best) {

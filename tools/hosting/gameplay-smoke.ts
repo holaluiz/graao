@@ -37,6 +37,8 @@ export interface GameplayReport {
   shots: number;
   damage: number;
   eliminations: number;
+  /** Match start → first weapon shot seen (ms); -1 when nobody fired. Everyone lands unarmed, so this includes looting. */
+  firstShotMs: number;
   tormenta: boolean;
   participants: number;
   bots: number;
@@ -58,7 +60,7 @@ interface Seat {
 export async function runGameplaySmoke(o: { url: string; code: string; ownerKey: string; guests?: number; bots?: number; fightMs?: number; timeoutMs?: number; log?: (s: string) => void }): Promise<GameplayReport> {
   const log = o.log ?? (() => {});
   const t0 = Date.now();
-  const report: GameplayReport = { ok: false, phases: [], draftRounds: 0, loadout: [], chests: 0, shots: 0, damage: 0, eliminations: 0, tormenta: false, participants: 0, bots: 0, matchMs: 0, totalMs: 0 };
+  const report: GameplayReport = { ok: false, phases: [], draftRounds: 0, loadout: [], chests: 0, shots: 0, damage: 0, eliminations: 0, firstShotMs: -1, tormenta: false, participants: 0, bots: 0, matchMs: 0, totalMs: 0 };
   const join = (name: string, extra: Record<string, unknown> = {}) =>
     new Client(o.url).joinById(o.code, { protocol: PROTOCOL_VERSION, client: `smoke/${CLIENT_VERSION}`, name, appearance: name === 'Host' ? DEFAULT_APPEARANCE : randomAppearance(), ...extra });
 
@@ -109,7 +111,10 @@ export async function runGameplaySmoke(o: { url: string; code: string; ownerKey:
     room.onMessage(S2C.EVENTS, (m: EventsMsg) => {
       if (seat !== seats[0]) return;
       for (const e of m.ev) {
-        if (e.e === 'shot') report.shots++;
+        if (e.e === 'shot') {
+          report.shots++;
+          if (report.firstShotMs < 0 && matchAt) report.firstShotMs = Date.now() - matchAt;
+        }
         else if (e.e === 'dmg') report.damage++;
         else if (e.e === 'elim') report.eliminations++;
       }
@@ -152,7 +157,11 @@ export async function runGameplaySmoke(o: { url: string; code: string; ownerKey:
     await until(() => !!host.state?.room?.canStart, 10000, `a sala poder começar (${host.state?.room?.startReason ?? ''})`);
     host.room.send(C2S.START_MATCH, {});
     await until(() => host.state?.phase === MatchPhase.MATCH, o.timeoutMs ?? 120000, 'a partida');
-    await until(() => Date.now() - matchAt > (o.fightMs ?? 15000) || report.eliminations > 0, (o.fightMs ?? 15000) + 2000, 'o combate');
+    // Everyone lands unarmed: bots fire once they have looted a weapon, which some matches take longer than the window
+    // to do. With bots, wait for the first shot and hit (bounded) instead of guessing a fixed time.
+    const fightMs = o.fightMs ?? 15000;
+    const wantFight = (o.bots ?? 8) > 0;
+    await until(() => (Date.now() - matchAt > fightMs && (!wantFight || (report.shots > 0 && report.damage > 0))) || report.eliminations > 0, fightMs + 45000, 'o combate (primeiro tiro com dano dos bots)');
     report.matchMs = Date.now() - matchAt;
     // People here stand still: only bots shoot. Without bots the match must still run (draft, chests, Tormenta).
     const fought = (o.bots ?? 8) === 0 || (report.shots > 0 && report.damage > 0 && report.bots > 0);

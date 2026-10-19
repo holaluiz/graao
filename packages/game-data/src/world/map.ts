@@ -174,5 +174,16 @@ export function fnv1a(text: string): string {
 
 /** Map identity: id and versions, readable in logs and error messages. */
 export const MAP_ID = `${GRAAO_MAP.mapId}@${GRAAO_MAP.mapVersion}.${GRAAO_MAP.geometryVersion}.${GRAAO_MAP.collisionVersion}`;
+/**
+ * Digest of map data with every fractional number snapped to a binary grid of 2^-12 (≈ 0.24 mm, 0.00024°). Prefab parts
+ * are computed with trigonometry, and JS engines disagree in the last bits of those results (Node 24 and Chromium
+ * differ on `pavilhao-parede`, measured on 2026-10-19; Firefox and Safari ship other math libraries): a digest of the
+ * raw floats would refuse a browser running the very same map. A binary grid, unlike a decimal one, never has an
+ * authored decimal (a few digits after the point) sitting exactly on a rounding edge, so last-bit noise can't flip it.
+ */
+export function mapDigest(data: unknown): string {
+  return fnv1a(JSON.stringify(data, (_key, v: unknown) => (typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 4096) / 4096 : v)));
+}
+
 /** Digest of the layout and every kit prefab and building: two builds agree on the map iff their hashes match. */
-export const MAP_HASH = `${MAP_ID}#${fnv1a(JSON.stringify([GRAAO_MAP, KIT_PREFABS, KIT_BUILDINGS]))}`;
+export const MAP_HASH = `${MAP_ID}#${mapDigest([GRAAO_MAP, KIT_PREFABS, KIT_BUILDINGS])}`;

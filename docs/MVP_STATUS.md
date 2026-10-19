@@ -1,5 +1,35 @@
 # graao MVP status
 
+## 2026-10-19 — Master Plan 2.0: M0 (auditoria) e M1 (estabilidade)
+
+O [Master Game Design 2.0](product/MASTER_GAME_DESIGN_2.md) passa a ser o contrato do produto; o
+[backlog](product/BACKLOG.md) ordena as frentes por marco e os [gates de release](qa/RELEASE_GATES.md) definem os
+estados e os critérios de teste. A [auditoria M0](qa/AUDIT_M0_2026-10-19.md) confrontou o relatório de engenharia
+com o código:
+
+- **Baseline real em `cc7962a`:** typecheck e build passam; suíte **541/542** (o relatório dizia 537/542). Das cinco
+  falhas citadas só uma existia; as de `paper_wall`, passiva/`clothesline` e `fx: slow` passam isoladas e na suíte.
+- **Falha classificada como teste incorreto:** os testes de suavidade multiplayer corriam o jogador na direção de uma
+  parede colonial que a edição do mapa pôs no caminho do spawn (o servidor estava certo em pará-lo). Agora o bloco
+  nasce num ponto aberto achado no mundo estático (`openSpot`/`clearWish`, opção dev `freeRoamSpawns`, sem creeps);
+  nenhum limite foi afrouxado.
+- **Bug latente corrigido:** o `MAP_HASH` era documentado como conferido no join, mas não era. Agora cliente e
+  servidor recusam mapas diferentes (`MAP_MISMATCH`, mensagem em português) — um Graao Host instalado antes de uma
+  edição do mapa não joga mais com colisões diferentes das do site. A verificação no navegador mostrou que o digest
+  precisava ser estável entre motores JS (Node × Chromium diferem no último bit de prefabs calculados): números
+  passam por uma grade binária antes do hash.
+- **Bug latente corrigido:** recusas em `onCreate`/`onAuth` (criar sala pela rede num Graao Host, bots inválidos,
+  login exigido) chegavam ao cliente como HTTP 500 sem motivo, porque usavam códigos de WebSocket numa resposta HTTP.
+- **Teste instável classificado:** o e2e do Graao Host exigia tiro dos bots em 12 s fixos; com o início desarmado o
+  primeiro tiro leva 5,9–13,1 s (5 medições). A fumaça agora espera o primeiro tiro com dano (com teto).
+- **F3:** além do que já tinha, creeps, colisores, bots, quedas de conexão e heap JS.
+- **Regressão final (Gate A):** typecheck e build passam; suíte completa **543/543** em 57 arquivos (259 s), sem o
+  ruído de `RangeError`; ESLint limpo nos arquivos alterados.
+
+Ainda **não** feito: nenhum teste entre redes (Gate B bloqueado por máquinas — roteiro em
+[HOST_VALIDATION.md](networking/HOST_VALIDATION.md)); as frentes M3–M11 seguem `NOT_STARTED`/`PARTIAL` conforme a
+matriz da auditoria.
+
 ## 2026-10-18 (noite) — Graao Host: hospedagem comunitária no PC do jogador
 
 Quem hospeda instala o **Graao Host** uma vez; o PC dessa pessoa roda o **mesmo** servidor Colyseus/`GraaoMatchRoom`
@@ -151,7 +181,7 @@ technical docs are English, while the redesign specifications in `docs/UX` are P
 | Character creator UI | DONE | Full customization screen, instant switches, save/discard and return to menu/lobby. Existing Supabase `ProfileService` persistence and localStorage fallback preserved; live authenticated cloud-profile check remains separate. |
 | GRAStylizedMaterial family | DONE | world / terrain / foliage / character + outline |
 | Sky, sun rig, water, grass | DONE | Local golden-hour sun; grass bends around the local player |
-| F3 dev overlay | DONE | FPS, frame ms, draw calls, triangles, character and weapon cost, active VFX, ping, KB/s, snapshot size, server tick |
+| F3 dev overlay | DONE | FPS, frame ms, draw calls, triangles, character and weapon cost, active VFX, ping, KB/s, snapshot size, server tick; since 2026-10-19 also creeps, world colliders, bots, connection drops and JS heap |
 | Colyseus room, codes, prediction, reconciliation, interpolation | DONE | Tested (integration) |
 | Weapons (Raio de Sol, Rajada de Pétalas), server hitscan, ammo, reload, switch | TESTING | Server rules tested; client prediction reconciles ammo by FIRE sequence (`shotSeq`); code-authored models on the hand bone |
 | Match flow (lobby → host start → draft → preparation → UFO → drop → combat → results → lobby) | TESTING | New competitive flow and legacy development path are integration-tested. Current flow waits for all human loading ACKs, freezes the roster on host start and closes on host departure. Two browser clients completed the local flow. See [pre-match flow](UX/PRE_MATCH_FLOW.md). |
