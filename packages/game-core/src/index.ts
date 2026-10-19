@@ -12,6 +12,7 @@ export * from './interactives';
 export * from './combat';
 export * from './match';
 export * from './abilities';
+export * from './abilityVolumes';
 export * from './abilitySystem';
 export * from './statusEffects';
 export * from './passives';

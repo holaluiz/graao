@@ -56,3 +56,11 @@ Testes executados nesta etapa:
 - `game-core/draft.test.ts`: loadouts válidos, exclusividade individual, prazo, timeout e até dez participantes.
 
 O registro de testes de execução das demais famílias e dos confrontos reais fica na documentação de autoridade e no relatório de validação da implementação. Não assumir dez humanos a partir de dez seats de teste ou de uma sala com bots.
+
+Validação integrada de 19/10/2026: [158 testes focados, navegador e métricas](../qa/ABILITY_V2_VALIDATION_2026-10-19.md).
+`abilitySystem.v2.test.ts` exercita as demais famílias, barreiras, portais, reconhecimento, movimento e limpeza;
+`abilityPhysics.test.ts` usa física real; `lootPassives.test.ts` verifica as transações do Catador.
+`abilities-v2.multiplayer.test.ts` usa dois clientes SDK independentes e completa partidas com 1+9 e 2+8.
+Os testes de regressão finais incluem Meteoro sem impacto duplicado, volume compartilhado da nuvem e Eco sem
+rastros estacionários. A apresentação foi inspecionada em desktop, retrato e paisagem; isso não substitui a
+qualificação manual de cada uma das 40 magias, razão para manter os estados individuais TESTING.

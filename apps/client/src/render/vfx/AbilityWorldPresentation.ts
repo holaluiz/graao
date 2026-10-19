@@ -1,6 +1,6 @@
 /** Persistent, authoritative spell geometry and private reconnaissance. No gameplay is inferred from particles. */
 import * as THREE from 'three';
-import { castOrigin, createAbilityBarrier, type GamePhysics } from '@graao/game-core';
+import { abilityCloudVolume, castOrigin, createAbilityBarrier, type AbilityCloudVolume, type GamePhysics } from '@graao/game-core';
 import { ABILITIES, isAbilityId, type AbilityDefinition } from '@graao/game-data';
 import { DIR_SCALE, POS_SCALE, type AbilityEntityView, type AbilityRevealMsg, type AbilityStateMsg } from '@graao/shared';
 import '../../styles/ability-world.css';
@@ -29,7 +29,7 @@ export function abilityEntityFrame(view: AbilityEntityView): { center: THREE.Vec
   return { center, up, forward, side: new THREE.Vector3().crossVectors(up, forward).normalize() };
 }
 
-interface EntityObject { view: AbilityEntityView; root: THREE.Group; signature: string; collider?: { dispose(): void } }
+interface EntityObject { view: AbilityEntityView; root: THREE.Group; signature: string; collider?: { dispose(): void }; cloud?: AbilityCloudVolume }
 interface MarkerObject { root: THREE.Object3D; until: number }
 interface BearingObject { direction: THREE.Vector3; el: HTMLElement; until: number }
 interface AttachmentObject { root: THREE.Group; character: THREE.Object3D; until: number; rope?: THREE.Line; anchor?: THREE.Vector3 }
@@ -115,7 +115,10 @@ export class AbilityWorldPresentation {
       case 'cloud':
         if (this.isOpaqueCloud(view)) {
           // A closed opaque volume blocks sight at every quality level; an interior veil handles a camera inside it.
-          this.mesh(SPHERE, '#e4dce3', root).scale.set(radius, radius * .65, radius);
+          entry.cloud = abilityCloudVolume(frame.center, radius);
+          const cloud = this.mesh(SPHERE, '#e4dce3', root);
+          cloud.position.y = frame.center.distanceTo(entry.cloud.center);
+          cloud.scale.setScalar(entry.cloud.radius);
         } else {
           const border = this.mesh(RING, colors.color, root);
           border.rotation.x = Math.PI / 2; border.scale.setScalar(radius); border.position.y = .12;
@@ -285,10 +288,10 @@ export class AbilityWorldPresentation {
     let insideCloud = false;
     for (const [id, entry] of this.entities) {
       if (now >= entry.view.endsAt) { this.removeEntity(id); continue; }
-      if (this.isOpaqueCloud(entry.view)) {
-        const delta = this.camera.position.clone().sub(entry.root.position).applyQuaternion(entry.root.quaternion.clone().invert());
-        const radius = (entry.view.radius ?? 100) / 100;
-        if (delta.x * delta.x + delta.z * delta.z + (delta.y / .65) ** 2 < radius * radius) insideCloud = true;
+      if (entry.cloud) {
+        const { center, radius } = entry.cloud;
+        const dx = this.camera.position.x - center.x, dy = this.camera.position.y - center.y, dz = this.camera.position.z - center.z;
+        if (dx * dx + dy * dy + dz * dz <= radius * radius) insideCloud = true;
       }
       if (entry.view.kind === 'portal') entry.root.children[0]!.rotation.z = now / 2200;
     }

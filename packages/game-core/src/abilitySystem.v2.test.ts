@@ -7,6 +7,7 @@ import { applyAbilityDamage, type RayCaster } from './abilities';
 import { applyDamage, newVitals, raySphere } from './combat';
 import { applyStatus, newAbilityRuntime, statusModifiers } from './statusEffects';
 import { passiveModifiers } from './passives';
+import { abilityCloudVolume } from './abilityVolumes';
 
 const ground = (meters: number): Vec3 => ({ x: Math.sin(meters / 100) * 100, y: 0, z: Math.cos(meters / 100) * 100 });
 const world = (): RayCaster => ({
@@ -123,6 +124,38 @@ describe('Ability v2 first vertical slice', () => {
     expect(a.vitals.shield).toBe(100);
     expect(a.vitals.mana).toBe(50);
   });
+
+  it('resolves a meteor once when its victim death removes an earlier persistent area', () => {
+    const a = actor(0);
+    const b = actor(1, 4);
+    const c = actor(2, 5);
+    b.vitals.health = 1; b.vitals.shield = 0;
+    const h = harness([a, b, c]);
+    h.host.damage = (_by, target, amount) => {
+      if (applyAbilityDamage(target.vitals, amount).eliminated) h.system.cancelFor(target.index);
+    };
+    expect(h.cast(b, 'sap_snare', 1000, ground(4))).toBe(AbilityReject.OK);
+    expect(h.cast(a, 'sun_meteor', 1000, ground(4))).toBe(AbilityReject.OK);
+    h.tick(1000, 1800);
+    expect(b.vitals.alive).toBe(false);
+    expect(c.vitals.shield).toBe(65);
+    expect(h.events.filter((event) => event.e === 'area' && event.a === 'sun_meteor')).toHaveLength(1);
+    expect(h.system.pendingCount).toBe(0);
+  });
+
+  it('does not resolve any remaining areas after a match-end callback clears the ability engine', () => {
+    const a = actor(0);
+    const b = actor(1, 4, ['pollen_burst', 'sap_snare', 'leaf_shell', 'sun_meteor']);
+    const h = harness([a, b]);
+    h.host.damage = (_by, target, amount) => { applyAbilityDamage(target.vitals, amount); h.system.clear(); };
+    expect(h.cast(a, 'sun_meteor', 1000, ground(4))).toBe(AbilityReject.OK);
+    expect(h.cast(b, 'pollen_burst', 2200, ground(0))).toBe(AbilityReject.OK);
+    h.tick(1000, 2200);
+    expect(b.vitals.shield).toBe(65);
+    expect(h.events.filter((event) => event.e === 'area' && event.a === 'sun_meteor')).toHaveLength(1);
+    expect(h.events.filter((event) => event.e === 'area' && event.a === 'pollen_burst')).toHaveLength(0);
+    expect(h.system.pendingCount).toBe(0);
+  });
 });
 
 describe('all forty catalog abilities execute through the authoritative engine', () => {
@@ -215,6 +248,24 @@ describe('persistent tactical entities and mobility', () => {
     expect(harness([actor(0)]).system.occludeRay({ x: -10, y: 0, z: 102 }, { x: 1, y: 0, z: 0 }, 30)).toBeNull();
     h.tick(1650, 6000);
     expect(h.system.occludeRay({ x: -10, y: 0, z: 102 }, { x: 1, y: 0, z: 0 }, 30)).toBeNull();
+  });
+
+  it('cloud rays stop at the shared upper and lateral boundaries and pass immediately outside them', () => {
+    const a = actor(0, 0, ['chalk_cloud', 'wind_step', 'leaf_shell', 'sun_meteor']);
+    const h = harness([a]);
+    expect(h.cast(a, 'chalk_cloud', 1000, ground(0))).toBe(AbilityReject.OK);
+    h.tick(1000, 600);
+    const { center, radius } = abilityCloudVolume(ground(0), 5);
+    for (const axis of ['y', 'z'] as const) {
+      for (const margin of [-0.05, 0.05]) {
+        const origin = { ...center, x: center.x - 10, [axis]: center[axis] + radius + margin };
+        const hit = h.system.occludeRay(origin, { x: 1, y: 0, z: 0 }, 30);
+        if (margin < 0) expect(hit).not.toBeNull();
+        else expect(hit).toBeNull();
+      }
+    }
+    // This elevation was above the old flattened mesh, but is still inside the authoritative cloud.
+    expect(h.system.occludeRay({ x: -10, y: 0, z: 104 }, { x: 1, y: 0, z: 0 }, 30)).not.toBeNull();
   });
 
   it('traps trigger once against an enemy and leave neither permanent roots nor live entities', () => {
@@ -350,6 +401,34 @@ describe('authoritative information and spherical waves', () => {
     h.cast(a, 'footstep_echo', 15050);
     h.tick(15050, 500);
     expect(h.reveals.at(-1)?.message).toMatchObject({ kind: 'trail', points: [] });
+  });
+
+  it('echo never invents trails for stationary actors at spawn or after real footprints expire', () => {
+    const a = actor(0, 0, ['footstep_echo', 'wind_step', 'leaf_shell', 'sun_meteor']);
+    const b = actor(1, 3);
+    const h = harness([a, b]);
+    const revealAt = (now: number) => {
+      a.cooldownEnds[0] = 0; a.castUntil = 0; a.vitals.mana = 100;
+      expect(h.cast(a, 'footstep_echo', now)).toBe(AbilityReject.OK);
+      h.tick(now, 200);
+      return h.reveals.at(-1)?.message;
+    };
+    h.tick(0, 9000);
+    expect(revealAt(9100)).toMatchObject({ kind: 'trail', points: [] });
+    b.state.pos = ground(3.4);
+    h.system.update(9600, 0.05);
+    const moving = revealAt(9700);
+    expect(moving?.kind === 'trail' && moving.points).toHaveLength(1);
+    h.tick(10000, 10000);
+    expect(revealAt(20100)).toMatchObject({ kind: 'trail', points: [] });
+    h.system.cancelFor(b.index);
+    b.state.pos = ground(8);
+    h.tick(20500, 1000);
+    expect(revealAt(21600)).toMatchObject({ kind: 'trail', points: [] });
+    h.system.clear();
+    b.state.pos = ground(12);
+    h.tick(22000, 1000);
+    expect(revealAt(23100)).toMatchObject({ kind: 'trail', points: [] });
   });
 
   it('activity sensing reports only recent attackers in coarse bearings with no position fields', () => {

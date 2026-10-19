@@ -72,10 +72,24 @@ describe('authoritative world ability presentation', () => {
     const material = mesh.material as THREE.MeshBasicMaterial;
     expect(material.transparent).toBe(false);
     expect(material.side).toBe(THREE.DoubleSide);
+    expect(mesh.scale.toArray()).toEqual([5, 5, 5]);
+    expect(mesh.getWorldPosition(new THREE.Vector3()).toArray()).toEqual([0, 102.5, 0]);
     camera.position.set(0, 100, 0); presentation.update(1000);
     expect(ui.children[0]!.hidden).toBe(false);
     camera.position.set(0, 110, 0); presentation.update(1100);
     expect(ui.children[0]!.hidden).toBe(true);
+  });
+
+  it('keeps the interior veil aligned with the same raised sphere above and beside the cloud', () => {
+    presentation.onEntity(wall({ a: 'chalk_cloud', kind: 'cloud', radius: 500 }));
+    for (const position of [[0, 104, 0], [0, 107.49, 0], [4.99, 102.5, 0]]) {
+      camera.position.set(position[0]!, position[1]!, position[2]!); presentation.update(1000);
+      expect(ui.children[0]!.hidden).toBe(false);
+    }
+    for (const position of [[0, 107.51, 0], [5.01, 102.5, 0]]) {
+      camera.position.set(position[0]!, position[1]!, position[2]!); presentation.update(1100);
+      expect(ui.children[0]!.hidden).toBe(true);
+    }
   });
 
   it('keeps sticky and pollen areas on the ground without turning them into vision blockers', () => {

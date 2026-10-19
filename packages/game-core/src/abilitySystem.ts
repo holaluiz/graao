@@ -14,6 +14,7 @@ import { applyStatus, cleanseStatusEffects, newAbilityRuntime, statusModifiers, 
 import { passiveModifiers } from './passives';
 import { Group, groups, GROUPS_WORLD_QUERY, type AbilityBarrierFrame, type GamePhysics } from './physics';
 import { transportTangent } from './sphere';
+import { abilityCloudVolume } from './abilityVolumes';
 import {
   applyHeal,
   applyKnockback,
@@ -155,6 +156,8 @@ export class GRAAbilitySystem {
   private readonly persistent = new Map<number, RuntimeEntity>();
   private readonly tracking: RevealTracking[] = [];
   private readonly trails = new Map<number, { at: number; pos: Vec3 }[]>();
+  /** Separate movement anchors survive history expiry: a motionless actor must not create a fresh footprint. */
+  private readonly lastTrackedPositions = new Map<number, Vec3>();
   private readonly activity = new Map<number, number>();
   private trailAt = -Infinity;
   private nextId = 1;
@@ -197,8 +200,8 @@ export class GRAAbilitySystem {
     let closest: { toi: number; handle: number } | null = null;
     for (const entity of this.persistent.values()) {
       if (entity.effect?.kind !== 'cloud' && entity.view.kind !== 'beacon') continue;
-      const radius = entity.effect?.kind === 'cloud' ? entity.effect.radius : 0.5;
-      const center = entity.view.kind === 'beacon' ? v3addScaled(entity.center, v3normalize(entity.center), 1.2) : v3addScaled(entity.center, v3normalize(entity.center), radius * 0.5);
+      const volume = entity.effect?.kind === 'cloud' ? abilityCloudVolume(entity.center, entity.effect.radius) : { center: v3addScaled(entity.center, v3normalize(entity.center), 1.2), radius: 0.5 };
+      const { center, radius } = volume;
       const toi = distance(origin, center) <= radius ? 0 : raySphere(origin, direction, center, radius);
       if (toi < 0 || toi > maxDistance || (closest && toi >= closest.toi)) continue;
       closest = { toi, handle: -entity.view.id - 2 };
@@ -302,26 +305,27 @@ export class GRAAbilitySystem {
         this.run(p.onHit, { caster: p.caster, def: p.def, now, target, other, center: back, push: v3scale(p.vel, 1 / sp), scale: 1 });
       }
     }
-    for (let i = 0; i < this.areas.length; ) {
-      const a = this.areas[i]!;
+    // A damage callback may synchronously cancel a victim's areas or clear the engine on match end.
+    // Iterate a snapshot and remove by identity so those callbacks cannot shift a finished area into another pulse.
+    for (const a of [...this.areas]) {
+      if (!this.areas.includes(a)) continue;
       if (a.effect.follow && !a.caster.vitals.alive) {
-        this.areas.splice(i, 1);
+        this.areas.splice(this.areas.indexOf(a), 1);
         continue;
       }
       if (now < a.at) {
-        i++;
         continue;
       }
       if (a.effect.follow) a.center = { ...a.caster.state.pos };
       this.pulse(a, now);
+      if (!this.areas.includes(a)) continue;
       a.pulse++;
       if (a.pulse >= a.effect.pulses) {
-        this.areas.splice(i, 1);
+        this.areas.splice(this.areas.indexOf(a), 1);
         if (a.entity !== undefined) this.endEntity(a.entity);
       }
       else {
         a.at += a.effect.interval * 1000;
-        i++;
       }
     }
     this.updateEntities(now, dt);
@@ -335,6 +339,7 @@ export class GRAAbilitySystem {
     for (const entity of [...this.persistent.values()]) if (entity.caster.index === index) this.endEntity(entity.view.id);
     for (let i = this.tracking.length - 1; i >= 0; i--) if (this.tracking[i]!.caster.index === index || this.tracking[i]!.target.index === index) this.tracking.splice(i, 1);
     this.trails.delete(index);
+    this.lastTrackedPositions.delete(index);
     this.activity.delete(index);
     const actor = this.actor(index);
     if (actor) { delete actor.state.abilityMovement; actor.frontShieldUntil = 0; }
@@ -348,6 +353,7 @@ export class GRAAbilitySystem {
     for (const entity of [...this.persistent.values()]) this.endEntity(entity.view.id);
     this.tracking.length = 0;
     this.trails.clear();
+    this.lastTrackedPositions.clear();
     this.activity.clear();
     this.trailAt = -Infinity;
     for (const actor of this.host.actors()) { delete actor.state.abilityMovement; actor.frontShieldUntil = 0; }
@@ -581,12 +587,18 @@ export class GRAAbilitySystem {
         if (!actor.vitals.alive) continue;
         alive.add(actor.index);
         let history = this.trails.get(actor.index) ?? [];
-        const last = history[history.length - 1];
-        if (!last || distance(last.pos, actor.state.pos) >= 0.2) history.push({ at: now, pos: { ...actor.state.pos } });
+        const last = this.lastTrackedPositions.get(actor.index);
+        if (!last) this.lastTrackedPositions.set(actor.index, { ...actor.state.pos });
+        else if (distance(last, actor.state.pos) >= 0.2) {
+          const pos = { ...actor.state.pos };
+          history.push({ at: now, pos });
+          this.lastTrackedPositions.set(actor.index, pos);
+        }
         history = history.filter((point) => now - point.at <= ABILITY_RULES.trailHistoryMs).slice(-perActor);
         this.trails.set(actor.index, history);
       }
       for (const index of this.trails.keys()) if (!alive.has(index)) this.trails.delete(index);
+      for (const index of this.lastTrackedPositions.keys()) if (!alive.has(index)) this.lastTrackedPositions.delete(index);
     }
     for (let index = this.tracking.length - 1; index >= 0; index--) {
       const reveal = this.tracking[index]!;

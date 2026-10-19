@@ -160,6 +160,7 @@ export class DraftScreen {
   private page = 0;
   private visibleIds: string[] = [];
   private readonly small = window.matchMedia('(max-width: 560px), (max-height: 620px)');
+  private readonly short = window.matchMedia('(max-height: 450px)');
 
   constructor(private readonly actions: DraftActions) {
     this.el.hidden = true;
@@ -169,6 +170,7 @@ export class DraftScreen {
     this.filters.setAttribute('aria-label', 'Categorias de magias');
     this.pagination.setAttribute('aria-label', 'Páginas de magias');
     this.small.addEventListener('change', () => { this.cardKey = ''; this.render(); });
+    this.short.addEventListener('change', () => { this.cardKey = ''; this.render(); });
     this.statusEl.setAttribute('role', 'status');
     this.confirm.type = this.change.type = 'button';
     this.confirm.addEventListener('click', () => this.submitSelection());
@@ -360,7 +362,7 @@ export class DraftScreen {
   }
 
   private renderCards(s: DraftStateMsg): void {
-    const size = this.small.matches ? 4 : 6;
+    const size = this.short.matches ? 2 : this.small.matches ? 4 : 6;
     const page = draftCatalogPage(s.pool, this.category, this.page, size);
     this.page = page.page;
     this.visibleIds = page.ids;

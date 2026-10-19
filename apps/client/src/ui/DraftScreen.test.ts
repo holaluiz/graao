@@ -51,6 +51,15 @@ describe('draft preview and confirmation', () => {
     expect(isDraftChoiceAvailable(state, 0, 'wind_step')).toBe(true);
   });
 
+  it('keeps the full catalogue reachable in the two-card landscape layout', () => {
+    for (const [pool, category] of [[BASIC_ABILITIES, 'all'], [ULTIMATE_ABILITIES, 'ultimate']] as const) {
+      const first = draftCatalogPage(pool, category, 0, 2);
+      const pages = Array.from({ length: first.pages }, (_, index) => draftCatalogPage(pool, category, index, 2));
+      expect(pages.every((page) => page.ids.length > 0 && page.ids.length <= 2)).toBe(true);
+      expect(pages.flatMap((page) => page.ids)).toEqual(pool);
+    }
+  });
+
   it('confirms a valid local preview once just before the server deadline', () => {
     const state = new AbilityDraft([0, 1], 0).view(0);
     expect(shouldAutoConfirmDraftChoice(state, 0, 'sun_orb', null, state.endsAt - 201)).toBe(false);
