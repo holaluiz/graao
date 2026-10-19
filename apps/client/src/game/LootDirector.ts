@@ -9,7 +9,7 @@
  * a refusal is a notice and a dull bonk. The camera is never shaken by loot.
  */
 import * as THREE from 'three';
-import { GROUPS_WORLD_QUERY, addChestCollider, chestBasis, decodeDir, decodePos, refreshQueries, removeChestCollider } from '@graao/game-core';
+import { GROUPS_WORLD_QUERY, newPassiveRuntime, passiveModifiers, addChestCollider, chestBasis, decodeDir, decodePos, refreshQueries, removeChestCollider } from '@graao/game-core';
 import { AMMO, AMMO_TYPES, ATTRIBUTES, CONSUMABLES, CONSUMABLE_ORDER, ITEMS, ITEM_IDS, LOOT_RULES, RARITY_ORDER, WEAPONS, type ItemId, type Rarity } from '@graao/game-data';
 import { ChestState, LootAction, LootReject, type ChestTuple, type GameEvent, type ItemTuple, type LootDevMsg, type LootResultMsg, type LootStateMsg, type SelfStatusMsg } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
@@ -43,6 +43,10 @@ const CONSUMABLE_STAT = { health: 'VIDA', shield: 'ESCUDO', mana: 'MANA' } as co
 const CONSUMABLE_FX = { health: { color: '#ff6f84', shape: Shape.DOT }, shield: { color: '#6fbaff', shape: Shape.SHARD }, mana: { color: '#b49bff', shape: Shape.SPARK } } as const;
 
 export class LootDirector {
+  private pickupRange(): number {
+    const me = this.app.combat.roomPlayers.find((p) => p.index === this.app.net?.myIndex);
+    return LOOT_RULES.itemRange * passiveModifiers(me?.loadout ?? [], newPassiveRuntime(), Date.now(), this.app.combat.alive).pickupRange;
+  }
   readonly view = new LootView();
   readonly hud = new LootHud();
   gen = -1;
@@ -353,18 +357,18 @@ export class LootDirector {
     if (this.choice) {
       // The replacement card owns E and Q while it is open.
       const it = this.items.get(this.choice.id);
-      if (!it || !allowed || this.distanceTo(it.pos) > LOOT_RULES.itemRange + 0.6) this.closeChoice();
+      if (!it || !allowed || this.distanceTo(it.pos) > this.pickupRange() + 0.6) this.closeChoice();
       else if (input.consume('weapon1')) this.sendInteract(1, it.id, 0, true);
       else if (input.consume('weapon2')) this.sendInteract(1, it.id, 1, true);
       else if (input.consume('interact')) this.closeChoice();
-    } else if (input.consume('interact') && allowed) {
-      const t = this.target;
+    } else if (input.consume('interact')) {
+      const t = allowed ? this.target : null;
       if (t?.kind === 0) this.sendInteract(0, t.chest.id);
       else if (t?.kind === 1) {
         const full = ITEMS[t.item.item].kind === 'weapon' && app.combat.weapon.ids.every((x) => x);
         if (full) this.openChoice(t.item);
         else this.sendInteract(1, t.item.id);
-      }
+      } else if (app.phase === 'MATCH') app.interactives.use();
     }
     for (const [k, key] of (['item1', 'item2', 'item3'] as const).entries()) if (input.consume(key) && allowed) this.tryUse(k);
 
@@ -465,7 +469,7 @@ export class LootDirector {
     }
     for (const it of this.items.values()) {
       if (!this.view.hasItem(it.id)) continue;
-      const s = score(it.pos, LOOT_RULES.itemRange);
+      const s = score(it.pos, this.pickupRange());
       if (s < Infinity) cands.push({ t: { kind: 1, item: it }, s: s - 0.15, at: it.pos.clone().addScaledVector(it.pos.clone().normalize(), 0.25) });
     }
     cands.sort((a, b) => a.s - b.s);
@@ -481,7 +485,8 @@ export class LootDirector {
   private updatePrompt(): void {
     const t = this.target;
     if (this.choice || !t) {
-      this.hud.setPrompt(null);
+      // Nothing to loot: F works the door ahead, if any.
+      this.hud.setPrompt(this.choice ? null : this.app.interactives.prompt());
       return;
     }
     if (t.kind === 0) {

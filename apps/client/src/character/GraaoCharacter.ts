@@ -64,6 +64,13 @@ export class GraaoCharacter {
   private armForward = 1;
   /** Vertical correction (m) that plants the lowest sole on the ground plane after the clip is applied. */
   private footOffset = 0;
+  /**
+   * Footfalls: the ground level the soles come down to (the lowest sole, rising back slowly through a run's flight),
+   * each foot's state (lifted off it or down on it) and the footfalls since the last consumeSteps.
+   */
+  private soleGround = 0;
+  private readonly footLifted = [false, false];
+  private stepsPending = 0;
   private readonly tmpV = new THREE.Vector3();
   private readonly tmpQ = new THREE.Quaternion();
   private static readonly X_AXIS = new THREE.Vector3(1, 0, 0);
@@ -232,6 +239,7 @@ export class GraaoCharacter {
     if (planted && this.rig) {
       this.root.updateMatrixWorld(true);
       let minY = Infinity;
+      const soles = [Infinity, Infinity];
       for (const side of ['Left', 'Right'] as const) {
         const sx = side === 'Left' ? 1 : -1;
         const x = sx * this.rig.proportions.legSocketX;
@@ -242,12 +250,51 @@ export class GraaoCharacter {
           this.tmpV.set(x - def.pos[0], -def.pos[1], pz - def.pos[2]).applyMatrix4(b.matrixWorld);
           this.root.worldToLocal(this.tmpV);
           minY = Math.min(minY, this.tmpV.y);
+          const i = side === 'Left' ? 0 : 1;
+          soles[i] = Math.min(soles[i]!, this.tmpV.y);
         }
       }
       if (Number.isFinite(minY)) target = THREE.MathUtils.clamp(-minY, -0.04, 0.14);
+      if (Number.isFinite(minY)) this.countSteps(soles, minY, dt, s.speed);
+    } else {
+      // In the air or in the water: no foot is down, and none is waiting to come down (the landing is its own sound).
+      this.footLifted[0] = this.footLifted[1] = false;
     }
     this.footOffset = THREE.MathUtils.damp(this.footOffset, target, planted ? 16 : 6, dt);
     this.visualRoot.position.y += this.footOffset;
+  }
+
+  /**
+   * A foot lifted clear of the ground (5 cm) that comes back down onto it (1.5 cm) is a footfall, while the body is
+   * moving: the sound lands with the sole, whatever the clip, its speed or the slope.
+   */
+  private countSteps(soles: number[], minY: number, dt: number, speed: number): void {
+    this.soleGround = Math.min(minY, this.soleGround + dt * 0.25);
+    for (let i = 0; i < 2; i++) {
+      const lift = soles[i]! - this.soleGround;
+      if (lift > 0.05) this.footLifted[i] = true;
+      else if (this.footLifted[i] && lift < 0.015) {
+        this.footLifted[i] = false;
+        if (speed > 0.4) this.stepsPending++;
+      }
+    }
+  }
+
+  /** Footfalls since the last call (audio/Footsteps.ts). */
+  consumeSteps(): number {
+    const n = this.stepsPending;
+    this.stepsPending = 0;
+    return n;
+  }
+
+  /** True once after the feet left the ground for a jump. */
+  consumeJump(): boolean {
+    return this.anim.consumeJump();
+  }
+
+  /** Seconds in the air before the feet touched the ground, once (0 when they did not this frame). */
+  consumeLanding(): number {
+    return this.anim.consumeLanding();
   }
 
   /** True once per double jump (the frame its flip starts): the caller puffs air under the feet. */

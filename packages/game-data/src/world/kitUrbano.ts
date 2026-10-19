@@ -29,14 +29,15 @@ import {
   wall,
   type KitColor,
   type KitCover,
+  type KitDoor,
   type KitPart,
   type KitPiece,
   type WallKind,
   type WallStyle,
 } from './kitCore';
 
-const urb = (id: string, name: string, cover: KitCover, parts: KitPart[], o: { length?: number; scale?: [number, number] } = {}) =>
-  addPrefab({ id, name, category: 'urbano_bh', cover, parts, scale: o.scale ?? [1, 1], ...(o.length ? { length: o.length } : {}) });
+const urb = (id: string, name: string, cover: KitCover, parts: KitPart[], o: { length?: number; scale?: [number, number]; door?: KitDoor } = {}) =>
+  addPrefab({ id, name, category: 'urbano_bh', cover, parts, scale: o.scale ?? [1, 1], ...(o.length ? { length: o.length } : {}), ...(o.door ? { door: o.door } : {}) });
 const prop = (id: string, name: string, cover: KitCover, parts: KitPart[], scale: [number, number] = [0.85, 1.15]) => addPrefab({ id, name, category: 'props', cover, parts, scale });
 
 // ------------------------------------------------------------------------------------------------ house modules
@@ -56,18 +57,16 @@ for (const len of [2, 4]) {
   for (const [tag, color, leaf] of TONES) {
     for (const kind of ['cheia', 'janela', 'porta'] as const) {
       const id = kind === 'cheia' ? `parede-${len}${tag}` : `parede-${kind}-${len}${tag}`;
-      urb(id, `${KIND_NAME[kind]} ${len} m${tag ? ` (${tag.slice(1)})` : ''}`, 'alta', wall(len, kind, BH(color, leaf)), { length: len });
+      // Door modules hold an interactive door: one leaf hinged on the left jamb (game-core interactives.ts).
+      const door = kind === 'porta' ? { door: { w: KIT.door.w, h: KIT.door.h, style: 'simples' as const, color: leaf } } : {};
+      urb(id, `${KIND_NAME[kind]} ${len} m${tag ? ` (${tag.slice(1)})` : ''}`, 'alta', wall(len, kind, BH(color, leaf)), { length: len, ...door });
     }
   }
 }
 for (const [tag, color] of TONES) {
   urb(`parede-aco-4${tag}`, `Porta de aço 4 m${tag ? ` (${tag.slice(1)})` : ''}`, 'alta', wall(4, 'aco', BH(color)), { length: 4 });
-  urb(`parede-portao-4${tag}`, `Garagem 4 m${tag ? ` (${tag.slice(1)})` : ''}`, 'alta', [
-    ...wall(4, 'portao', BH(color)),
-    // Garage gate leaves pushed open against the inside walls.
-    box(-1.15, 1.2, -0.5, 0.03, 1.05, 0.38, 'metal', near),
-    box(1.15, 1.2, -0.5, 0.03, 1.05, 0.38, 'metal', near),
-  ], { length: 4 });
+  // The garage gate is an interactive door too: two metal leaves (game-core interactives.ts).
+  urb(`parede-portao-4${tag}`, `Garagem 4 m${tag ? ` (${tag.slice(1)})` : ''}`, 'alta', wall(4, 'portao', BH(color)), { length: 4, door: { w: 2.4, h: KIT.door.h, style: 'dupla', color: 'metal' } });
 }
 urb('parede-vitrine-4-amarelo', 'Fachada de loja 4 m', 'alta', wall(4, 'vitrine', BH('rebocoAmarelo')), { length: 4 });
 urb('parede-vitrine-4-azul', 'Fachada de loja 4 m (azul)', 'alta', wall(4, 'vitrine', BH('rebocoAzul')), { length: 4 });
@@ -81,6 +80,7 @@ urb('parapeito-2', 'Parapeito 2 m', 'baixa', parapet(2));
 urb('escada-laje-d', 'Escada externa (corrimão à direita)', 'passagem', stair(1));
 urb('escada-laje-e', 'Escada externa (corrimão à esquerda)', 'passagem', stair(-1));
 urb('passarela-5', 'Passarela 5,6 m', 'passagem', footbridge(5.6));
+urb('passarela-7', 'Passarela 7 m', 'passagem', footbridge(7.0));
 urb('passarela-4', 'Passarela 4 m', 'passagem', footbridge(4.0));
 urb('telhado-6x4', 'Telhado de duas águas 6×4', 'alta', gabledRoof(6, 4, 1.4));
 urb('telhado-oficina-6x4', 'Telhado da oficina 6×4', 'alta', [box(0, 0.09, 0, 3.35, 0.09, 2.45, 'telha'), box(0, 0.12, 2.47, 3.38, 0.14, 0.04, 'madeira', deco)]);
@@ -345,7 +345,7 @@ urb('escada-viaduto', 'Escada do viaduto', 'passagem', stair(0, { width: 2.4, la
   // Low side walls instead of railings: cover on the way up.
   ...[-1, 1].map((sx) => slope(sx * 1.32, 0.12, -0.2, 0.9, KIT.stair.run, KIT.stair.rise + 0.9, 0.9, 'concreto')),
 ));
-urb('escada-viaduto-lateral', 'Escada lateral do viaduto', 'passagem', stair(-1, { width: 1.6, landing: 0, color: 'concreto', railColor: 'ferro' }));
+urb('escada-viaduto-lateral', 'Escada lateral do viaduto', 'passagem', stair(-1, { width: 1.6, landing: 0, color: 'concreto', railColor: 'concretoEscuro' }));
 /** Railway under the viaduct: two rails on sleepers over a gravel bed (decoration, leans with the ground). */
 addPrefab({
   id: 'trilhos-6',
@@ -431,13 +431,13 @@ function lajeHouse(id: string, name: string, w: number, d: number, walls: Parame
 }
 
 // Explorable house with a flat roof: front and back doors, an external stair up the left side (−X) to the laje,
-// a water tank, and a parapet gap on the right (+X) where a footbridge can land.
+// a water tank, and a parapet gap on the right (+X), toward the front, where a footbridge can land.
 lajeHouse('casa-laje', 'Casa da Laje', 6, 6, {
   front: ['parede-janela-2-rosa', 'parede-porta-2-rosa', 'parede-janela-2-rosa'],
   back: ['parede-2-rosa', 'parede-porta-2-rosa', 'parede-janela-2-rosa'],
   right: ['parede-janela-2-rosa', 'parede-2-rosa', 'parede-janela-2-rosa'],
   left: ['parede-2-rosa', 'parede-2-rosa', 'parede-2-rosa'],
-}, { left: [-2], right: [0] }, [
+}, { left: [-2], right: [2] }, [
   sideStair(6, 6, -1),
   { prefab: 'caixa-dagua', x: -1.5, y: KIT.roofTop, z: 1.7 },
   { prefab: 'antena', x: 2.2, y: KIT.roofTop, z: -2.2 },
@@ -451,7 +451,7 @@ lajeHouse('mercadinho', 'Mercearia', 6, 6, {
   back: ['parede-janela-2-amarelo', 'parede-2-amarelo', 'parede-porta-2-amarelo'],
   right: ['parede-2-amarelo', 'parede-2-amarelo', 'parede-2-amarelo'],
   left: ['parede-janela-2-amarelo', 'parede-2-amarelo', 'parede-janela-2-amarelo'],
-}, { right: [-2], left: [0] }, [
+}, { right: [-2], left: [2] }, [
   sideStair(6, 6, 1),
   { prefab: 'balcao-2', x: -1, y: KIT.floorTop, z: 1.3 },
   { prefab: 'toldo-3', x: -1, y: 2.62, z: 3.12 },
@@ -522,8 +522,8 @@ lajeHouse('bar-esquina', 'Bar da Esquina', 6, 6, {
   { prefab: 'placa-bar', x: -1, y: 3.37, z: 4.52 },
   { prefab: 'balcao-2', x: 0.6, y: KIT.floorTop, z: -1.2 },
   { prefab: 'geladeira', x: -2.35, y: KIT.floorTop, z: -2.3 },
-  { prefab: 'prateleira-bar', x: 1.0, y: KIT.floorTop, z: -2.68 },
-  { prefab: 'engradados', x: 2.4, y: KIT.floorTop, z: -2.4 },
+  { prefab: 'prateleira-curta', x: 1.5, y: KIT.floorTop, z: -2.68 },
+  { prefab: 'engradados', x: 2.45, y: KIT.floorTop, z: -1.9 },
   { prefab: 'caixa-dagua', x: 1.3, y: KIT.roofTop, z: -1.5 },
 ], [{ x: -1, z: 3, yaw: 0 }, { x: 3, z: 1, yaw: 270 }, { x: 0, z: -3, yaw: 180 }]);
 
@@ -586,22 +586,24 @@ urb('laje-mercado', 'Cobertura do mercado 12×10', 'passagem', [
   }
   pieces.push({ prefab: 'laje-mercado', x: 0, y: H + 0.24, z: 0 });
   pieces.push({ prefab: 'placa-mercado', x: 0, y: H - 0.15, z: 5.38 });
-  // Stalls: two rows facing the middle aisle.
-  pieces.push({ prefab: 'banca-frutas', x: -3.6, y: KIT.floorTop, z: 2.3, yaw: 180 });
-  pieces.push({ prefab: 'banca-queijos', x: 0, y: KIT.floorTop, z: 2.3, yaw: 180 });
-  pieces.push({ prefab: 'banca-paes', x: 3.6, y: KIT.floorTop, z: 2.3, yaw: 180 });
-  pieces.push({ prefab: 'banca-cafe', x: -3.6, y: KIT.floorTop, z: -2.3 });
-  pieces.push({ prefab: 'banca-doces', x: 0, y: KIT.floorTop, z: -2.3 });
-  pieces.push({ prefab: 'pilha-sacos-cafe', x: 3.8, y: KIT.floorTop, z: -2.6 });
+  // Stalls: two rows facing the middle aisle (z −1.65..1.65, from the side entrances). The front row leaves the main
+  // entrance's corridor (x −2.6..2.6) open; 1.2 m gaps in the back row join the aisle to the corridor behind it.
+  pieces.push({ prefab: 'banca-frutas', x: -4.0, y: KIT.floorTop, z: 2.3, yaw: 180 });
+  pieces.push({ prefab: 'banca-paes', x: 4.0, y: KIT.floorTop, z: 2.3, yaw: 180 });
+  pieces.push({ prefab: 'banca-cafe', x: -4.0, y: KIT.floorTop, z: -2.3 });
+  pieces.push({ prefab: 'banca-queijos', x: 0, y: KIT.floorTop, z: -2.3 });
+  pieces.push({ prefab: 'banca-doces', x: 4.0, y: KIT.floorTop, z: -2.3 });
+  pieces.push({ prefab: 'pilha-sacos-cafe', x: -4.4, y: KIT.floorTop, z: 3.9 });
   // Back stair to the roof (rising toward +X along the back wall, outside).
   pieces.push({ prefab: 'escada-mercado', x: 2.6, z: -6.1, yaw: 90 });
   addBuilding({ id: 'mercado', name: 'Mercado do Horizonte', category: 'urbano_bh', halfX: 6.4, halfZ: 6.8, pieces, doors: [{ x: 0, z: 5, yaw: 0 }, { x: 6, z: 0, yaw: 270 }, { x: -6, z: 0, yaw: 90 }] });
 }
 
+// The landing stands over the stream at the bottom of the valley: its column goes 2.4 m down, into the stream bed.
 urb('patamar-viaduto', 'Patamar da escada lateral', 'passagem', [
-  box(0, KIT.roofTop / 2 - 0.4, 0, 0.85, KIT.roofTop / 2 + 0.4, 1.0, 'concreto'),
-  box(0.81, KIT.roofTop + 0.5, 0, 0.04, 0.5, 1.0, 'ferro', { solid: 'move' }),
-  box(0, KIT.roofTop + 0.5, -0.96, 0.85, 0.5, 0.04, 'ferro', { solid: 'move' }),
+  box(0, KIT.roofTop / 2 - 1.2, 0, 0.85, KIT.roofTop / 2 + 1.2, 1.0, 'concreto'),
+  box(0.81, KIT.roofTop + 0.5, 0, 0.04, 0.5, 1.0, 'concretoEscuro', { solid: 'move' }),
+  box(0, KIT.roofTop + 0.5, -0.96, 0.85, 0.5, 0.04, 'concretoEscuro', { solid: 'move' }),
 ]);
 
 // Viaduto dos Arcos as one rigid building (24 m stays within 3 cm of the curvature of a 100 m planet): deck, two

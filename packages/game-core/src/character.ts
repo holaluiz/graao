@@ -4,7 +4,7 @@
  * the tangent plane of the character's own localUp; gravity is radial; Rapier's kinematic character controller resolves
  * collisions with its "up" set to localUp every step. Animation never moves the capsule (no root motion).
  */
-import { MOVEMENT, PLANET } from '@graao/game-data';
+import { ABILITY_RULES, MOVEMENT, PLANET } from '@graao/game-data';
 import {
   InputButton,
   MovementState,
@@ -62,6 +62,10 @@ export interface CharacterState {
   noSprint?: boolean;
   /** Passive air steering multiplier (1 = normal). */
   airControl?: number;
+  /** Applies only to sprinting (out-of-combat passive), never to ordinary running or aiming. */
+  sprintSpeed?: number;
+  /** One magical extra jump per flight, distinct from the normal double jump. */
+  abilityJumpUsed?: boolean;
 }
 
 export interface CharacterAbilityMovement {
@@ -164,6 +168,9 @@ export function decodeInput(cmd: InputCmd, out: CharacterInput): CharacterInput 
 export const newInput = (): CharacterInput => ({ wish: v3(), aim: { x: 0, y: 0, z: 1 }, buttons: 0 });
 
 const CAPSULE_CENTER = MOVEMENT.capsuleHalfHeight + MOVEMENT.capsuleRadius;
+/** Ground tilts the slope step applies to: from 4° (flatter is just ground) to the climb limit. */
+const SLOPE_MIN_COS = Math.cos((4 * Math.PI) / 180);
+const SLOPE_MAX_COS = Math.cos((MOVEMENT.maxSlopeClimbDeg * Math.PI) / 180);
 const PLAYER_GROUPS = groups(Group.PLAYER, Group.TERRAIN | Group.PROP | Group.CHEST | Group.BARRIER | Group.RAIL);
 
 /** One character's Rapier objects: a parentless capsule collider moved by the shared kinematic controller. */
@@ -189,9 +196,12 @@ export class CharacterMotor {
    */
   chestFilter: ReadonlySet<number> | null = null;
   barrierFilter: ReadonlySet<number> | null = null;
+  /** Like `chestFilter`, for the doors and crates of the room (interactiveSystem.ts). */
+  interactiveFilter: ReadonlySet<number> | null = null;
   private readonly predicate = (c: { handle: number }): boolean =>
     (this.chestFilter === null || !this.physics.chestHandles.has(c.handle) || this.chestFilter.has(c.handle))
-    && (this.barrierFilter === null || !this.physics.barrierHandles.has(c.handle) || this.barrierFilter.has(c.handle));
+    && (this.barrierFilter === null || !this.physics.barrierHandles.has(c.handle) || this.barrierFilter.has(c.handle))
+    && (this.interactiveFilter === null || !this.physics.interactiveHandles.has(c.handle) || this.interactiveFilter.has(c.handle));
 
   constructor(private readonly physics: GamePhysics) {
     const c = physics.world.createCharacterController(MOVEMENT.skin);
@@ -202,6 +212,29 @@ export class CharacterMotor {
     c.setApplyImpulsesToDynamicBodies(false);
     c.setSlideEnabled(true);
     this.controller = c;
+  }
+
+  /**
+   * When the ground under `feet` is a climbable slope (4° to the climb limit), rewrites `desired` as the horizontal
+   * velocity `h` turned onto the ground plane at the same speed (plus the grounded downward bias `vs`); returns
+   * whether it did. Deterministic: one ray against the same world.
+   */
+  private slopeAlong(feet: Vec3, up: Vec3, h: Vec3, dt: number, vs: number, desired: Vec3): boolean {
+    const speed = v3len(h);
+    if (speed < 0.1) return false;
+    const origin = v3addScaled(feet, up, 0.3, this.tmpCenter);
+    const hit = this.physics.castRayNormal(origin, { x: -up.x, y: -up.y, z: -up.z }, 0.75, PLAYER_GROUPS, this.predicate);
+    if (!hit || hit.toi < 0.05) return false;
+    const n = hit.normal;
+    const cos = v3dot(n, up);
+    if (cos > SLOPE_MIN_COS || cos < SLOPE_MAX_COS) return false;
+    const k = v3dot(h, n);
+    const ax = h.x - n.x * k, ay = h.y - n.y * k, az = h.z - n.z * k;
+    const al = Math.hypot(ax, ay, az);
+    if (al < 1e-6) return false;
+    const f = speed / al;
+    v3set(desired, (ax * f + up.x * vs) * dt, (ay * f + up.y * vs) * dt, (az * f + up.z * vs) * dt);
+    return true;
   }
 
   createBody(state: CharacterState): CharacterBody {
@@ -241,7 +274,7 @@ export class CharacterMotor {
     else if (s.swimming && depth < MOVEMENT.swimExitDepth) s.swimming = false;
     const diving = s.diving;
     const swimming = s.swimming;
-    if (swimming) s.airJumped = false;
+    if (swimming) { s.airJumped = false; s.abilityJumpUsed = false; }
     const jumpDown = !diving && !s.rooted && (inp.buttons & InputButton.JUMP) !== 0;
     const sprint = !s.noSprint && (inp.buttons & InputButton.SPRINT) !== 0;
     // Hands are spread while skydiving and stroking while swimming: no aiming, no firing pose.
@@ -269,7 +302,8 @@ export class CharacterMotor {
         : MOVEMENT.diveSpeed
       : swimming
         ? MOVEMENT.swimSpeed * s.slow
-        : (s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed) * s.slow * (depth > 0 ? wadeFactor(depth) : 1);
+        : (s.aiming || firing ? MOVEMENT.aimSpeed : canSprint ? MOVEMENT.sprintSpeed : MOVEMENT.runSpeed)
+          * (canSprint ? Math.min(ABILITY_RULES.maxSpeedFactor, s.slow * (s.sprintSpeed ?? 1)) : s.slow) * (depth > 0 ? wadeFactor(depth) : 1);
     const dashing = s.dashSteps > 0;
     if (dashing) {
       // Dash: a fixed ground-plane velocity along the dash direction; no steering.
@@ -350,7 +384,7 @@ export class CharacterMotor {
 
     if (abilityMove?.mode === 'glide') vs = Math.max(vs, -Math.max(1, abilityMove.lift));
     else if (abilityMove?.mode === 'flight') {
-      const ceiling = (abilityMove.originHeight ?? v3len(s.pos)) + 18;
+      const ceiling = (abilityMove.originHeight ?? v3len(s.pos)) + ABILITY_RULES.maxFlightHeight;
       vs = v3len(s.pos) < ceiling ? Math.max(vs, abilityMove.lift) : Math.min(vs, 0);
       s.grounded = false;
     } else if (abilityMove?.mode === 'grapple' && abilityMove.anchor) {
@@ -366,6 +400,9 @@ export class CharacterMotor {
     if (s.rooted) v3set(h, 0, 0, 0);
 
     const desired = v3set(this.tmpDesired, (h.x + up.x * vs) * dt, (h.y + up.y * vs) * dt, (h.z + up.z * vs) * dt);
+    // On a walkable slope (a stair's ramp, a ladeira, a hillside) the step runs along the ground at the full speed:
+    // moving horizontally into it would let the controller slide the speed away (a 31° stair climbed at 1.2 m/s).
+    const onSlope = s.grounded && !jumped && !swimming && !diving && !abilityMove && !s.rooted && this.slopeAlong(s.pos, up, h, dt, vs, desired);
 
     // A floating body must not be pulled down onto the lake bed (the controller is shared: set it every step).
     const snap = !s.swimming;
@@ -378,7 +415,8 @@ export class CharacterMotor {
     this.placeCollider(body.collider, s.pos);
     // Another room's chests are invisible here (only checked when this world holds chests this motor does not own).
     const foreign = (this.chestFilter !== null && this.physics.chestHandles.size > this.chestFilter.size)
-      || (this.barrierFilter !== null && this.physics.barrierHandles.size > this.barrierFilter.size);
+      || (this.barrierFilter !== null && this.physics.barrierHandles.size > this.barrierFilter.size)
+      || (this.interactiveFilter !== null && this.physics.interactiveHandles.size > this.interactiveFilter.size);
     this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS, foreign ? this.predicate : undefined);
     const mv = this.controller.computedMovement();
     const groundedNow = this.controller.computedGrounded();
@@ -394,16 +432,26 @@ export class CharacterMotor {
     const newUp = v3normalize(s.pos, this.tmpNewUp);
     // Horizontal velocity follows what actually happened (walls absorb it), transported to the new tangent plane.
     const actualH = v3projectOnPlane({ x: mv.x / dt, y: mv.y / dt, z: mv.z / dt }, newUp);
-    const hl = v3len(actualH);
+    let hl = v3len(actualH);
     let intended = v3len(h);
+    // Along a slope the horizontal part of the motion is shorter by design: keep the intended speed unless something
+    // (a wall, a railing) actually took most of the step.
+    if (onSlope && groundedNow && v3len(mv) >= 0.85 * v3len(desired) && hl > 1e-6) {
+      v3set(actualH, (actualH.x / hl) * intended, (actualH.y / hl) * intended, (actualH.z / hl) * intended);
+      hl = intended;
+    }
     if (dashing && --s.dashSteps === 0) intended = Math.min(intended, MOVEMENT.runSpeed); // leave the dash at run speed
     if (hl > intended && hl > 1e-6) v3set(actualH, (actualH.x / hl) * intended, (actualH.y / hl) * intended, (actualH.z / hl) * intended);
     const movedUp = v3dot({ x: mv.x, y: mv.y, z: mv.z }, up) / dt;
-    if (groundedNow && !jumped) {
+    // Still rising freely (a jump against a wall or a crate): the controller may report contact, but nothing is under
+    // the feet yet, so the jump goes on.
+    const rising = !swimming && vs > 0.5 && movedUp > vs * 0.5;
+    if (groundedNow && !jumped && !rising) {
       vs = 0;
       s.grounded = true;
       s.airTime = 0;
       s.airJumped = false;
+      s.abilityJumpUsed = false;
       // First ground contact ends the dive (landing).
       s.diving = false;
     } else {

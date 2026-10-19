@@ -8,3 +8,7 @@ export * from './tormenta';
 export * from './loot';
 export * from './world/kit';
 export * from './world/map';
+export * from './melee';
+export * from './creeps';
+export * from './progression';
+export * from './interactives';

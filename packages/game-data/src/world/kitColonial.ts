@@ -28,14 +28,15 @@ import {
   wall,
   type KitColor,
   type KitCover,
+  type KitDoor,
   type KitPart,
   type KitPiece,
   type WallKind,
   type WallStyle,
 } from './kitCore';
 
-const col = (id: string, name: string, cover: KitCover, parts: KitPart[], o: { length?: number; scale?: [number, number]; alignToGround?: boolean; water?: boolean } = {}) =>
-  addPrefab({ id, name, category: 'colonial', cover, parts, scale: o.scale ?? [1, 1], ...(o.length ? { length: o.length } : {}), ...(o.alignToGround ? { alignToGround: true } : {}), ...(o.water ? { material: 'water' as const } : {}) });
+const col = (id: string, name: string, cover: KitCover, parts: KitPart[], o: { length?: number; scale?: [number, number]; alignToGround?: boolean; water?: boolean; door?: KitDoor } = {}) =>
+  addPrefab({ id, name, category: 'colonial', cover, parts, scale: o.scale ?? [1, 1], ...(o.length ? { length: o.length } : {}), ...(o.alignToGround ? { alignToGround: true } : {}), ...(o.water ? { material: 'water' as const } : {}), ...(o.door ? { door: o.door } : {}) });
 
 // ------------------------------------------------------------------------------------------------ tones
 
@@ -66,7 +67,9 @@ const cornice = (len: number, top: number, color: KitColor): KitPart[] => [box(0
 for (const t of COLONIAL_TONES) {
   for (const kind of ['cheia', 'janela', 'porta'] as WallKind[]) {
     const tag = kind === 'cheia' ? 'parede' : kind;
-    col(`col-${tag}-2-${t.key}`, `Colonial: ${tag} 2 m (${t.name})`, 'alta', [...wall(2, kind, style(t)), ...cornice(2, KIT.wallTop, t.frame)], { length: 2 });
+    // Door modules leave the opening to the interactive door: two tall painted leaves (game-core interactives.ts).
+    const door = kind === 'porta' ? { door: { w: 1.4, h: 2.55, style: 'dupla' as const, color: t.leaf } } : {};
+    col(`col-${tag}-2-${t.key}`, `Colonial: ${tag} 2 m (${t.name})`, 'alta', [...wall(2, kind, style(t, { openLeaves: false })), ...cornice(2, KIT.wallTop, t.frame)], { length: 2, ...door });
   }
   // Upper storey: a window, a plain wall, and a balcony door (sacada) with an iron balcony to stand on.
   col(`col-sup-parede-2-${t.key}`, `Colonial: parede superior 2 m (${t.name})`, 'alta', [...wall(2, 'cheia', style(t, { upper: true, height: UPPER })), ...cornice(2, UPPER, t.frame)], { length: 2 });
@@ -114,7 +117,7 @@ function sacada(t: ColonialTone): KitPart[] {
 for (const [w, d] of [[6, 8], [13, 13]] as const) col(`fundacao-${w}x${d}`, `Piso ${w}×${d}`, 'passagem', foundation(w, d, 'pedraEscura', w === 13 ? 'peDeMoleque' : 'madeiraClara'));
 col('fundacao-col-6x6', 'Piso colonial 6×6', 'passagem', foundation(6, 6, 'pedraEscura', 'madeiraClara'));
 /** Stone bases (embasamento) for every foundation size, picked by the layout on slopes (KIT.plinthDepths). */
-for (const [w, d] of [[6, 6], [6, 4], [6, 8], [10, 6], [12, 10], [13, 13]] as const) {
+for (const [w, d] of [[6, 6], [6, 4], [6, 8], [8, 6], [10, 6], [12, 10], [13, 13]] as const) {
   for (const depth of KIT.plinthDepths) col(`embasamento-${w}x${d}-${depth * 10}`, `Embasamento de pedra ${w}×${d} (${depth} m)`, 'estrutura', plinth(w, d, depth, 'pedraEscura'));
 }
 for (let n = 1; n <= KIT.stoop.maxSteps; n++) col(`soleira-${n}`, `Soleira de pedra (${n} degraus)`, 'passagem', stoop(n));
@@ -129,7 +132,8 @@ col('col-assoalho-6x8', 'Assoalho do sobrado 6×8', 'passagem', [
   box(-2.35, 0.5, 3.07, 0.83, 0.5, 0.03, 'madeiraEscura', { solid: 'move' }),
   box(-1.53, 0.0 - 0.21, 0, 0.04, 0.03, 4.2, 'madeiraEscura', near),
 ]);
-col('col-escada-interna', 'Escada interna de madeira', 'passagem', stair(-1, { rise: KIT.roofTop - KIT.floorTop, color: 'madeira', railColor: 'madeiraEscura', landing: 0.6 }));
+/** Inside wooden stair: its landing (1 m) opens onto the upper floor beside the stairwell's railing. */
+col('col-escada-interna', 'Escada interna de madeira', 'passagem', stair(-1, { rise: KIT.roofTop - KIT.floorTop, color: 'madeira', railColor: 'madeiraEscura', landing: 1.0, landingSideRail: false }));
 
 // ------------------------------------------------------------------------------------------------ roofs
 
@@ -144,7 +148,8 @@ col('col-telhado-4aguas-6x8', 'Telhado de quatro águas 6×8', 'alta', hippedRoo
  */
 col('col-puxado-6', 'Puxado com telhado 6 m', 'passagem', [
   slope(0, 3.35, 0.05, 2.95, 2.75, 2.15, 0.12, 'telhaColonial'),
-  ...[-2.9, 2.9].map((x) => cyl(x, 1.05, 2.5, 0.09, 1.05, 'madeira', { seg: 6 })),
+  // Posts reach 1.5 m into the ground (the yard may fall away from the house).
+  ...[-2.9, 2.9].map((x) => cyl(x, 0.3, 2.5, 0.09, 1.8, 'madeira', { seg: 6 })),
   box(0, 2.08, 2.55, 3.0, 0.06, 0.08, 'madeira', near),
   box(0, 2.1, 2.8, 3.3, 0.03, 0.05, 'telhaEscura', near),
 ]);
@@ -187,10 +192,7 @@ for (const t of COLONIAL_TONES) {
 }
 casaColonial('casa-colonial-puxado', 'Casa do Puxado (telhado acessível)', tone('verde'), 'meio', {
   puxado: true,
-  extra: [
-    { prefab: 'pilha-caixotes', x: 2.2, z: -6.5, yaw: 90 },
-    { prefab: 'potes-barro', x: -2.0, y: KIT.floorTop, z: -2.2 },
-  ],
+  extra: [{ prefab: 'potes-barro', x: -2.0, y: KIT.floorTop, z: -2.2 }],
 });
 casaColonial('casa-colonial-esquina', 'Casa da Esquina (quatro águas)', tone('vermelha'), 'meio', { hip: true });
 
@@ -222,7 +224,7 @@ function sobrado(id: string, name: string, t: ColonialTone) {
     // Internal stair along the left wall, rising toward the back.
     { prefab: 'col-escada-interna', x: -2.22, y: KIT.floorTop, z: 3.05, yaw: 180 },
     { prefab: 'balcao-2', x: 1.3, y: KIT.floorTop, z: 1.8 },
-    { prefab: 'prateleira-bar', x: 1.6, y: KIT.floorTop, z: -3.62 },
+    { prefab: 'prateleira-curta', x: 1.75, y: KIT.floorTop, z: -3.62 },
     { prefab: 'pilha-sacos-cafe', x: 2.3, y: KIT.floorTop, z: -1.6, yaw: 90 },
     { prefab: 'lampiao-parede', x: 1.0, y: 2.55, z: 4.14 },
   ];
@@ -346,9 +348,10 @@ col('chafariz-pedra', 'Chafariz colonial', 'baixa', [
     return box(s * 0.5, 1.75, c * 0.5, 0.05, 0.05, 0.12, 'ferro', { ...near, ry: a });
   }),
 ]);
+// The water lies just over the stone (the basin and the bowl are solid: low cover), inside their rims.
 col('chafariz-agua', 'Água do chafariz', 'decoracao', [
-  cyl(0, 0.66, 0, 1.68, 0.02, 'agua', { ...deco, seg: 8 }),
-  cyl(0, 2.3, 0, 0.75, 0.02, 'agua', { ...deco, seg: 10 }),
+  cyl(0, 0.86, 0, 1.72, 0.02, 'agua', { ...deco, seg: 8 }),
+  cyl(0, 2.34, 0, 0.72, 0.02, 'agua', { ...deco, seg: 10 }),
   ...[0, 90, 180, 270].map((a) => {
     const s = Math.sin((a * Math.PI) / 180);
     const c = Math.cos((a * Math.PI) / 180);
@@ -471,5 +474,5 @@ col('bica-pedra', 'Bica de pedra', 'baixa', [
   box(0, 0.3, 0.3, 0.8, 0.3, 0.3, 'cantaria'),
   box(0, 1.1, 0.12, 0.04, 0.04, 0.15, 'ferro', near),
 ]);
-col('bica-agua', 'Água da bica', 'decoracao', [box(0, 0.58, 0.3, 0.68, 0.02, 0.2, 'agua', deco), cyl(0, 0.85, 0.27, 0.03, 0.25, 'espuma', { ...deco, seg: 5 })], { water: true });
+col('bica-agua', 'Água da bica', 'decoracao', [box(0, 0.62, 0.3, 0.68, 0.02, 0.24, 'agua', deco), cyl(0, 0.86, 0.27, 0.03, 0.25, 'espuma', { ...deco, seg: 5 })], { water: true });
 addBuilding({ id: 'bica', name: 'Bica do quintal', category: 'colonial', halfX: 1.0, halfZ: 0.7, pieces: [{ prefab: 'bica-pedra', x: 0, z: 0 }, { prefab: 'bica-agua', x: 0, z: 0 }] });

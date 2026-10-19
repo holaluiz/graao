@@ -26,9 +26,13 @@ import {
   VEL_SCALE,
   type AbilityRequestMsg,
   type AbilityResultMsg,
+  type AbilityStateMsg,
+  type AbilityRevealMsg,
   type CharacterAppearance,
   type DevLootMsg,
   type InteractMsg,
+  type MeleeMsg,
+  type ProgressMsg,
   type LootDevMsg,
   type LootResultMsg,
   type LootStateMsg,
@@ -45,9 +49,12 @@ import {
   type SelfStatusMsg,
   type SnapshotMsg,
   type WelcomeMsg,
+  type WorldStateMsg,
+  type WorldUseMsg,
 } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import { RemotePlayer } from './RemotePlayer';
+import { AbilityStateCache } from './AbilityStateCache';
 import { LinkClose, type RoomLink } from './RoomLink';
 import { PeerLink } from './host/PeerLink';
 import { RoomHost } from './host/RoomHost';
@@ -114,6 +121,8 @@ export class NetSession {
   private latestSelf: SelfStatusMsg | null = null;
   private latestDraft: DraftStateMsg | null = null;
   private latestLoot: LootStateMsg | null = null;
+  private readonly abilityCache = new AbilityStateCache();
+  private latestWorld: WorldStateMsg | null = null;
 
   private constructor(
     private readonly app: GraaoApp,
@@ -139,6 +148,11 @@ export class NetSession {
   }
 
   /** Smoothed round-trip time (ms). */
+  /** The last private status the server sent (what is in each weapon slot, fists, progression...). */
+  get lastSelf(): SelfStatusMsg | null {
+    return this.latestSelf;
+  }
+
   get rtt(): number {
     return this.rtt_;
   }
@@ -237,13 +251,31 @@ export class NetSession {
       room.onMessage(S2C.SNAPSHOT, (m: SnapshotMsg) => this.onSnapshot(m));
       room.onMessage(S2C.PONG, (m: PongMsg) => this.onPong(m));
       room.onMessage(S2C.EVENTS, (m: EventsMsg) => {
-        if (this.active) this.app.combat.onEvents(m.ev);
+        this.abilityCache.onEvents(m.ev);
+        if (!this.active) return;
+        this.app.interactives.onEvents(m.ev);
+        this.app.combat.onEvents(m.ev);
+      });
+      room.onMessage(S2C.WORLD_STATE, (m: WorldStateMsg) => {
+        this.latestWorld = m;
+        if (this.active) this.app.interactives.onState(m);
       });
       room.onMessage(S2C.SELF, (m: SelfStatusMsg) => {
         this.latestSelf = m;
         if (this.active) this.app.combat.onSelf(m);
       });
       room.onMessage(S2C.ABILITY_RESULT, (m: AbilityResultMsg) => this.app.combat.abilities.onResult(m));
+      room.onMessage(S2C.ABILITY_STATE, (m: AbilityStateMsg) => {
+        this.abilityCache.setState(m);
+        if (this.active) this.app.combat.abilities.setAbilityState(m);
+      });
+      room.onMessage(S2C.ABILITY_REVEAL, (m: AbilityRevealMsg) => {
+        this.abilityCache.onReveal(m);
+        if (this.active) this.app.combat.abilities.onReveal(m);
+      });
+      room.onMessage(S2C.PROGRESS, (m: ProgressMsg) => {
+        if (this.active) this.app.progression.onProgress(m);
+      });
       room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => {
         this.latestDraft = m;
         if (this.active) this.app.onDraftState(m);
@@ -391,12 +423,17 @@ export class NetSession {
     if (this.latestSelf) this.app.combat.onSelf(this.latestSelf);
     if (this.latestDraft) this.app.onDraftState(this.latestDraft);
     if (this.latestLoot) this.app.loot.onState(this.latestLoot);
+    this.app.combat.abilities.setAbilityState(this.abilityCache.state(this.serverNow()));
+    for (const reveal of this.abilityCache.privateReveals(this.serverNow())) this.app.combat.abilities.onReveal(reveal);
+    if (this.latestWorld) this.app.interactives.onState(this.latestWorld);
   }
 
   private onSnapshot(m: SnapshotMsg): void {
     if (!this.active) return;
     this.snapshots++;
     this.serverTick = m.k;
+    // Creeps ride every other snapshot (10 Hz), with the server clock of that snapshot.
+    if (m.c) this.app.creeps.onSnapshot(m.t, m.c);
     for (const s of m.p) {
       const [index, px, py, pz, vx, vy, vz, fx, fy, fz, pitch, move, action, flags, ack, health, shield, mana, weapon] = s;
       const simDt = s[19] ?? 0;
@@ -420,6 +457,12 @@ export class NetSession {
         st.moveState = move as CharacterState['moveState'];
         st.swimming = move === MovementState.SWIM;
         st.aim = { ...this.app.local.state.aim };
+        const localAbility = this.app.local.state;
+        st.rooted = localAbility.rooted;
+        st.noSprint = localAbility.noSprint;
+        st.airControl = localAbility.airControl;
+        st.sprintSpeed = localAbility.sprintSpeed;
+        if (localAbility.abilityMovement) st.abilityMovement = { ...localAbility.abilityMovement, ...(localAbility.abilityMovement.anchor ? { anchor: { ...localAbility.abilityMovement.anchor } } : {}) };
         if (this.app.combat.consumeSnap()) {
           // Respawn / match start: the server moved us; teleport instead of reconciling across the planet.
           this.app.local.teleport(st.pos, st.facing);
@@ -495,6 +538,10 @@ export class NetSession {
     if (!this.left) this.room.send(C2S.USE_ITEM, m);
   }
 
+  sendWorldUse(m: WorldUseMsg): void {
+    if (!this.left) this.room.send(C2S.WORLD_USE, m);
+  }
+
   /** Dev builds only (the server ignores it in production). */
   sendDevLoot(m: DevLootMsg): void {
     if (!this.left && import.meta.env.DEV) this.room.send(C2S.DEV_LOOT, m);
@@ -504,8 +551,19 @@ export class NetSession {
     if (!this.left) this.room.send(C2S.RELOAD, {});
   }
 
+  /** SWITCH_WEAPON: 0 (E), 1 (Q) or FISTS_SLOT (weapons put away, punches). */
   sendSwitch(slot: number): void {
     if (!this.left) this.room.send(C2S.SWITCH_WEAPON, { w: slot });
+  }
+
+  /** A punch with empty hands (the server picks the target, if any). */
+  sendMelee(m: MeleeMsg): void {
+    if (!this.left) this.room.send(C2S.MELEE, m);
+  }
+
+  /** Spend one attribute point (STAT_IDS index); SELF brings the result. */
+  sendAllocate(seq: number, k: number): void {
+    if (!this.left) this.room.send(C2S.ALLOCATE_STAT, { s: seq, k });
   }
 
   sendDraftPick(round: number, id: string): void {
@@ -531,6 +589,7 @@ export class NetSession {
   leave(): void {
     if (this.left) return;
     this.left = true;
+    this.app.combat.abilities.clearWorld();
     void this.room.leave(true).catch(() => {});
     for (const r of this.remotes.values()) r.dispose();
     this.remotes.clear();

@@ -9,7 +9,7 @@ const same = (t: number) => t;
 describe('AbilityController (client mirror, never the judge)', () => {
   it('predicts an expected cast at once: cooldown sweep, wind-up and Mana', () => {
     const c = new AbilityController();
-    const p = c.press(0, 1000, true, true);
+    const p = c.press(0, 1000, true, true)!;
     expect(p.predicted).toBe(true);
     expect(p.id).toBe('sun_orb');
     expect(c.cooldownLeft(0, 1000)).toBeCloseTo(ABILITIES.sun_orb.cooldown, 6);
@@ -24,7 +24,7 @@ describe('AbilityController (client mirror, never the judge)', () => {
 
   it('rolls a refused prediction back (the server decides)', () => {
     const c = new AbilityController();
-    const p = c.press(2, 1000, true, true);
+    const p = c.press(2, 1000, true, true)!;
     expect(c.casting(1100)).toBe(true);
     // SELF arriving before the answer keeps the predicted slot.
     c.applyServer(status({}), 1020, 1020, same);
@@ -40,11 +40,11 @@ describe('AbilityController (client mirror, never the judge)', () => {
     const c = new AbilityController();
     c.mana = 5;
     expect(c.expect(1, 1000, true, true)).toBe(AbilityReject.NO_MANA);
-    const p = c.press(1, 1000, true, true);
+    const p = c.press(1, 1000, true, true)!;
     expect(p.predicted).toBe(false);
     expect(c.onResult({ s: p.seq, k: 1, ok: false, r: AbilityReject.NO_MANA })).toEqual({ rollback: false, late: false, reason: AbilityReject.NO_MANA });
     // The mirror was stale (Mana regenerated on the server): accepted without prediction → present late.
-    const q = c.press(1, 1100, true, true);
+    const q = c.press(1, 1100, true, true)!;
     expect(c.onResult({ s: q.seq, k: 1, ok: true, r: AbilityReject.OK }).late).toBe(true);
   });
 
@@ -59,5 +59,42 @@ describe('AbilityController (client mirror, never the judge)', () => {
     expect(c.slowNow(6000)).toBe(1);
     expect(c.expect(0, 5000, false, true)).toBe(AbilityReject.DEAD);
     expect(c.expect(0, 5000, true, false)).toBe(AbilityReject.PHASE);
+  });
+
+  it('never queues, predicts a cooldown or spends Mana when a passive slot is pressed', () => {
+    const c = new AbilityController();
+    c.setLoadout(['sun_orb', 'wind_step', 'steady_hand', 'sun_meteor']);
+    expect(c.expect(2, 1000, true, true)).toBe(AbilityReject.PASSIVE);
+    expect(c.press(2, 1000, true, true)).toBeNull();
+    expect(c.manaShown).toBe(100);
+    expect(c.cooldownLeft(2, 1000)).toBe(0);
+    expect(c.casting(1000)).toBe(false);
+  });
+
+  it('mirrors silence, temporary protection and passive conditions without inventing their lifetime', () => {
+    const c = new AbilityController();
+    c.applyServer(status({ silencedUntil: 1800, rootedUntil: 1700, noSprintUntil: 1900, blockedUntil: 2000,
+      tempShield: 40, tempShieldUntil: 8000, passiveActive: [false, false, true, false], speed: 65, sprintSpeed: 107, airControl: 120,
+    }), 1000, 1000, same);
+    expect(c.expect(0, 1000, true, true)).toBe(AbilityReject.SILENCED);
+    expect(c.expect(0, 1800, true, true)).toBe(AbilityReject.BUSY);
+    expect(c.expect(0, 2000, true, true)).toBe(AbilityReject.OK);
+    expect(c.temporaryShield).toBe(40);
+    expect(c.temporaryShieldEnd).toBe(8000);
+    expect(c.passiveActive).toEqual([false, false, true, false]);
+    expect([c.speed, c.sprintSpeed, c.airControl]).toEqual([.65, 1.07, 1.2]);
+    c.reset();
+    expect(c.silencedEnd).toBe(0);
+    expect(c.temporaryShield).toBe(0);
+    expect(c.passiveActive).toEqual([false, false, false, false]);
+  });
+
+  it('keeps target rejection feedback separate from authoritative cooldown state', () => {
+    const c = new AbilityController();
+    const p = c.press(0, performance.now(), true, true)!;
+    c.onResult({ s: p.seq, k: 0, ok: false, r: AbilityReject.BAD_TARGET });
+    expect(c.targetState(0, performance.now())).toBe('invalid_target');
+    expect(c.targetState(0, performance.now() + 1000)).toBeNull();
+    expect(c.cooldownLeft(0, performance.now())).toBe(0);
   });
 });

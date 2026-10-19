@@ -5,7 +5,7 @@
  */
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { Vec3 } from '@graao/shared';
-import type { ColliderPrimitive, Placement, WorldLayout } from './layout';
+import type { ColliderPrimitive, Placement, SurfacedCollider, WorldLayout } from './layout';
 import type { TerrainMesh } from './terrain';
 
 export type Rapier = typeof RAPIER;
@@ -100,11 +100,18 @@ export interface GamePhysics {
   world: InstanceType<Rapier['World']>;
   /** Collider handle → placement (props only). */
   propByCollider: Map<number, Placement>;
+  /** Collider handle → what that kit part is made of (its KitColor), when it says (footsteps). */
+  surfaceByCollider: Map<number, string>;
   terrainHandle: number;
   /** Every chest collider currently in this world (any room's). */
   chestHandles: Set<number>;
   /** Every ability barrier in this shared world; a server query must filter foreign rooms. */
   barrierHandles: Set<number>;
+  /**
+   * Every door and crate collider (interactiveSystem.ts) of every room in this world: the server's world is shared, so
+   * a room's motor and shots only meet its own (see `CharacterMotor.interactiveFilter`).
+   */
+  interactiveHandles: Set<number>;
   /** Casts a ray; returns distance and collider handle of the first hit, or null. */
   castRay(origin: Vec3, dir: Vec3, maxDist: number, filterGroups?: number, predicate?: (collider: RAPIER.Collider) => boolean): { toi: number; handle: number } | null;
   /** Like castRay, plus the surface normal at the hit. */
@@ -124,25 +131,17 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
   const terrain = world.createCollider(terrainDesc);
 
   const propByCollider = new Map<number, Placement>();
+  const surfaceByCollider = new Map<number, string>();
   for (const p of layout.placements) {
-    if (p.visualOnly || p.colliders.length === 0) continue;
-    const q = quatFromBasis(p.side, p.up, p.forward);
-    for (const c of p.colliders) {
-      const desc = colliderDesc(R, c);
-      if (!desc) continue;
-      if (c.type === 'hull') {
-        desc.setTranslation(p.position.x, p.position.y, p.position.z);
-      } else {
-        desc.setTranslation(
-          p.position.x + p.side.x * c.x + p.up.x * c.y + p.forward.x * c.z,
-          p.position.y + p.side.y * c.x + p.up.y * c.y + p.forward.y * c.z,
-          p.position.z + p.side.z * c.x + p.up.z * c.y + p.forward.z * c.z,
-        );
-      }
-      desc.setRotation(c.type !== 'hull' && c.type !== 'ball' && c.q ? quatMul(q, c.q) : q).setCollisionGroups(groups(c.block === 'move' ? Group.RAIL : Group.PROP, 0xffff));
+    // Breakable crates get per-room colliders (interactiveSystem.ts).
+    if (p.visualOnly || p.colliders.length === 0 || p.breakable) continue;
+    // One description per primitive, in order: the i-th collider is the i-th primitive.
+    placementColliderDescs(R, p).forEach((desc, i) => {
       const col = world.createCollider(desc);
       propByCollider.set(col.handle, p);
-    }
+      const surface = (p.colliders[i] as SurfacedCollider | undefined)?.surface;
+      if (surface) surfaceByCollider.set(col.handle, surface);
+    });
   }
   // Build the broad phase once so scene queries see the static world.
   world.step();
@@ -152,9 +151,11 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
     R,
     world,
     propByCollider,
+    surfaceByCollider,
     terrainHandle: terrain.handle,
     chestHandles: new Set(),
     barrierHandles: new Set(),
+    interactiveHandles: new Set(),
     castRay(origin, dir, maxDist, filterGroups = GROUPS_WORLD_QUERY, predicate) {
       ray.origin = origin;
       ray.dir = dir;
@@ -187,6 +188,28 @@ export function createPhysics(R: Rapier, mesh: TerrainMesh, layout: WorldLayout)
       world.free();
     },
   };
+}
+
+/** Collider descriptions of a placement's primitives, posed in the world (shared by the static world and run-time pieces). */
+export function placementColliderDescs(R: Rapier, p: Placement): InstanceType<Rapier['ColliderDesc']>[] {
+  const out: InstanceType<Rapier['ColliderDesc']>[] = [];
+  const q = quatFromBasis(p.side, p.up, p.forward);
+  for (const c of p.colliders) {
+    const desc = colliderDesc(R, c);
+    if (!desc) continue;
+    if (c.type === 'hull') {
+      desc.setTranslation(p.position.x, p.position.y, p.position.z);
+    } else {
+      desc.setTranslation(
+        p.position.x + p.side.x * c.x + p.up.x * c.y + p.forward.x * c.z,
+        p.position.y + p.side.y * c.x + p.up.y * c.y + p.forward.y * c.z,
+        p.position.z + p.side.z * c.x + p.up.z * c.y + p.forward.z * c.z,
+      );
+    }
+    desc.setRotation(c.type !== 'hull' && c.type !== 'ball' && c.q ? quatMul(q, c.q) : q).setCollisionGroups(groups(c.block === 'move' ? Group.RAIL : Group.PROP, 0xffff));
+    out.push(desc);
+  }
+  return out;
 }
 
 function colliderDesc(R: Rapier, c: ColliderPrimitive) {

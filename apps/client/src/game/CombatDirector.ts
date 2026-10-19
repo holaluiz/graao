@@ -1,8 +1,12 @@
 /**
- * CombatDirector (client): turns local input into FIRE / RELOAD / SWITCH / READY intents, predicts the cosmetic
- * part of a shot so it feels instant (tracer, flash, recoil, sound, animation), and presents server-confirmed
- * results (hitmarkers, damage numbers, damage direction, eliminations, match phases). Abilities (keys 1–4) live in
- * its AbilityDirector; both share the hit presentation here.
+ * CombatDirector (client): turns local input into FIRE / MELEE / RELOAD / SWITCH / READY intents, predicts the
+ * cosmetic part of a shot or a punch so it feels instant (tracer, flash, recoil, swing, sound, animation), and
+ * presents server-confirmed results (hitmarkers, damage numbers, damage direction, eliminations, match phases).
+ * Abilities (keys 1–4) live in its AbilityDirector; both share the hit presentation here.
+ *
+ * Empty hands (no weapon yet, or weapons put away with H): the same attack button punches, alternating a left jab
+ * and a right cross. The punch's reach, direction, walls and interval are the server's (MELEE); creeps are
+ * presented by the CreepDirector, levels and attribute points by the ProgressionDirector.
  *
  * It never decides gameplay: damage, ammo, eliminations and the winner come from the server. Predicted tracers use
  * the same deterministic spread (`shotSeed`) and hitscan rules as the server, so what you see is what it resolves.
@@ -10,17 +14,19 @@
  * Response stack per event (BODY · WORLD · FX · CAMERA · AUDIO · UI), intensity MICRO → COMBAT → MAJOR.
  */
 import * as THREE from 'three';
-import { muzzlePoint, resolvePellet, shotSeed, spreadDirections, type PlayerHitTarget } from '@graao/game-core';
-import { ATTRIBUTES, BOT_KIT, ITEMS, RARITIES, STARTING_KIT, WEAPONS, weaponItem, type WeaponDefinition, type WeaponId } from '@graao/game-data';
+import { GROUPS_WORLD_QUERY, PLAYER_MELEE_BODY, newPassiveRuntime, passiveModifiers, muzzlePoint, resolveMelee, resolvePellet, shotSeed, spreadDirections, type MeleeBody, type PlayerHitTarget } from '@graao/game-core';
+import { ATTRIBUTES, BOT_KIT, ITEMS, MATCH_KIT, MELEE, RARITIES, STARTING_KIT, WEAPONS, weaponItem, type WeaponDefinition, type WeaponId } from '@graao/game-data';
 import {
   ActionState,
   DIR_SCALE,
+  FISTS_SLOT,
   HitKind,
   MatchPhase,
   NoticeCode,
   POS_SCALE,
   type FireMsg,
   type GameEvent,
+  type MeleeMsg,
   type MatchSummaryMsg,
   type NoticeMsg,
   type PlayerPublic,
@@ -35,6 +41,7 @@ import { Shape } from '../render/vfx/GRAVFXSystem';
 import type { ScoreboardState } from '../ui/Scoreboard';
 import { AbilityDirector } from './AbilityDirector';
 import { keyLabel } from './KeyBindings';
+import { MeleeController, type PunchIntent } from './MeleeController';
 import { WeaponController, type WeaponKit } from './WeaponController';
 
 /** Camera response presets (shake and kick; always at full strength for every player). */
@@ -59,6 +66,8 @@ const mmToV = (p: [number, number, number], out = new THREE.Vector3()) => out.se
 
 export class CombatDirector {
   readonly weapon = new WeaponController();
+  /** Punch timing with empty hands (prediction; the server decides). */
+  readonly melee = new MeleeController();
   readonly abilities: AbilityDirector;
   readonly holder: WeaponHolder;
   alive = true;
@@ -118,8 +127,11 @@ export class CombatDirector {
     this.kit = online ? STARTING_KIT : BOT_KIT;
     // Offline there is no loot (no server): the classic pair and reloads that never run dry.
     this.weapon.reset(this.kit, !online);
+    this.melee.reset();
     this.holder.setWeapons(this.weapon.ids);
-    this.holder.setSlot(this.weapon.slot);
+    this.holder.setSlot(this.handSlot());
+    this.app.progression.enter(online);
+    this.app.creeps.reset();
     this.abilities.enter(online);
     this.summary = null;
     this.app.hud.setDeath(false);
@@ -154,8 +166,9 @@ export class CombatDirector {
 
   private canFire(): boolean {
     if (!this.alive || !this.app.input.locked) return false;
+    if (performance.now() < this.abilities.ctl.blockedEnd) return false;
     // Hands are busy while swimming, while an ability winds up and while a consumable is used (the server refuses too).
-    if (this.app.local.state.swimming || this.abilities.casting() || this.app.loot.using) return false;
+    if (this.app.local.state.swimming || this.abilities.casting() || this.app.loot.using || this.app.local.state.abilityMovement?.mode === 'flight') return false;
     if (!this.online) return !this.app.deploy.riding && !this.app.deploy.diving;
     if (this.phase === MatchPhase.MATCH) return this.serverNow() >= this.startsAt && !!this.me()?.inMatch;
     return this.phase === MatchPhase.FREE_ROAM;
@@ -175,9 +188,14 @@ export class CombatDirector {
     return { players: this.players, phase: this.phase, me: this.myIndex, eliminated: this.eliminatedInMatch, summary: this.summary };
   }
 
-  /** Upper body holds the aim pose while aiming and shortly after any shot. */
+  /** Upper body holds the aim pose while aiming and shortly after any shot (never with empty hands). */
   aimPose(aiming: boolean): boolean {
-    return this.alive && (aiming || performance.now() - this.lastFireAt < 650);
+    return this.alive && this.weapon.armed && (aiming || performance.now() - this.lastFireAt < 650);
+  }
+
+  /** What the hand holds for the weapon holder: the selected slot, or nothing (FISTS_SLOT). */
+  private handSlot(): number {
+    return this.weapon.armed ? this.weapon.slot : FISTS_SLOT;
   }
 
   animAction(): ActionState {
@@ -191,12 +209,16 @@ export class CombatDirector {
     const app = this.app;
     const input = app.input;
     const now = performance.now();
+    // The attribute panel reads keys 1–4 before the abilities do.
+    app.progression.update();
+    if (input.consume('holster')) this.toggleFists(now);
     if (input.consume('ready')) {
       if (this.phase === MatchPhase.RESULTS) this.app.results.askLobby();
       else this.setReady(!this.me()?.ready);
     }
     const firePressed = input.consume('fire');
     if (firePressed && input.locked && this.alive && app.local.state.swimming) app.hud.notice('NADANDO · SEM ARMAS NA ÁGUA', 1.1);
+    const fists = !this.weapon.armed;
     const r = this.weapon.update(
       dt,
       now,
@@ -210,7 +232,7 @@ export class CombatDirector {
     );
     if (r.switched) {
       app.net?.sendSwitch(this.weapon.slot);
-      this.holder.setSlot(this.weapon.slot);
+      this.holder.setSlot(this.handSlot());
       app.audio.play('switch');
     }
     if (r.reloadStarted) {
@@ -224,6 +246,11 @@ export class CombatDirector {
       app.hud.notice(this.weapon.armed ? `SEM ${WEAPON_AMMO_NAME(this.weapon.weapon).toUpperCase()}` : 'SEM ARMA', 1.3);
     } else if (r.empty) app.hud.notice('SEM MUNIÇÃO');
     if (r.fire) this.fire(r.fire.seq, r.fire.slot, r.fire.weapon);
+    // Empty hands: the attack button punches.
+    if (fists && !r.switched) {
+      const p = this.melee.update(now, firePressed, input.isDown('fire'), this.canFire());
+      if (p) this.punch(p);
+    }
     this.abilities.update(dt);
 
     this.updateBlocked();
@@ -253,7 +280,8 @@ export class CombatDirector {
     const facing = flat.lengthSq() > 1e-6 ? flat.normalize() : new THREE.Vector3(s.facing.x, s.facing.y, s.facing.z);
     const muzzle = muzzlePoint(s.pos, facing);
     const targets: PlayerHitTarget[] = app.net ? app.net.hitTargets() : [];
-    const dirs = spreadDirections(dir, aiming ? w.spreadAim : w.spreadHip, w.pellets, shotSeed(this.myIndex, seq));
+    const passive = passiveModifiers(this.me()?.loadout ?? [], newPassiveRuntime(), this.serverNow(), this.alive);
+    const dirs = spreadDirections(dir, (aiming ? w.spreadAim : w.spreadHip) * passive.weaponSpread, w.pellets, shotSeed(this.myIndex, seq));
     const shot: PendingShot = { weapon: w, dir, points: [], targets: [] };
     for (const d of dirs) {
       const res = resolvePellet(app.world.physics, origin, d, muzzle, w.range, targets, this.myIndex);
@@ -264,9 +292,102 @@ export class CombatDirector {
     this.lastFireAt = performance.now();
     // Body, camera, audio.
     app.character.anim.playUpper('fire', 1.4);
-    app.camera.kick(w.cameraProfile.kick * 4 * CAMERA_RESPONSE.MICRO.kick, (Math.random() - 0.5) * w.cameraProfile.kick);
+    app.camera.kick(w.cameraProfile.kick * passive.weaponRecoil * 4 * CAMERA_RESPONSE.MICRO.kick, (Math.random() - 0.5) * w.cameraProfile.kick * passive.weaponRecoil);
     const fc = fireCue(w);
     app.audio.play(fc.cue, { pitch: fc.pitch });
+  }
+
+  /**
+   * A fresh kit locally (magazines, timers, punches), then the server's word on what each slot holds: slot contents are
+   * never predicted, and SELF only comes again when something changes, so a local guess would linger as a ghost
+   * weapon (or a missing one).
+   */
+  private resetKit(kit: WeaponKit): void {
+    this.weapon.reset(kit, !this.online);
+    this.melee.reset();
+    const net = this.app.net;
+    const s = net?.lastSelf;
+    if (this.online && net && s) this.weapon.applyServer(s, performance.now(), net.rtt, (t) => performance.now() + (t - net.serverNow()));
+    this.holder.setWeapons(this.weapon.ids);
+    this.holder.setSlot(this.handSlot());
+  }
+
+  /** H: put the weapons away (fists) or take the selected one back out. They stay in the inventory either way. */
+  private toggleFists(now: number): void {
+    const app = this.app;
+    const w = this.weapon;
+    if (!this.alive) return;
+    if (!w.carrying) {
+      app.hud.notice('SEM ARMAS · abra baús para encontrar uma', 1.3);
+      return;
+    }
+    if (w.fists || !w.ids[w.slot]) {
+      const slot = w.ids[w.slot] ? w.slot : w.ids.findIndex((id) => !!id);
+      w.slot = slot;
+      w.setFists(false, now);
+      app.net?.sendSwitch(slot);
+    } else {
+      w.setFists(true, now);
+      app.net?.sendSwitch(FISTS_SLOT);
+      app.hud.notice('ARMAS GUARDADAS · socos', 0.9);
+    }
+    this.holder.setSlot(this.handSlot());
+    app.audio.play('switch');
+  }
+
+  /**
+   * A punch (predicted): the swing plays now, the MELEE intent goes to the server, and a small contact puff shows
+   * where the fist will most likely land. The server's `melee` event brings the verdict (and the hit its damage).
+   */
+  private punch(p: PunchIntent): void {
+    const app = this.app;
+    const cam = app.r.camera;
+    const origin = cam.getWorldPosition(new THREE.Vector3());
+    const dir = cam.getWorldDirection(new THREE.Vector3());
+    if (this.online && app.net) {
+      const msg: MeleeMsg = {
+        s: p.seq,
+        o: [Math.round(origin.x * POS_SCALE), Math.round(origin.y * POS_SCALE), Math.round(origin.z * POS_SCALE)],
+        d: [Math.round(dir.x * DIR_SCALE), Math.round(dir.y * DIR_SCALE), Math.round(dir.z * DIR_SCALE)],
+      };
+      app.net.sendMelee(msg);
+    }
+    const clip = p.hand ? 'punchR' : 'punchL';
+    app.character.anim.playUpper(clip, clipSpeed(app.character.anim.clipDuration(clip), Math.min(0.5, this.melee.intervalMs / 1000 * 0.75)));
+    app.audio.play('melee.swing', { pitch: p.hand ? 0.92 : 1.08 });
+    app.camera.kick(0.008, (p.hand ? 1 : -1) * 0.004);
+    const s = app.local.state;
+    const bodies: MeleeBody[] = [];
+    if (app.net) for (const r of app.net.remotePlayers) bodies.push({ id: r.index, creep: false, feet: { x: r.pos.x, y: r.pos.y, z: r.pos.z }, alive: r.alive, ...PLAYER_MELEE_BODY });
+    bodies.push(...app.creeps.meleeBodies());
+    const out = resolveMelee(app.world.physics, s.pos, dir, bodies, this.myIndex, GROUPS_WORLD_QUERY, MELEE, s.facing);
+    const at = new THREE.Vector3(out.point.x, out.point.y, out.point.z);
+    const up = new THREE.Vector3(s.pos.x, s.pos.y, s.pos.z).normalize();
+    if (out.result === 0) app.vfx.burst(at, up, { color: '#f3e9d8', count: 3, speed: 1.2, size: 0.08, life: 0.25, drag: 5, spread: 1.2, shape: Shape.DOT });
+    else app.vfx.burst(at, up, { color: out.result === 3 ? '#c9c2b4' : '#fff1c4', count: 5, speed: 2.2, size: 0.1, life: 0.25, drag: 4, spread: 1.4, shape: Shape.SPARK });
+    if (!this.online) app.hud.meleeFeedback(out.result === 3 ? 'wall' : out.result === 0 ? 'miss' : 'hit');
+  }
+
+  /** A punch resolved by the server (anyone's): the verdict for our own, the swing and the contact for others. */
+  private onMelee(e: Extract<GameEvent, { e: 'melee' }>): void {
+    const app = this.app;
+    const at = mmToV(e.at);
+    if (e.by === this.myIndex) {
+      app.hud.meleeFeedback(e.r === 3 ? 'wall' : e.r === 0 ? 'miss' : 'hit');
+      if (e.r === 3) app.audio.play('melee.wall');
+      return;
+    }
+    const r = app.net?.remote(e.by);
+    if (!r) return;
+    const clip = e.h ? 'punchR' : 'punchL';
+    r.character.anim.playUpper(clip, clipSpeed(r.character.anim.clipDuration(clip), 0.42));
+    r.punchedAt = performance.now();
+    const { pan, dist } = this.spatial(at);
+    if (dist < 30) app.audio.play(e.r === 1 || e.r === 2 ? 'melee.hit' : 'melee.swing', { threat: e.r === 1 && e.t === this.myIndex, pan, volume: 1 / (1 + dist / 10), pitch: e.h ? 0.92 : 1.08 });
+    if (e.r === 1 || e.r === 2) {
+      const up = this.tmp.copy(at).normalize();
+      app.vfx.burst(at, up, { color: '#fff1c4', count: 6, speed: 2.4, size: 0.1, life: 0.28, drag: 4, spread: 1.4, shape: Shape.SPARK });
+    }
   }
 
   /** Spawns queued shot visuals from the weapon's real muzzle. Call after the character pose and animation update. */
@@ -301,7 +422,7 @@ export class CombatDirector {
 
   private updateBlocked(): void {
     const app = this.app;
-    if (!this.alive) {
+    if (!this.alive || !this.weapon.armed) {
       this.blocked = false;
       return;
     }
@@ -334,7 +455,9 @@ export class CombatDirector {
     const hud = app.hud;
     const now = performance.now();
     const w = this.weapon.weapon;
-    hud.setVitals(this.health, this.shield, this.abilities.ctl.manaShown, ATTRIBUTES.maxHealth, ATTRIBUTES.maxShield, ATTRIBUTES.maxMana);
+    const prog = app.progression;
+    hud.setVitals(this.health, this.shield, this.abilities.ctl.manaShown, prog.maxHealth, ATTRIBUTES.maxShield, prog.maxMana);
+    const fists = !this.weapon.armed;
     hud.setWeapons(
       this.weapon.slot,
       this.weapon.ids.map((id, i) => {
@@ -345,11 +468,14 @@ export class CombatDirector {
         return { key, name: WEAPONS[id].name, ammo: this.weapon.ammo[i]!, magazine: WEAPONS[id].magazine, reserve: this.weapon.infinite ? 999 : this.weapon.reserveFor(i), ...(r ? { rarity: { color: r.color, symbol: r.symbol, name: r.name } } : {}) };
       }),
       this.weapon.reloadProgress(now),
+      fists,
+      keyLabel(app.input.keyFor('holster')),
     );
     const cam = app.r.camera;
-    const cone = ((app.input.isDown('aim') ? w.spreadAim : w.spreadHip) * Math.PI) / 180;
+    const spread = passiveModifiers(this.me()?.loadout ?? [], newPassiveRuntime(), this.serverNow(), this.alive).weaponSpread;
+    const cone = ((app.input.isDown('aim') ? w.spreadAim : w.spreadHip) * spread * Math.PI) / 180;
     const px = (Math.tan(cone) / Math.tan(((cam.fov / 2) * Math.PI) / 180)) * (window.innerHeight / 2);
-    hud.setReticle(w.reticleProfile, px + this.weapon.bloom * 7, this.blocked, this.alive && app.input.locked);
+    hud.setReticle(fists ? 'fists' : w.reticleProfile, px + this.weapon.bloom * 7, this.blocked, this.alive && app.input.locked);
     this.updatePhaseUi();
     hud.update(dt);
     // Audio state follows attention: CRITICAL low health muffles the world, the Tormenta takes the ambience away (the
@@ -357,6 +483,8 @@ export class CombatDirector {
     if (this.phase === MatchPhase.RESULTS) app.audio.setState('POST_MATCH');
     else if (this.alive && this.health <= ATTRIBUTES.maxHealth * 0.3) app.audio.setState('LOW_HEALTH');
     else app.audio.setState(app.tormenta.outside ? 'INSIDE_TORMENTA' : 'NORMAL');
+    app.creeps.update(dt);
+    app.progression.tick(dt);
   }
 
   /** Our socket dropped and the SDK is reconnecting (the server keeps the seat meanwhile). */
@@ -442,18 +570,24 @@ export class CombatDirector {
   onRoomState(m: RoomStateMsg): void {
     const prev = this.phase;
     this.players = m.players;
+    this.weapon.switchDelayFactor = passiveModifiers(this.me()?.loadout ?? [], newPassiveRuntime(), this.serverNow(), this.alive).weaponSwap;
     this.phase = m.phase;
     this.startsAt = m.startsAt;
     this.phaseEndsAt = m.phaseEndsAt;
     this.winner = m.winner;
     if (prev !== m.phase) {
       if (m.phase === MatchPhase.UFO) {
-        // Boarding: fresh weapons and abilities arrive with SELF; nothing to fight with until everyone has landed.
-        this.weapon.reset(this.kit);
+        // Boarding: empty hands (Battle Royale) and fresh abilities arrive with SELF; nothing to fight with until
+        // everyone has landed. New creeps, level 1.
+        this.resetKit(MATCH_KIT);
         this.abilities.onRespawn();
+        this.app.progression.reset();
+        this.app.creeps.reset();
         this.app.results.hide();
       } else if (m.phase === MatchPhase.MATCH) {
-        this.weapon.reset(this.kit);
+        this.resetKit(MATCH_KIT);
+        this.app.progression.reset();
+        if (prev !== MatchPhase.UFO) this.app.creeps.reset();
         this.abilities.onRespawn();
         this.eliminatedInMatch.clear();
         this.countdownShown = -1;
@@ -465,6 +599,8 @@ export class CombatDirector {
         this.app.hud.setDeath(false);
       } else if (m.phase === MatchPhase.LOBBY) {
         this.app.results.hide();
+        this.app.creeps.reset();
+        this.app.progression.reset();
         this.eliminatedInMatch.clear();
         this.app.hud.setDeath(false);
       } else if (m.phase === MatchPhase.FREE_ROAM) {
@@ -483,7 +619,8 @@ export class CombatDirector {
     if (!net) return;
     this.weapon.applyServer(s, performance.now(), net.rtt, (t) => performance.now() + (t - net.serverNow()));
     this.holder.setWeapons(this.weapon.ids);
-    this.holder.setSlot(this.weapon.slot);
+    this.holder.setSlot(this.handSlot());
+    this.app.progression.onSelf(s);
     this.app.loot.onSelf(s);
     if (!s.alive) this.respawnAt = s.respawnAt;
     this.abilities.onSelf(s);
@@ -508,8 +645,7 @@ export class CombatDirector {
 
   private revive(): void {
     this.alive = true;
-    this.weapon.reset(this.kit);
-    this.holder.setWeapons(this.weapon.ids);
+    this.resetKit(this.online && (this.phase === MatchPhase.UFO || this.phase === MatchPhase.MATCH) ? MATCH_KIT : this.kit);
     this.abilities.onRespawn();
     this.app.hud.setDeath(false);
   }
@@ -529,10 +665,23 @@ export class CombatDirector {
           break;
         case 'dmg':
           if (e.c === 'tormenta') this.onTormentaDamage(e.target, e.amount, e.health, e.shield);
-          else this.onDamage(e.by, e.target, e.amount, e.kinds, e.health, e.shield);
+          else this.onDamage(e.by, e.target, e.amount, e.kinds, e.health, e.shield, e.c === 'creep' ? e.cr : undefined, e.m === 1);
           break;
         case 'elim':
-          this.onElimination(e.by, e.target, e.c === 'tormenta');
+          this.abilities.onEvent(e);
+          this.onElimination(e.by, e.target, e.c === 'tormenta', e.c === 'creep' ? e.cr : undefined);
+          break;
+        case 'melee':
+          this.onMelee(e);
+          break;
+        case 'creepSpawn':
+        case 'creepAtk':
+        case 'creepHit':
+        case 'creepDie':
+          this.app.creeps.onEvent(e);
+          break;
+        case 'lvl':
+          this.app.progression.onLevel(e);
           break;
         case 'respawn':
           if (e.target === me) {
@@ -544,6 +693,8 @@ export class CombatDirector {
           this.eliminatedInMatch.delete(e.target);
           break;
         case 'cast':
+        case 'abilityEntity':
+        case 'abilityEntityEnd':
         case 'proj':
         case 'projEnd':
         case 'area':
@@ -585,8 +736,9 @@ export class CombatDirector {
     this.drawShot(muzzle, dir, w, pts, t, false);
     // Enemy fire is a threat: its own bus, panned and attenuated by distance.
     const { pan, dist } = this.spatial(muzzle);
+    // Close it is the shot; across the map, its report and echo, late by the speed of sound (GRAAudioManager.playShot).
     const fc = fireCue(w);
-    this.app.audio.play(fc.cue, { threat: true, pan, volume: 1 / (1 + dist / 14), muffle: Math.min(0.8, dist / 90), pitch: 0.94 * fc.pitch });
+    this.app.audio.playShot(fc.cue, dist, { threat: true, pan, pitch: 0.94 * fc.pitch }, fc.reach);
   }
 
   private spatial(p: THREE.Vector3): { pan: number; dist: number } {
@@ -597,22 +749,25 @@ export class CombatDirector {
     return { pan: dist > 0.01 ? d.dot(right) / dist : 0, dist };
   }
 
-  private onDamage(by: number, target: number, amount: number, kinds: HitKind[], health: number, shield: number): void {
+  /**
+   * A hit on a player. `creep` = the creep (id) that dealt it (`by` is then the target itself); `punch` = a fist.
+   */
+  private onDamage(by: number, target: number, amount: number, kinds: HitKind[], health: number, shield: number, creep?: number, punch = false): void {
     const app = this.app;
     const me = this.myIndex;
     const has = (k: HitKind) => kinds.includes(k);
-    // by === target: drowning (no hitmarker for hurting yourself).
+    // by === target: drowning or a creep (no hitmarker for hurting yourself).
     if (by === me && target !== me) {
       app.hud.hit(kinds);
-      const cue: Cue = has(HitKind.SHIELD_BREAK) ? 'hit.shieldBreak' : has(HitKind.CRITICAL) ? 'hit.crit' : has(HitKind.SHIELD) && !has(HitKind.BODY) ? 'hit.shield' : 'hit.body';
+      const cue: Cue = has(HitKind.SHIELD_BREAK) ? 'hit.shieldBreak' : punch ? 'melee.hit' : has(HitKind.CRITICAL) ? 'hit.crit' : has(HitKind.SHIELD) && !has(HitKind.BODY) ? 'hit.shield' : 'hit.body';
       if (!has(HitKind.ELIMINATION)) app.audio.play(cue);
     }
     if (target === me) {
       this.health = health;
       this.shield = shield;
-      const attacker = app.net?.remote(by);
-      if (attacker) {
-        const angle = this.angleTo(attacker.pos);
+      const from = creep !== undefined ? app.creeps.position(creep) : app.net?.remote(by)?.pos;
+      if (from && (by !== me || creep !== undefined)) {
+        const angle = this.angleTo(from);
         app.hud.damageFrom(angle, has(HitKind.SHIELD) || has(HitKind.SHIELD_BREAK));
       }
       const resp = has(HitKind.CRITICAL) || has(HitKind.SHIELD_BREAK) ? CAMERA_RESPONSE.HEAVY : CAMERA_RESPONSE.HIT;
@@ -668,12 +823,12 @@ export class CombatDirector {
     }
   }
 
-  private onElimination(by: number, target: number, tormenta = false): void {
+  private onElimination(by: number, target: number, tormenta = false, creep?: number): void {
     const app = this.app;
     const me = this.myIndex;
     this.eliminatedInMatch.add(target);
-    // Eliminated by yourself = drowned or taken by the Tormenta: the hazard takes the credit in the feed.
-    const killer = tormenta ? 'Tormenta' : by === target ? 'Água' : this.nameOf(by);
+    // Eliminated by yourself = drowned, taken by the Tormenta or by a creep: the hazard takes the credit in the feed.
+    const killer = tormenta ? 'Tormenta' : creep !== undefined ? (app.creeps.typeOf(creep)?.name ?? 'Criatura') : by === target ? 'Água' : this.nameOf(by);
     const victim = this.nameOf(target);
     app.hud.feed(killer, victim, by === me && target !== me ? 'killer' : target === me ? 'victim' : null);
     const pos = target === me ? app.local.state.pos : app.net?.remote(target)?.pos;
@@ -706,10 +861,12 @@ export class CombatDirector {
 }
 
 /** Each weapon of the pack gets a voice from the three synthesized shots (pitch tells them apart). */
-function fireCue(w: WeaponDefinition): { cue: Cue; pitch: number } {
-  if (w.pellets > 1) return { cue: 'fire.petal', pitch: 1 };
-  if (w.damage >= 60) return { cue: 'fire.heavy', pitch: w.id === 'launcher' ? 0.8 : 1 };
-  return { cue: 'fire.sunbeam', pitch: w.id === 'pistol' ? 1.12 : w.id === 'smg' ? 1.22 : w.id === 'ak47' ? 0.82 : 1 };
+function fireCue(w: WeaponDefinition): { cue: Cue; pitch: number; reach: number } {
+  if (w.pellets > 1) return { cue: 'fire.petal', pitch: 1, reach: 1 };
+  if (w.damage >= 60) return { cue: 'fire.heavy', pitch: w.id === 'launcher' ? 0.8 : 1, reach: 1.5 };
+  // The Raio de Sol is light; the firearms are gunpowder (the rifle deeper and heard farther, the SMG quicker).
+  if (w.id === 'sunbeam') return { cue: 'fire.sunbeam', pitch: 1, reach: 1 };
+  return { cue: 'fire.light', pitch: w.id === 'pistol' ? 1.08 : w.id === 'smg' ? 1.18 : w.id === 'ak47' ? 0.9 : 1, reach: w.id === 'ak47' ? 1.2 : 1 };
 }
 
 const WEAPON_AMMO_NAME = (w: WeaponDefinition): string => ({ solar: 'cápsulas solares', petal: 'cartuchos de pétala', heavy: 'munição pesada' })[w.ammo];

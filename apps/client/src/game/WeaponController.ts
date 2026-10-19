@@ -7,6 +7,7 @@
  * the reserve of the weapon's ammunition type into the magazine, like the server's GRAInventory.
  */
 import { AMMO_TYPES, STARTING_KIT, WEAPONS, WEAPON_SLOT_COUNT, type AmmoType, type WeaponDefinition, type WeaponId } from '@graao/game-data';
+import { weaponShotInterval } from '@graao/game-core';
 import type { SelfStatusMsg } from '@graao/shared';
 
 export interface FireIntent {
@@ -34,6 +35,7 @@ const SWITCH_DELAY_MS = 220;
 const CLICK_BUFFER_MS = 160;
 
 export class WeaponController {
+  switchDelayFactor = 1;
   slot = 0;
   /** Weapon in each slot (null = empty), as the server last said (or the kit until it does). */
   readonly ids: (WeaponId | null)[] = new Array<WeaponId | null>(WEAPON_SLOT_COUNT).fill(null);
@@ -41,6 +43,14 @@ export class WeaponController {
   readonly reserve: Record<AmmoType, number> = { solar: 0, petal: 0, heavy: 0 };
   /** Offline exploring: reloads never spend the reserve (there is no loot without a server). */
   infinite = false;
+  /** Velocidade de Ataque (from SELF): compatible weapons fire faster, each up to its own cap (weaponShotInterval). */
+  attackSpeed = 1;
+  /**
+   * Empty hands: the weapons are put away (H) or there is none in the slot; the attack punches. Mirrors the server's
+   * SELF `fists`, predicted for a moment after a local change (like the equip delay).
+   */
+  fists = false;
+  private fistsChangedAt = -1e9;
   /** Local clock (performance.now) when the reload completes, 0 when not reloading. */
   reloadEndsAt = 0;
   private reloadStartedAt = 0;
@@ -63,9 +73,23 @@ export class WeaponController {
     return WEAPONS[this.ids[this.slot] ?? 'sunbeam'];
   }
 
-  /** There is a weapon in the selected slot. */
+  /** There is a weapon in the selected slot and it is in hand (not put away): the attack shoots. */
   get armed(): boolean {
-    return !!this.ids[this.slot];
+    return !this.fists && !!this.ids[this.slot];
+  }
+
+  /** Some weapon is carried (in either slot). */
+  get carrying(): boolean {
+    return this.ids.some((id) => !!id);
+  }
+
+  /** Puts the weapons away (fists) or takes the selected one back out (predicted; the server confirms in SELF). */
+  setFists(on: boolean, now: number): void {
+    if (this.fists === on) return;
+    this.fists = on;
+    this.fistsChangedAt = now;
+    this.reloadEndsAt = 0;
+    if (!on) this.equipReadyAt = now + Math.max(80, SWITCH_DELAY_MS * this.switchDelayFactor);
   }
 
   get reloading(): boolean {
@@ -95,6 +119,7 @@ export class WeaponController {
     }
     for (const t of AMMO_TYPES) this.reserve[t] = kit.reserve[t];
     this.slot = Math.max(0, this.ids.findIndex((x) => x));
+    this.fists = false;
     this.reloadEndsAt = 0;
     this.inFlight.length = 0;
     this.bloom = 0;
@@ -112,10 +137,15 @@ export class WeaponController {
       this.reloadEndsAt = 0;
       this.reloadDoneAt = now;
     }
-    if (input.switchTo >= 0 && input.switchTo !== this.slot && this.ids[input.switchTo]) {
+    // E / Q take that weapon in hand (also out of empty hands).
+    if (input.switchTo >= 0 && (input.switchTo !== this.slot || this.fists) && this.ids[input.switchTo]) {
       this.slot = input.switchTo;
+      if (this.fists) {
+        this.fists = false;
+        this.fistsChangedAt = now;
+      }
       this.reloadEndsAt = 0;
-      this.equipReadyAt = now + SWITCH_DELAY_MS;
+      this.equipReadyAt = now + Math.max(80, SWITCH_DELAY_MS * this.switchDelayFactor);
       out.switched = true;
     }
     if (input.reloadPressed) {
@@ -126,7 +156,7 @@ export class WeaponController {
 
     const w = this.weapon;
     const wants = w.automatic ? input.fireHeld || now - this.clickAt < CLICK_BUFFER_MS : now - this.clickAt < CLICK_BUFFER_MS;
-    const ready = now - this.lastShotAt[this.slot]! >= 1000 / w.fireRate && now >= this.equipReadyAt;
+    const ready = now - this.lastShotAt[this.slot]! >= weaponShotInterval(w, this.attackSpeed) && now >= this.equipReadyAt;
     if (canFire && this.armed && wants && ready && !this.reloading) {
       if (this.ammo[this.slot]! <= 0) {
         if (input.firePressed) out.empty = true;
@@ -188,6 +218,8 @@ export class WeaponController {
       }
     }
     if (changed && !this.ids[this.slot]) this.reloadEndsAt = 0;
+    // Empty hands: the server's word, unless we just changed it ourselves and the status predates that.
+    if (s.fists !== undefined && (changed || now - this.fistsChangedAt > window)) this.fists = s.fists;
     if (s.weapon !== this.slot && (now >= this.equipReadyAt + window || changed || !this.ids[this.slot])) {
       this.slot = s.weapon;
       this.reloadEndsAt = 0;

@@ -9,7 +9,7 @@
  */
 import * as THREE from 'three';
 import { createGameWorld, latLonToDir, mulberry32, waterDepth, type GameWorld } from '@graao/game-core';
-import { DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance, validateAppearance } from '@graao/game-data';
+import { ABILITIES, DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, migrateAppearance, randomAppearance, validateAppearance, type AbilityId } from '@graao/game-data';
 import { ActionState, MatchPhase, MovementState, isRoomCode, sanitizeHostSettings, v3angle, type CharacterAppearance, type DraftStateMsg, type NoticeMsg, type RoomListing, type RoomStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
@@ -19,8 +19,11 @@ import { GraaoCharacter } from '../character/GraaoCharacter';
 import type { AnimInput } from '../character/CharacterAnimationController';
 import { weaponTriangles } from '../character/WeaponModels';
 import { CombatDirector } from '../game/CombatDirector';
+import { CreepDirector } from '../game/CreepDirector';
+import { ProgressionDirector } from '../game/ProgressionDirector';
 import { DeployDirector } from '../game/DeployDirector';
 import { LootDirector } from '../game/LootDirector';
+import { InteractiveDirector } from '../game/InteractiveDirector';
 import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
 import { keyLabel } from '../game/KeyBindings';
@@ -29,6 +32,7 @@ import { Obstruction } from '../game/Obstruction';
 import { SpectatorDirector } from '../game/SpectatorDirector';
 import { TormentaDirector } from '../game/TormentaDirector';
 import { WaterDirector } from '../game/WaterDirector';
+import { Footsteps } from '../audio/Footsteps';
 import { GRARenderer, type Quality } from '../render/GRARenderer';
 import { GRAVFXSystem, Shape } from '../render/vfx/GRAVFXSystem';
 import { Creator } from '../ui/Creator';
@@ -104,14 +108,21 @@ export class GraaoApp {
   local!: LocalPlayer;
   character!: GraaoCharacter;
   combat!: CombatDirector;
+  /** Creeps (drawn from the server's snapshots) and the in-match level / attribute points. */
+  creeps!: CreepDirector;
+  progression!: ProgressionDirector;
   /** UFO deployment presentation (reveal, ride, dive, landing). */
   deploy!: DeployDirector;
   /** Lakes and sea around characters: splashes, swim strokes, drips, the underwater view. */
   water!: WaterDirector;
+  /** Everybody's feet on the ground under them: grass, earth, sand, stone, wood, metal. */
+  private footsteps!: Footsteps;
   /** The match's shrinking safe region: world pigment, curtain, HUD, sound (mirrors the server). */
   tormenta!: TormentaDirector;
   /** Chests, items on the ground, pickups and consumables (mirrors the server). */
   loot!: LootDirector;
+  /** Doors and breakable crates (mirrors the server), and the world's own sounds. */
+  interactives!: InteractiveDirector;
   net: NetSession | null = null;
   phase: HudPhase = 'BOOT';
   appearance: CharacterAppearance;
@@ -237,6 +248,7 @@ export class GraaoApp {
       await Promise.all([
         this.assets.track(this.audio.loadAmbience(this.assets.url('audio/wind.mp3')), 'ambienceWind'),
         this.assets.track(this.audio.loadBeach(this.assets.url('audio/beach.mp3')), 'ambienceBeach'),
+        this.assets.track(this.audio.loadSamples((file) => this.assets.url(`audio/sfx/${file}`)), 'sfx'),
       ]);
     } catch (e) {
       console.warn('[graao] áudio ambiente indisponível', e);
@@ -259,10 +271,14 @@ export class GraaoApp {
     this.character = new GraaoCharacter(this.parts, this.anims, this.appearance);
     this.r.scene.add(this.character.root);
     this.loot = new LootDirector(this);
+    this.interactives = new InteractiveDirector(this);
     this.loot.hud.setKeyBindings(this.input.bindings);
+    this.creeps = new CreepDirector(this);
+    this.progression = new ProgressionDirector(this);
     this.combat = new CombatDirector(this);
     this.deploy = new DeployDirector(this);
     this.water = new WaterDirector(this);
+    this.footsteps = new Footsteps(this.audio, this.world.physics, this.world.terrain, this.r.camera);
     this.tormenta = new TormentaDirector(this);
     this.spectator = new SpectatorDirector(this);
     this.camera.waterRadius = this.world.terrain.seaRadius;
@@ -351,6 +367,7 @@ export class GraaoApp {
       sound: (cue) => this.audio.play(cue),
     }, new CreatorThumbnails(this.parts, this.anims));
     this.draftUi = new DraftScreen({ pick: (round, id) => this.net?.sendDraftPick(round, id), sound: (cue) => this.audio.play(cue) });
+    this.draftUi.setKeyBindings(this.input.bindings);
     this.results = new ResultsScreen({ lobby: () => this.net?.sendReturnLobby(), leave: () => this.leaveRoom(), click: () => this.audio.play('ui.click') });
     this.results.setReadyKey(keyLabel(this.input.keyFor('ready')));
     this.lobby = new LobbyPanel({
@@ -478,6 +495,7 @@ export class GraaoApp {
     this.input.invertY = settings.invertY;
     this.input.setBindings(settings.keyBindings);
     this.hud.setKeyBindings(settings.keyBindings);
+    this.draftUi.setKeyBindings(settings.keyBindings);
     this.loot.hud.setKeyBindings(settings.keyBindings);
     this.results.setReadyKey(keyLabel(settings.keyBindings.ready));
     writeStorage(STORAGE.settings, settings);
@@ -620,6 +638,7 @@ export class GraaoApp {
   setPhase(p: HudPhase): void {
     if (this.phase === p) return;
     const previous = this.phase;
+    if (previous === 'MATCH' && p !== 'MATCH') this.combat.abilities.clearWorld();
     this.phase = p;
     if (p !== 'CHARACTER_CREATOR') this.r.camera.clearViewOffset();
     if (previous === 'CHARACTER_CREATOR' && p !== this.creatorReturn) this.character.setAppearance(this.appearance);
@@ -769,6 +788,7 @@ export class GraaoApp {
 
   private playSolo(): void {
     this.loot.reset();
+    this.interactives.reset();
     this.roomState = null;
     this.combat.enter(false);
     this.local.teleport({ x: this.spawn.x, y: this.spawn.y, z: this.spawn.z }, { x: this.menuFacing.x, y: this.menuFacing.y, z: this.menuFacing.z });
@@ -923,7 +943,9 @@ export class GraaoApp {
     if (this.phase === 'MATCH') this.combat.present();
     this.water.update(dt);
     this.tormenta.update(dt);
+    this.interactives.update(dt, this.time);
     this.presentAirJumps();
+    this.presentFootsteps(anim.moveState);
     for (const c of this.lineup) c.update(dt, { moveState: MovementState.IDLE, speed: 0, grounded: true, aiming: false, aimPitch: 0, action: ActionState.NONE });
     this.vfx.update(dt);
     this.draftUi.update(this.net ? this.net.serverNow() : Date.now());
@@ -932,6 +954,7 @@ export class GraaoApp {
     this.planet.update(this.time, viewFocus, this.r.sunDir);
     const orbit = this.r.setAltitude(PLANET.radius);
     this.planet.setOrbit(orbit, this.r.sunDir, this.r.camera.position.length() - PLANET.radius);
+    this.planet.cullHorizon(this.r.camera.position);
     this.ambient.update(dt, this.time, this.phase === 'MATCH' ? viewFocus : this.spawn);
     const envLevel = (1 - orbit) * this.tormenta.ambience;
     this.audio.setAmbience(envLevel, envLevel * this.water.beachProximity, this.time);
@@ -953,6 +976,17 @@ export class GraaoApp {
     const held = available && this.input.isDown('scoreboard');
     if (held) this.scoreboard.setState(this.combat.scoreboardState);
     if (held !== this.scoreboard.visible) this.scoreboard.show(held);
+  }
+
+  /** Footfalls, jump push-offs and landings: ours, and everyone else's as threats. */
+  private presentFootsteps(moveState: MovementState): void {
+    const walkers = [{ character: this.character, moveState, mine: true, gain: 1 }];
+    if (this.net) for (const r of this.net.remotePlayers) {
+      const row = this.combat.roomPlayers.find((p) => p.index === r.index);
+      const quiet = row?.loadout.map((id) => ABILITIES[id as AbilityId]?.passive).find((p) => p?.type === 'quietSteps');
+      walkers.push({ character: r.character, moveState: r.moveState, mine: false, gain: row?.alive === false ? 1 : quiet?.factor ?? 1 });
+    }
+    this.footsteps.update(walkers);
   }
 
   /** Double jumps (ours and everyone else's, once each): a puff of air kicked down from the feet and a soft swish. */

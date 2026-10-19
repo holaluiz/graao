@@ -65,6 +65,11 @@ prop('prateleira-bar', 'Prateleira com garrafas', 'decoracao', [
   box(0, 1.1, 0, 1.2, 1.1, 0.16, 'madeira', { solid: 'move' }),
   ...[0.75, 1.3, 1.85].flatMap((y) => [-0.9, -0.55, -0.2, 0.15, 0.5, 0.85].map((x, i) => cyl(x, y + 0.13, 0.05, 0.05, 0.13, (['cafe', 'verdeColonial', 'amareloOcre'] as KitColor[])[i % 3]!, { ...near, seg: 6 }))),
 ]);
+/** A narrower shelf, for a back wall shared with a door (its open leaf stands beside it). */
+prop('prateleira-curta', 'Prateleira curta com garrafas', 'decoracao', [
+  box(0, 1.1, 0, 0.8, 1.1, 0.16, 'madeira', { solid: 'move' }),
+  ...[0.75, 1.3, 1.85].flatMap((y) => [-0.6, -0.3, 0, 0.3, 0.6].map((x, i) => cyl(x, y + 0.13, 0.05, 0.05, 0.13, (['cafe', 'verdeColonial', 'amareloOcre'] as KitColor[])[i % 3]!, { ...near, seg: 6 }))),
+]);
 prop('balcao-paes', 'Balcão de pães', 'baixa', [
   box(0, 0.5, 0, 1.6, 0.5, 0.4, 'madeira'),
   box(0, 1.1, 0.05, 1.6, 0.1, 0.35, 'vidro', deco),
@@ -103,4 +108,4 @@ prop('lenha', 'Pilha de lenha', 'baixa', [
   ...[0, 1, 2].flatMap((row) => [-0.45, 0, 0.45].map((x) => cyl(x + (row % 2) * 0.22, 0.13 + row * 0.24, 0, 0.12, 0.6, 'madeira', { seg: 7, rx: 90, solid: row === 0 && x === 0 ? 'full' : 'none' }))),
   box(0, 0.36, 0, 0.7, 0.36, 0.6, 'madeira', { visible: false }),
 ]);
-prop('caixote-frutas', 'Caixote de frutas', 'baixa', [...crate(0, 0, 0, 0.3, 0, 'full'), ...pile(0, 0, 'fruta1', 3, 0.1).map((p) => ({ ...p, y: p.y - 0.4 }))]);
+prop('caixote-frutas', 'Caixote de frutas', 'destrutivel', [...crate(0, 0, 0, 0.3, 0, 'full'), ...pile(0, 0, 'fruta1', 3, 0.1).map((p) => ({ ...p, y: p.y - 0.4 }))]);

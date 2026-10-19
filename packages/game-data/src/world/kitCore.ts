@@ -204,6 +204,30 @@ export interface KitPrefab {
   length?: number;
   /** Drawn with the animated water material (streams, waterfalls, fountain basins); always decoration. */
   material?: 'water';
+  /**
+   * Door wall modules: the opening holds a door the game opens and closes (game-core interactives.ts). The module's
+   * own parts leave the opening empty; the leaves are drawn and collided per room, from these numbers.
+   */
+  door?: KitDoor;
+}
+
+/**
+ * A door in a wall module's opening: width and height above the floor top (m), one leaf hinged on the left jamb or two
+ * leaves hinged on both jambs (colonial doors, garage gates), their paint. The leaves swing 90° into the building.
+ */
+export interface KitDoor {
+  w: number;
+  h: number;
+  style: 'simples' | 'dupla';
+  color: KitColor;
+}
+
+/** A door of a building (its wall module's position and yaw in the building frame): see KitDoor. */
+export interface KitLeaf extends KitDoor {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
 }
 
 /** A piece of a building: a prefab at (x, y, z) in the building frame, turned `yaw` degrees (clockwise from +Z). */
@@ -236,6 +260,8 @@ export interface KitBuilding {
    * on a slope the layout adds steps in front of any door the ground falls away from.
    */
   doors?: { x: number; z: number; yaw: number }[];
+  /** Interactive doors: every piece whose prefab is a door module (KitPrefab.door), found by checkBuildings. */
+  leaves?: KitLeaf[];
   /** Points of interest in the building frame (chest spots, nav links): see the map's chest spots. */
   notes?: string;
 }
@@ -262,9 +288,20 @@ export function addBuilding(b: KitBuilding): KitBuilding {
 }
 
 export const prefabRegistry = (): Record<string, KitPrefab> => PREFABS;
-/** Every building piece names a registered prefab (checked once all families are loaded: see kit.ts). */
+/**
+ * Every building piece names a registered prefab (checked once all families are loaded: see kit.ts), and every door
+ * module among its pieces becomes one of its interactive doors (`leaves`).
+ */
 export function checkBuildings(): void {
-  for (const b of Object.values(BUILDINGS)) for (const piece of b.pieces) if (!PREFABS[piece.prefab]) throw new Error(`kit: building ${b.id} uses unknown prefab ${piece.prefab}`);
+  for (const b of Object.values(BUILDINGS)) {
+    const leaves: KitLeaf[] = [];
+    for (const piece of b.pieces) {
+      const p = PREFABS[piece.prefab];
+      if (!p) throw new Error(`kit: building ${b.id} uses unknown prefab ${piece.prefab}`);
+      if (p.door) leaves.push({ ...p.door, x: piece.x, y: piece.y ?? 0, z: piece.z, yaw: piece.yaw ?? 0 });
+    }
+    if (leaves.length) b.leaves = leaves;
+  }
 }
 export const buildingRegistry = (): Record<string, KitBuilding> => BUILDINGS;
 
@@ -288,7 +325,7 @@ export const KIT = {
   stair: { rise: 3.35, run: 4.8, width: 1.2, steps: 16, landing: 1.2 },
   lowWall: 1.1,
   /** Door steps (soleira): rise and tread of one step, most steps a stoop may have. */
-  stoop: { rise: 0.19, tread: 0.32, width: 1.7, maxSteps: 9 },
+  stoop: { rise: 0.19, tread: 0.29, width: 1.7, maxSteps: 9 },
   /** Stone base depths the layout picks from when a building stands on a slope (m below the base). */
   plinthDepths: [1.6, 2.4, 3.2, 4.0],
 } as const;
@@ -385,6 +422,8 @@ export interface WallStyle {
   height?: number;
   /** No base band (upper storeys). */
   upper?: boolean;
+  /** Colonial doors: draw the two leaves folded open (default). False: the opening is left for an interactive door. */
+  openLeaves?: boolean;
 }
 
 /** A wall segment along X (length `len`), exterior toward +Z, from the base to `style.height`. */
@@ -443,8 +482,10 @@ export function wall(len: number, kind: WallKind, style: WallStyle): KitPart[] {
       parts.push(box(-w / 2 - 0.09, head / 2, ht + 0.05, 0.09, head / 2, 0.07, fc, near));
       parts.push(box(w / 2 + 0.09, head / 2, ht + 0.05, 0.09, head / 2, 0.07, fc, near));
       parts.push(box(0, head + 0.12, ht + 0.05, w / 2 + 0.2, 0.12, 0.08, fc, near));
-      parts.push(box(-w / 2 + 0.06, (head - 0.1) / 2 + 0.05, -ht - 0.36, 0.035, (head - 0.1) / 2, 0.34, leaf, { ...near, ry: 0 }));
-      parts.push(box(w / 2 - 0.06, (head - 0.1) / 2 + 0.05, -ht - 0.36, 0.035, (head - 0.1) / 2, 0.34, leaf, { ...near, ry: 0 }));
+      if (style.openLeaves !== false) {
+        parts.push(box(-w / 2 + 0.06, (head - 0.1) / 2 + 0.05, -ht - 0.36, 0.035, (head - 0.1) / 2, 0.34, leaf, { ...near, ry: 0 }));
+        parts.push(box(w / 2 - 0.06, (head - 0.1) / 2 + 0.05, -ht - 0.36, 0.035, (head - 0.1) / 2, 0.34, leaf, { ...near, ry: 0 }));
+      }
     } else {
       parts.push(box(-w / 2 - 0.05, head / 2, ht + 0.03, 0.06, head / 2, 0.04, fc, near));
       parts.push(box(w / 2 + 0.05, head / 2, ht + 0.03, 0.06, head / 2, 0.04, fc, near));
@@ -515,7 +556,7 @@ export function parapet(len: number, color: KitColor = 'reboco'): KitPart[] {
  * ramp collider through their nosings (smooth to walk up and down); the open side (`rail` = +1 right, −1 left, 0 none)
  * has a railing that stops movement but not shots.
  */
-export function stair(rail: 1 | -1 | 0, o: { rise?: number; run?: number; width?: number; steps?: number; landing?: number; color?: KitColor; railColor?: KitColor; base?: boolean } = {}): KitPart[] {
+export function stair(rail: 1 | -1 | 0, o: { rise?: number; run?: number; width?: number; steps?: number; landing?: number; color?: KitColor; railColor?: KitColor; base?: boolean; landingSideRail?: boolean } = {}): KitPart[] {
   const rise = o.rise ?? KIT.stair.rise;
   const run = o.run ?? KIT.stair.run;
   const width = o.width ?? KIT.stair.width;
@@ -531,23 +572,31 @@ export function stair(rail: 1 | -1 | 0, o: { rise?: number; run?: number; width?
     const top = (i + 1) * r;
     parts.push(box(0, (top - foot) / 2, i * t + t / 2, hw, (top + foot) / 2, t / 2, i === steps - 1 ? 'laje' : color, deco));
   }
-  // Ramp through the nosings: from (z = −t, y = 0) to (z = run − t, y = rise).
+  // Ramp through the nosings: from (z = −t, y = 0) to (z = run − t, y = rise), continued 1.2 m down past the foot so a
+  // stair whose foot ends above lower ground (a building on a slope) still meets it as a slope, not a ledge.
   const len = Math.hypot(run, rise);
   const ang = Math.atan2(rise, run);
   const th = 0.15;
+  const ext = 1.2;
   const midZ = run / 2 - t;
   const midY = rise / 2;
-  parts.push(box(0, midY - Math.cos(ang) * th, midZ + Math.sin(ang) * th, hw, th, len / 2, color, { ...ghost, rx: -ang / DEG }));
+  const cx = -Math.cos(ang) * (ext / 2);
+  const cyy = -Math.sin(ang) * (ext / 2);
+  parts.push(box(0, midY + cyy - Math.cos(ang) * th, midZ + cx + Math.sin(ang) * th, hw, th, (len + ext) / 2, color, { ...ghost, rx: -ang / DEG }));
   // Landing (walkable block up to the top).
   if (landing > 0) parts.push(box(0, (rise - foot) / 2, run + landing / 2 - t / 2, hw, (rise + foot) / 2, (landing + t) / 2, 'laje'));
   if (rail) {
-    // Railing on the open side, along the flight and the landing.
+    // Railing on the open side, along the flight (from a quarter of the way up, so the first steps can be taken from
+    // the side, as on a stair against a wall) and the landing.
     const rc = o.railColor ?? 'metal';
     const rx = rail * (hw - 0.04);
     const rh = 0.5;
-    parts.push(box(rx, midY + Math.cos(ang) * rh, midZ - Math.sin(ang) * rh, 0.04, rh, len / 2, rc, { solid: 'move', rx: -ang / DEG }));
+    const u0 = 0.25;
+    const um = (u0 + 1) / 2;
+    parts.push(box(rx, um * rise + Math.cos(ang) * rh, -t + um * run - Math.sin(ang) * rh, 0.04, rh, ((1 - u0) * len) / 2, rc, { solid: 'move', rx: -ang / DEG }));
     if (landing > 0) {
-      parts.push(box(rx, rise + rh, run + landing / 2 - t / 2, 0.04, rh, (landing + t) / 2, rc, { solid: 'move' }));
+      // An inside stair is left from its landing toward the railing side (the upper floor): no side rail there.
+      if (o.landingSideRail ?? true) parts.push(box(rx, rise + rh, run + landing / 2 - t / 2, 0.04, rh, (landing + t) / 2, rc, { solid: 'move' }));
       parts.push(box(0, rise + rh, run + landing - 0.04, hw, rh, 0.04, rc, { solid: 'move' }));
     }
   }

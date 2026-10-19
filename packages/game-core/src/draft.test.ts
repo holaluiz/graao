@@ -24,7 +24,7 @@ describe('ability draft', () => {
 
   it('runs four simultaneous rounds (3 basics + 1 Ultimate) into two valid, disjoint loadouts', () => {
     const d = new AbilityDraft([0, 1], 0, { timings: T });
-    expect(d.unique).toEqual({ basic: true, ultimate: true });
+    expect(d.unique).toEqual({ basic: false, ultimate: false });
     let now = 0;
     const plan: [string, string][] = [
       ['sun_orb', 'thorn_seed'],
@@ -54,36 +54,30 @@ describe('ability draft', () => {
     expect(a.filter((id) => b.includes(id))).toEqual([]);
   });
 
-  it('gives a disputed ability to the seat with priority; the other repicks at once', () => {
+  it('allows identical spells across players without conflicts, repicks or global exclusivity', () => {
     const d = new AbilityDraft([0, 1], 0, { timings: T, firstPriority: 1 });
     expect(d.priority).toEqual([1, 0]);
     d.pick(0, 0, 'sun_orb', 0);
     d.pick(1, 0, 'sun_orb', 0);
     d.update(10);
     expect(d.seat(1)!.picks).toEqual(['sun_orb']);
-    expect(d.stage).toBe('pick');
-    expect(d.endsAt).toBe(10 + T.repickMs);
-    const v0 = d.view(0);
-    expect(v0).toMatchObject({ repick: true, lostTo: { index: 1, a: 'sun_orb' }, mine: null });
-    expect(v0.owners).toEqual([['sun_orb', 1]]);
-    // The loser cannot take it again and must choose something else.
-    expect(d.pick(0, 0, 'sun_orb', 20)).toBe(DraftReject.TAKEN);
-    expect(d.available(0)).not.toContain('sun_orb');
-    expect(d.pick(0, 0, 'sap_snare', 20)).toBe(DraftReject.OK);
-    d.update(30);
+    expect(d.seat(0)!.picks).toEqual(['sun_orb']);
     expect(d.stage).toBe('reveal');
+    const v0 = d.view(0);
+    expect(v0).toMatchObject({ unique: false, repick: false, lostTo: null, mine: null });
     expect(d.view(1).reveal).toEqual([
-      { index: 1, a: 'sun_orb', auto: false, contested: true },
-      { index: 0, a: 'sap_snare', auto: false, contested: true },
+      { index: 0, a: 'sun_orb', auto: false, contested: false },
+      { index: 1, a: 'sun_orb', auto: false, contested: false },
     ]);
     // Round 2: priority passes to seat 0.
-    nextRound(d, 30);
+    nextRound(d, 10);
     expect(d.priority).toEqual([0, 1]);
     d.pick(0, 1, 'bloom', 300);
     d.pick(1, 1, 'bloom', 300);
     d.update(300);
-    expect(d.seat(0)!.picks).toEqual(['sap_snare', 'bloom']);
-    expect(d.seat(1)!.repick).toBe(true);
+    expect(d.seat(0)!.picks).toEqual(['sun_orb', 'bloom']);
+    expect(d.seat(1)!.picks).toEqual(['sun_orb', 'bloom']);
+    expect(d.seat(1)!.repick).toBe(false);
   });
 
   it('refuses picks from the wrong round, the wrong slot type, or after the seat already has this round', () => {
@@ -114,7 +108,7 @@ describe('ability draft', () => {
     expect(d.pick(0, 3, 'thorn_seed', 900)).toBe(DraftReject.NOT_IN_POOL);
   });
 
-  it('chooses at random for whoever runs out of time (never a taken ability) and keeps the draft moving', () => {
+  it('chooses valid spells for whoever runs out of time and keeps the draft moving', () => {
     let k = 0;
     const d = new AbilityDraft([0, 1], 0, { timings: T, rng: () => (k++ * 0.37) % 1 });
     let now = 0;
@@ -132,14 +126,15 @@ describe('ability draft', () => {
     const b = d.loadout(1)!;
     expect(validateLoadout(a)).toEqual(a);
     expect(validateLoadout(b)).toEqual(b);
-    expect(a.filter((id) => b.includes(id))).toEqual([]);
+    expect(new Set(a).size).toBe(4);
+    expect(new Set(b).size).toBe(4);
   });
 
   it('stops waiting for a seat that leaves', () => {
     const d = new AbilityDraft([0, 1, 2], 0, { timings: T });
-    // 3 players: 8 basics < 9 picks, so basics may repeat across players (never twice in one loadout).
+    // Exclusivity stays individual regardless of pool size or participant count.
     expect(d.unique.basic).toBe(false);
-    expect(d.unique.ultimate).toBe(true);
+    expect(d.unique.ultimate).toBe(false);
     d.pick(0, 0, 'sun_orb', 0);
     d.pick(1, 0, 'sun_orb', 0);
     expect(d.update(5)).toBe(false);
@@ -148,6 +143,41 @@ describe('ability draft', () => {
     expect(d.seat(0)!.picks).toEqual(['sun_orb']);
     expect(d.seat(1)!.picks).toEqual(['sun_orb']);
     expect(d.stage).toBe('reveal');
+  });
+
+  it('rejects late picks and prevents a second passive in every basic round', () => {
+    const d = new AbilityDraft([0, 1], 0, { timings: T });
+    expect(d.pick(0, 0, 'steady_hand', T.pickMs)).toBe(DraftReject.EXPIRED);
+    expect(d.seat(0)!.pending).toBeNull();
+    expect(d.pick(0, 0, 'steady_hand', 10)).toBe(DraftReject.OK);
+    expect(d.pick(1, 0, 'steady_hand', 10)).toBe(DraftReject.OK);
+    d.update(10);
+    const now = nextRound(d, 10);
+    expect(d.available(0)).not.toContain('soft_step');
+    expect(d.pick(0, 1, 'soft_step', now)).toBe(DraftReject.PASSIVE_LIMIT);
+    expect(d.pick(0, 1, 'steady_hand', now)).toBe(DraftReject.ALREADY_OWNED);
+    expect(d.pick(0, 1, 'wind_step', now)).toBe(DraftReject.OK);
+  });
+
+  it.each([1, 2, 10])('completes a %i-participant timeout draft with valid individual builds and at most one passive', (count) => {
+    const indices = Array.from({ length: count }, (_, index) => index);
+    const d = new AbilityDraft(indices, 0, { timings: T, rng: () => 0.999999 });
+    let now = 0;
+    for (const index of indices) expect(d.pick(index, 0, 'steady_hand', now)).toBe(DraftReject.OK);
+    d.update(now);
+    now = nextRound(d, now);
+    for (let round = 1; round < 4; round++) {
+      d.update(now + T.pickMs);
+      now = nextRound(d, now + T.pickMs);
+    }
+    expect(d.done).toBe(true);
+    for (const index of indices) {
+      const loadout = d.loadout(index)!;
+      expect(validateLoadout(loadout)).toEqual(loadout);
+      expect(loadout.filter((id) => ABILITIES[id].kind === 'passive')).toHaveLength(1);
+      expect(ABILITIES[loadout[3]!].kind).toBe('ultimate');
+    }
+    expect(new Set(indices.map((index) => d.loadout(index)!.join(','))).size).toBe(1);
   });
 
   it('allows 45 seconds to inspect a choice and 20 seconds to repick after a conflict', () => {

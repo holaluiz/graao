@@ -208,16 +208,37 @@ export const CHEST_LOOT = {
     { v: 'mana_crystal', w: 20 },
   ] as Weighted<ItemId>[],
   weaponBringsAmmo: true,
-  minWeaponShare: 0.5,
+  /** Everyone lands unarmed: two in three chests hold a weapon. */
+  minWeaponShare: 0.65,
   maxEpicPerMatch: 2,
+  /**
+   * Starter chests (the first chest of every region in the match, so wherever someone lands there is one within
+   * reach) always hold one basic weapon from this list, never a rare one. The rest of the chest is rolled as usual.
+   */
+  starterWeapon: [
+    { v: 'weapon_pistol', w: 30 },
+    { v: 'weapon_sunbeam', w: 30 },
+    { v: 'weapon_smg', w: 20 },
+    { v: 'weapon_petal', w: 20 },
+  ] as Weighted<ItemId>[],
 };
 
 // ------------------------------------------------------------------------------------------------ kit and rules
 
 /**
- * What every player carries on a fresh life (warmup spawn, boarding the UFO, a match start): the Raio de Sol in E, Q
- * free for what they find, a little solar reserve, no consumables. Bots keep the classic two-weapon loadout and never
- * run out of reserve (they do not loot).
+ * Battle Royale: every participant (host, guests and bots) boards the UFO and starts the fight with empty hands —
+ * no weapon in E or Q, no reserve, no consumables — and fights with fists until a chest gives them a weapon.
+ */
+export const MATCH_KIT = {
+  weapons: [null, null] as (WeaponId | null)[],
+  reserve: { solar: 0, petal: 0, heavy: 0 } as Record<AmmoType, number>,
+  consumables: { health: 0, shield: 0, mana: 0 } as Record<ConsumableId, number>,
+};
+
+/**
+ * Training kits (the development warmup and the offline exploring mode, where there is nothing to loot): the Raio de
+ * Sol in E, Q free for what they find, a little solar reserve, no consumables. Bots keep the classic two-weapon
+ * loadout there and never run out of reserve. In a Battle Royale match everyone gets MATCH_KIT instead.
  */
 export const STARTING_KIT = {
   weapons: ['sunbeam', null] as (WeaponId | null)[],
@@ -232,10 +253,10 @@ export const BOT_KIT = {
 
 export const LOOT_RULES = {
   /**
-   * Active chests per match: every region gets its minimum (CHEST_REGIONS: 18 in all), the rest spread out; for up
-   * to 10 players on R = 100 m that is about two chests per player, denser in the towns.
+   * Active chests per match: every region gets its minimum (CHEST_REGIONS: 25 in all), the rest spread out; for up
+   * to 10 players who all land unarmed on R = 100 m that is almost three chests per player, denser in the towns.
    */
-  chestsPerMatch: 22,
+  chestsPerMatch: 28,
   /** No two active chests closer than this (degrees of arc; 1° ≈ 1.75 m). */
   minChestSpacingDeg: 6,
   /** Chest lid opening before the rewards appear (server time, ms). Short: nobody is locked in place. */
@@ -279,17 +300,17 @@ export interface ChestSpotDef {
 
 /** Region groups the spawner spreads chests over (wilderness spots use 'Trilhas'). */
 export const CHEST_REGIONS: { name: string; min: number }[] = [
-  { name: 'Vila das Lanternas', min: 3 },
-  { name: 'Bairro do Horizonte', min: 3 },
-  { name: 'Bosque dos Varais', min: 2 },
+  { name: 'Vila das Lanternas', min: 4 },
+  { name: 'Bairro do Horizonte', min: 4 },
+  { name: 'Bosque dos Varais', min: 3 },
   { name: 'Velho Observatório', min: 1 },
-  { name: 'Lago Espelho', min: 2 },
-  { name: 'Fenda de Cristal', min: 1 },
+  { name: 'Lago Espelho', min: 3 },
+  { name: 'Fenda de Cristal', min: 2 },
   { name: 'Serra do Mirante', min: 1 },
   { name: 'Lasca do Céu', min: 1 },
   { name: 'Arcos Afundados', min: 1 },
-  { name: 'Planalto Norte', min: 1 },
-  { name: 'Trilhas', min: 0 },
+  { name: 'Planalto Norte', min: 2 },
+  { name: 'Trilhas', min: 3 },
 ];
 
 /**

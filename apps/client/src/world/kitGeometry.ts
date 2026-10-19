@@ -3,10 +3,12 @@
  * the prefab frame (X side, Y up, Z forward) with flat colours, rotated by the same quaternion the colliders use
  * (game-core quatFromEulerDeg), so the drawn wall is the wall that stops you.
  *
- * Placed pieces are baked into a few static meshes (one per icosahedron face of the planet, for frustum culling):
- * a whole village costs one draw call (plus its shadow pass) instead of one per prefab. Each piece keeps its own range
- * of vertices in a per-vertex `instanceFade` attribute, which the stylized material reads like the instanced props'
- * fade, so the camera dissolve still works piece by piece.
+ * Placed pieces are baked into a few static meshes (one per cell of the planet, for frustum culling): a whole village
+ * costs a few draw calls (plus the shadow pass) instead of one per prefab. Each piece keeps its own range of vertices
+ * in a per-vertex `instanceFade` attribute, which the stylized material reads like the instanced props' fade, so the
+ * camera dissolve still works piece by piece. Small decoration (frames, sills, shutters, little props: see isNearPart)
+ * carries `aLod` = 1 and the kit material folds it away beyond ~45 m — detail up close, simple masses far away,
+ * without extra draw calls. Water pieces (fountains, falls, streams) go to their own meshes with the water material.
  */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -33,13 +35,30 @@ function partGeometry(p: KitPart): Geo {
       g.rotateY(Math.PI / 2);
       return g;
     }
+    case 'hip': {
+      // Hipped roof: base rectangle on y = 0, ridge along X at y = hy (45° hips in plan), flat-shaded.
+      const rx = Math.max(0.02, p.hx - p.hz);
+      const A = [-p.hx, 0, p.hz], B = [p.hx, 0, p.hz], C = [p.hx, 0, -p.hz], D = [-p.hx, 0, -p.hz];
+      const E = [rx, p.hy, 0], F = [-rx, p.hy, 0];
+      const tris = [A, B, E, A, E, F, C, D, F, C, F, E, B, C, E, D, A, F, A, D, C, A, C, B];
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(tris.flat(), 3));
+      g.computeVertexNormals();
+      return g;
+    }
   }
 }
 
-/** Position, normal and colour only, non-indexed (mergeable). */
+/** Small decoration only drawn up close (see KitPart `lod`). */
+export function isNearPart(p: KitPart): boolean {
+  if (p.lod) return p.lod === 'near';
+  return (p.solid ?? 'full') === 'none' && Math.max(p.hx, p.hy, p.hz) <= 0.3;
+}
+
+/** Position, normal, colour and LOD flag only, non-indexed (mergeable). */
 function clean(g: Geo): Geo {
   const n = g.index ? g.toNonIndexed() : g;
-  for (const name of Object.keys(n.attributes)) if (!['position', 'normal', 'color'].includes(name)) n.deleteAttribute(name);
+  for (const name of Object.keys(n.attributes)) if (!['position', 'normal', 'color', 'aLod'].includes(name)) n.deleteAttribute(name);
   return n;
 }
 
@@ -65,6 +84,7 @@ export function kitPrefabGeometry(id: string): Geo {
     const col = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('aLod', new THREE.BufferAttribute(new Float32Array(n).fill(isNearPart(p) ? 1 : 0), 1));
     parts.push(g);
   }
   const merged = parts.length ? mergeGeometries(parts, false)! : new THREE.BufferGeometry();
@@ -92,7 +112,7 @@ function tintOf(key: string): number {
  * Bakes kit placements into static meshes, one per group (`groupOf`, e.g. the nearest icosahedron face). Returns the
  * meshes and, per solid placement, the vertex range to fade.
  */
-export function buildKitChunks(placements: Placement[], material: THREE.Material, groupOf: (p: Placement) => number): { meshes: THREE.Mesh[]; refs: Map<number, KitPieceRef>; triangles: number } {
+export function buildKitChunks(placements: Placement[], material: THREE.Material, groupOf: (p: Placement) => number, o: { allRefs?: boolean } = {}): { meshes: THREE.Mesh[]; refs: Map<number, KitPieceRef>; triangles: number } {
   const groups = new Map<number, Placement[]>();
   for (const p of placements) {
     const g = groupOf(p);
@@ -128,12 +148,12 @@ export function buildKitChunks(placements: Placement[], material: THREE.Material
     merged.setAttribute('instanceFade', new THREE.BufferAttribute(new Float32Array(at), 1));
     merged.computeBoundingSphere();
     const mesh = new THREE.Mesh(merged, material);
-    mesh.name = `kit_${g}`;
+    mesh.name = `kit_${material.name.includes('Water') ? 'water_' : ''}${g}`;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     meshes.push(mesh);
     triangles += at / 3;
-    for (const r of ranges) if (!r.p.visualOnly) refs.set(r.p.id, { mesh, start: r.start, count: r.count, placement: r.p });
+    for (const r of ranges) if (!r.p.visualOnly || o.allRefs) refs.set(r.p.id, { mesh, start: r.start, count: r.count, placement: r.p });
   }
   return { meshes, refs, triangles };
 }

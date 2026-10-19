@@ -4,11 +4,12 @@
  * visuals from the same placements; the server builds only the colliders.
  * Local frame convention: X = side (up × forward), Y = local up, Z = forward.
  */
-import { GRAAO_MAP, KIT, KIT_PREFABS, MATCH_SPAWNS, PLANET, REGIONS, SCATTER, SPAWNS, SPAWN_CLEAR_DEG, resolvePrefab, type Biome, type GraaoMap, type KitBuilding, type KitPart, type KitPiece, type KitPrefab, type MapPlacement, type ScatterKind, type StructureKind } from '@graao/game-data';
+import { GRAAO_MAP, KIT, KIT_PREFABS, MATCH_SPAWNS, PLANET, REGIONS, SCATTER, SPAWNS, SPAWN_CLEAR_DEG, resolvePrefab, type Biome, type GraaoMap, type KitBuilding, type KitColor, type KitPart, type KitPiece, type KitPrefab, type MapPlacement, type ScatterKind, type StructureKind } from '@graao/game-data';
 import { v3, v3angle, v3cross, v3dot, v3normalize, v3rotateAxis, type Vec3 } from '@graao/shared';
 import { mulberry32 } from './rng';
 import { headingTangent, latLonToDir } from './sphere';
 import type { Terrain } from './terrain';
+import { buildTrails, trailEdgeDistance } from './trails';
 
 /**
  * A collider in a placement's frame. `q` is an optional local rotation (x, y, z, w) composed after the placement's
@@ -20,6 +21,9 @@ export type ColliderPrimitive =
   | { type: 'cone'; r: number; hh: number; x: number; y: number; z: number; q?: Quat; block?: 'move' }
   | { type: 'ball'; r: number; x: number; y: number; z: number; block?: 'move' }
   | { type: 'hull'; points: number[]; block?: 'move' };
+
+/** A kit part's collider also names what it is made of (its KitColor: 'madeira', 'calcamento'…), for footsteps. */
+export type SurfacedCollider = ColliderPrimitive & { surface?: string };
 
 export interface Quat {
   x: number;
@@ -52,6 +56,29 @@ export interface Placement {
   prefab?: string;
   /** Map placement this came from (a building's pieces share their building's id). */
   mapId?: string;
+  /**
+   * A breakable crate (prefab cover 'destrutivel'): no static collider; each room adds and removes its own
+   * (game-core interactiveSystem.ts), and the client draws it apart from the baked kit chunks.
+   */
+  breakable?: boolean;
+}
+
+/**
+ * An interactive door (game-core interactives.ts): the frame of its wall module — base point on the wall's centre line
+ * in the middle of the opening, `forward` toward the outside — and the module's KitDoor numbers.
+ */
+export interface DoorDef {
+  /** Index in layout.doors (map order, identical on client and server): the door's id on the wire. */
+  id: number;
+  mapId: string;
+  position: Vec3;
+  up: Vec3;
+  forward: Vec3;
+  side: Vec3;
+  w: number;
+  h: number;
+  style: 'simples' | 'dupla';
+  color: KitColor;
 }
 
 export interface HouseDims {
@@ -186,9 +213,9 @@ export function quatRotate(q: Quat, x: number, y: number, z: number): [number, n
 const hasRotation = (p: KitPart) => !!(p.rx || p.ry || p.rz);
 
 /** Collider of one kit part at scale `s` (null for decoration). */
-function kitPartCollider(p: KitPart, s: number): ColliderPrimitive | null {
+function kitPartCollider(p: KitPart, s: number): SurfacedCollider | null {
   if ((p.solid ?? 'full') === 'none') return null;
-  const block = p.solid === 'move' ? { block: 'move' as const } : {};
+  const block = p.solid === 'move' ? { block: 'move' as const, surface: p.color } : { surface: p.color };
   const q = hasRotation(p) ? { q: quatFromEulerDeg(p.rx, p.ry, p.rz) } : {};
   switch (p.shape) {
     case 'box':
@@ -263,7 +290,8 @@ function scatterColliders(kind: PlacementKind, s: number): { colliders: Collider
     case 'tree':
       return { colliders: [{ type: 'cylinder', r: 0.24 * s, hh: 1.5 * s + 0.4, x: 0, y: 1.1 * s, z: 0 }], radius: 2.6 * s, centerHeight: 3.0 * s };
     case 'pine':
-      return { colliders: [{ type: 'cylinder', r: 0.22 * s, hh: 1.3 * s + 0.4, x: 0, y: 0.9 * s, z: 0 }], radius: 2.3 * s, centerHeight: 2.8 * s };
+      // Araucária: the whole bare trunk (≈ 5 m), the crown above it is foliage.
+      return { colliders: [{ type: 'cylinder', r: 0.2 * s, hh: 2.3 * s + 0.3, x: 0, y: 2.0 * s, z: 0 }], radius: 3.0 * s, centerHeight: 3.6 * s };
     case 'rock':
       return { colliders: [{ type: 'ball', r: 0.78 * s, x: 0, y: 0.18 * s, z: 0 }], radius: 0.95 * s, centerHeight: 0.3 * s };
     case 'cerrado':
@@ -284,6 +312,10 @@ export interface WorldLayout {
   structures: Placement[];
   /** Grapple / anchor points (world space) from kit parts marked `anchor` (clotheslines, arches, lanterns). */
   anchors: Vec3[];
+  /** Interactive doors of the buildings, in map order. */
+  doors: DoorDef[];
+  /** Breakable crates (placements with `breakable`), in map order: index = crate id on the wire. */
+  crates: Placement[];
 }
 
 // ------------------------------------------------------------------------------------------------ biomes
@@ -304,6 +336,24 @@ export function biomeAt(dir: Vec3): Biome {
     }
   }
   return best;
+}
+
+/**
+ * Soil of the landscape under a direction, for the terrain's colour: [iron, lush] in 0..1 — the serras' red earth and
+ * iron-ore rock, the mata's deeper green (the open country is a little of the first). Smooth at the region edges.
+ */
+export function soilAt(dir: Vec3): [number, number] {
+  let iron = 0.18;
+  let lush = 0;
+  for (const r of REGIONS) {
+    if (r.biome !== 'serra' && r.biome !== 'mata' && r.biome !== 'orla') continue;
+    const t = v3angle(dir, latLonToDir(r.lat, r.lon)) / (r.radiusDeg * DEG);
+    if (t >= 1.15) continue;
+    const w = 1 - Math.min(1, Math.max(0, (t - 0.7) / 0.45));
+    if (r.biome === 'serra') iron = Math.max(iron, w);
+    else lush = Math.max(lush, r.biome === 'mata' ? w : w * 0.5);
+  }
+  return [iron * (1 - lush), lush];
 }
 
 /** Inside the built-up core of a region (its `builtDeg`): no wild trees or rocks there, the streets stay clear. */
@@ -387,6 +437,8 @@ export function buildingSite(terrain: Terrain, b: KitBuilding, mp: Pick<MapPlace
 export interface LayoutOptions {
   /** Include client-only decoration (grass, flowers, bushes). */
   includeVisual: boolean;
+  /** Scatter vegetation and rocks (default true). The map editor resolves only the authored map. */
+  scatter?: boolean;
 }
 
 export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap = GRAAO_MAP): WorldLayout {
@@ -403,6 +455,8 @@ export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap
   /** Scatter keep-out circles (direction, angular radius). */
   const clear: { dir: Vec3; rad: number }[] = [];
   const anchors: Vec3[] = [];
+  const doors: DoorDef[] = [];
+  const crates: Placement[] = [];
 
   // Authored map: classic structures, kit prefabs and kit buildings (one placement per piece).
   const structures: Placement[] = [];
@@ -430,7 +484,9 @@ export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap
       seed: (id * 2654435761) >>> 0,
       prefab: prefab.id,
       mapId,
+      ...(prefab.cover === 'destrutivel' && shape.colliders.length ? { breakable: true } : {}),
     };
+    if (p.breakable) crates.push(p);
     structures.push(p);
     placements.push(p);
   };
@@ -486,14 +542,27 @@ export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap
         const f = piece.yaw ? v3normalize(v3rotateAxis(forward, up, -(piece.yaw * DEG))) : forward;
         pushKit(prefab, mp.id, pos, up, f, 1, 0);
       }
+      // Its doors, in the frames of their wall modules.
+      for (const lf of ref.building.leaves ?? []) {
+        const y = lf.y + site.raise;
+        const position = {
+          x: base.x + side.x * lf.x + up.x * y + forward.x * lf.z,
+          y: base.y + side.y * lf.x + up.y * y + forward.y * lf.z,
+          z: base.z + side.z * lf.x + up.z * y + forward.z * lf.z,
+        };
+        const f = lf.yaw ? v3normalize(v3rotateAxis(forward, up, -(lf.yaw * DEG))) : forward;
+        doors.push({ id: doors.length, mapId: mp.id, position, up, forward: f, side: v3normalize(v3cross(up, f)), w: lf.w, h: lf.h, style: lf.style, color: lf.color });
+      }
     }
   }
 
   // Spawn points stay free of rocks and trees so nobody starts inside a collider.
   for (const sp of [...SPAWNS, ...MATCH_SPAWNS]) clear.push({ dir: latLonToDir(sp.lat, sp.lon), rad: (SPAWN_CLEAR_DEG * Math.PI) / 180 });
   const solid: { dir: Vec3; r: number }[] = [];
+  // Trails painted on the terrain stay clear too: no tree or rock on the way, the grass stops at the edge.
+  const trails = buildTrails(map.trails ?? []);
 
-  for (const rule of SCATTER) {
+  for (const rule of opts.scatter === false ? [] : SCATTER) {
     if (rule.visualOnly && !opts.includeVisual) continue;
     const rand = mulberry32(PLANET.seed ^ (rule.seed * 0x9e3779b1));
     let placed = 0;
@@ -520,6 +589,7 @@ export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap
       }
       if (blocked) continue;
       const isSolid = !rule.visualOnly;
+      if (trails.trails.length && trailEdgeDistance(trails, dir, 2) < (isSolid ? 1.2 : 0.05)) continue;
       // Each landscape keeps its own plants (rule.biomes: acceptance per biome); built-up cores keep their streets
       // clear of wild trees and rocks.
       if (rule.biomes) {
@@ -572,7 +642,7 @@ export function buildLayout(terrain: Terrain, opts: LayoutOptions, map: GraaoMap
     }
   }
 
-  return { placements, structures, anchors };
+  return { placements, structures, anchors, doors, crates };
 }
 
 /** World position of a point given in a placement's local frame. */

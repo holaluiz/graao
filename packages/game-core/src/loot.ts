@@ -99,13 +99,21 @@ export function rollChest(rand: () => number): LootDrop[] {
 const hasWeapon = (c: LootDrop[]) => c.some((d) => ITEMS[d.item].kind === 'weapon');
 
 /**
- * The whole match's chests from one seed, with the fairness rules: at least `minWeaponShare` of the chests hold a
- * weapon (spread through the chest order, which the spawner already spreads over the planet) and at most
- * `maxEpicPerMatch` epic items. Deterministic for (seed, count).
+ * The whole match's chests from one seed, with the fairness rules: every starter chest (`starters[i]`) holds a weapon
+ * (a basic one when it rolled none), at least `minWeaponShare` of the chests hold a weapon (spread through the chest
+ * order, which the spawner already spreads over the planet) and at most `maxEpicPerMatch` epic items. Deterministic
+ * for (seed, count, starters).
  */
-export function rollMatchLoot(seed: number, count: number): LootDrop[][] {
+export function rollMatchLoot(seed: number, count: number, starters: readonly boolean[] = []): LootDrop[][] {
   const rand = mulberry32(seed ^ 0x51ed270b);
   const chests = Array.from({ length: count }, () => rollChest(rand));
+  // Starter chests: a basic weapon (and its ammunition) when the roll gave none.
+  chests.forEach((c, i) => {
+    if (!starters[i] || hasWeapon(c)) return;
+    const item = pickWeighted(CHEST_LOOT.starterWeapon, rand);
+    c[0] = { item, qty: 1 };
+    if (c.length >= 2) c[1] = rollOfKind('ammo', rand, c.slice(0, 1));
+  });
   // Enough weapons: turn the first reward of evenly spaced weaponless chests into a weapon (+ its ammunition).
   const need = Math.ceil(count * CHEST_LOOT.minWeaponShare);
   const without = chests.map((c, i) => (hasWeapon(c) ? -1 : i)).filter((i) => i >= 0);

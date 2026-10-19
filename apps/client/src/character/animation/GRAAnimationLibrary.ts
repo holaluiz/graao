@@ -43,6 +43,8 @@ export type ClipName =
   | 'emote'
   | 'swim'
   | 'swimIdle'
+  | 'punchL'
+  | 'punchR'
   | 'skydive';
 
 type UalClip = Exclude<ClipName, 'skydive'>;
@@ -77,6 +79,9 @@ const UAL_SOURCES: Record<UalClip, { pack: 1 | 2; clip: string }> = {
   emote: { pack: 2, clip: 'Idle_FoldArms_Loop' },
   swim: { pack: 1, clip: 'Swim_Fwd_Loop' },
   swimIdle: { pack: 1, clip: 'Swim_Idle_Loop' },
+  // Empty hands: a left jab and a right cross, alternated.
+  punchL: { pack: 1, clip: 'Punch_Jab' },
+  punchR: { pack: 1, clip: 'Punch_Cross' },
 };
 
 export interface LibraryReport {

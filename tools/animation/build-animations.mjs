@@ -20,6 +20,8 @@ const PACKS = [
       'Pistol_Idle_Loop', 'Pistol_Aim_Neutral', 'Pistol_Aim_Up', 'Pistol_Aim_Down', 'Pistol_Shoot', 'Pistol_Reload',
       'Hit_Chest', 'Hit_Head', 'Death01', 'Spell_Simple_Enter', 'Spell_Simple_Shoot', 'Spell_Simple_Idle_Loop', 'Roll',
       'Dance_Loop', 'Idle_Talking_Loop', 'Interact', 'Crouch_Idle_Loop', 'Swim_Fwd_Loop', 'Swim_Idle_Loop',
+      // Unarmed combat: a left jab and a right cross, alternated (upper body only, so no root motion reaches the feet).
+      'Punch_Jab', 'Punch_Cross',
     ],
   },
   {

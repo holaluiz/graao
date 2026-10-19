@@ -47,7 +47,15 @@ import {
   applyDrowning,
   headUnderWater,
   stepBreath,
-  currentSlow,
+  createAbilityBarrier,
+  passiveModifiers,
+  recordPassiveCombat,
+  resetAbilityRuntime,
+  statusModifiers,
+  updatePassives,
+  updateStatusEffects,
+  expireTemporaryShield,
+  resolveTargetPoint,
   defaultLoadout,
   manaShown,
   regenMana,
@@ -70,6 +78,29 @@ import {
   finishReload,
   reloadAmount,
   GRALootSystem,
+  GRACreepSystem,
+  InteractiveSystem,
+  GROUPS_WORLD_QUERY,
+  PLAYER_MELEE_BODY,
+  addXp,
+  allocateStat,
+  botStatChoice,
+  defendedDamage,
+  roundWithCarry,
+  rescaleVitals,
+  weaponShotInterval,
+  angularDistance,
+  creepIdOf,
+  maxHealthOf,
+  maxManaOf,
+  meleeReady,
+  newProgression,
+  progressionTuple,
+  resolveMelee,
+  statModifiers,
+  type CreepHost,
+  type CreepRuntime,
+  type MeleeBody,
   type LootHost,
   latLonToDir,
   muzzlePoint,
@@ -82,16 +113,21 @@ import {
   type AbilityActor,
   type AbilityHost,
   type GameWorld,
+  type GamePhysics,
   type PlayerHitTarget,
   type TormentaConfig,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, ITEMS, LOOT_RULES, MATCH_SPAWNS, MOVEMENT, SPAWNS, TORMENTA, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
 import {
   AbilityReject,
   AIM_SCALE,
   ActionState,
   C2S,
+  CREEP_TARGET_BASE,
+  ChestState,
   CLIENT_VERSION,
+  CreepStateCode,
+  FISTS_SLOT,
   DIR_SCALE,
   DeployState,
   DraftReject,
@@ -129,7 +165,9 @@ import {
   v3normalize,
   v3projectOnPlane,
   validateAbilityRequest,
+  validateAllocateStat,
   validateAppearanceUpdate,
+  validateMelee,
   validateDevLoot,
   validateDraftPick,
   validateFire,
@@ -143,6 +181,7 @@ import {
   validateSwitch,
   validateUfoJump,
   validateUseItem,
+  validateWorldUse,
   type AbilityResultMsg,
   type DamageCause,
   type EventsMsg,
@@ -156,6 +195,7 @@ import {
   type RoomStateMsg,
   type RoomMetadata,
   type PreparationState,
+  type ProgressMsg,
   type SnapshotMsg,
   type UfoRouteMsg,
   type Vec3,
@@ -167,7 +207,9 @@ import { serverConfig } from '../config';
 import { matchStore } from '../persistence/MatchStore';
 import { ServerPlayer, type PlayerConnection } from '../sim/ServerPlayer';
 import { botIntent } from '../sim/BotBrain';
-import { getChestSpots, getWorld } from '../world';
+import { chooseBotAbility } from '../sim/BotAbilityController';
+import { getChestSpots, getCreepAreas, getNav, getWorld } from '../world';
+import { BotNavigator } from '../sim/BotNav';
 import { log } from '../log';
 
 /** What `onAuth` hands to `onJoin` (as `client.auth`). */
@@ -237,6 +279,13 @@ export interface RoomCreateOptions {
   lootSpots?: string[];
   chestCount?: number;
   /**
+   * Creeps on the planet at once (0 turns them off), so a host can trade them for performance; clamped to 0..32.
+   * Dev/tests only: a fixed creep seed, and Battle Royale empty hands in the development warmup too.
+   */
+  creepCount?: number;
+  creepSeed?: number;
+  unarmedStart?: boolean;
+  /**
    * Graao Host only (honoured only in a process whose host policy admitted the create, i.e. the app's own command):
    * the code the central service allocated, the owner's display name, and the SHA-256 of the owner key that makes a
    * joiner the room's host.
@@ -264,10 +313,56 @@ const mm = (v: Vec3): [number, number, number] => [Math.round(v.x * POS_SCALE), 
 interface BotRuntime {
   seq: number;
   fireSeq: number;
+  abilitySeq: number;
+  nextAbilityAt: number;
   acc: number;
   target: number;
   acquiredAt: number;
   nextShotAt: number;
+  /** Its way through the map (navigation graph paths). */
+  nav: BotNavigator;
+  /** The chest it is heading for while exploring (-1: none), since when, and its loot request sequence. */
+  chest: number;
+  chestSince: number;
+  lootSeq: number;
+  /** Chests given up (unreachable, emptied or taken by someone else) until this time. */
+  skipChests: Map<number, number>;
+  /** How it spends attribute points (by seat: agressivo, defensivo, mágico, equilibrado). */
+  profile: BotStatProfile;
+  /** The creep it is hunting for XP (-1: none), since when, and creeps given up until a time. */
+  creep: number;
+  creepSince: number;
+  skipCreeps: Map<number, number>;
+}
+
+/** Bots fight directly within this range when they see their target; farther, they walk the navigation graph. */
+const BOT_FIGHT_RANGE = 28;
+/** With no opponent this close, a bot explores: the nearest closed chest within BOT_CHEST_RANGE. */
+const BOT_CALM_RANGE = 38;
+const BOT_CHEST_RANGE = 75;
+/**
+ * Farming: with a weapon and nobody to fight close by, a bot hunts the nearest creep it can take within
+ * BOT_CREEP_RANGE; with empty hands only a basic creep this close (else it keeps looking for a chest). Below
+ * BOT_HURT_FRACTION of its Health with no Shield it farms nothing and backs away from tough creeps.
+ */
+const BOT_CREEP_RANGE = 40;
+const BOT_PUNCH_CREEP_RANGE = 9;
+const BOT_HURT_FRACTION = 0.4;
+/** A hunt that takes longer than this (ms) is given up for a while. */
+const BOT_HUNT_MS = 25000;
+/**
+ * Empty hands: loot comes first. A bot punches an opponent only when that opponent hurt it this recently (ms), or when
+ * no chest is left for it to head for — so a crowded landing does not turn into a fist brawl that ends the match.
+ */
+const BOT_RETALIATE_MS = 5000;
+
+/** A point `distance` metres from `from` on its ground plane, straight away from `threat`. */
+function awayFrom(from: Vec3, threat: Vec3, distance: number): Vec3 {
+  const up = v3normalize(from);
+  const d = v3projectOnPlane({ x: from.x - threat.x, y: from.y - threat.y, z: from.z - threat.z }, up);
+  const l = Math.hypot(d.x, d.y, d.z);
+  const t = l > 1e-4 ? { x: d.x / l, y: d.y / l, z: d.z / l } : v3normalize(v3projectOnPlane({ x: 0, y: 1, z: 0 }, up));
+  return { x: from.x + t.x * distance, y: from.y + t.y * distance, z: from.z + t.z * distance };
 }
 
 export class GraaoMatchRoom extends Room {
@@ -277,6 +372,26 @@ export class GraaoMatchRoom extends Room {
 
   private world!: GameWorld;
   private motor!: CharacterMotor;
+  private readonly abilityColliders = new Set<number>();
+  /** All room-owned geometry must be filtered: the underlying Rapier world serves multiple rooms. */
+  private readonly roomCollider = (c: { handle: number }): boolean =>
+    (!this.world.physics.barrierHandles.has(c.handle) || this.abilityColliders.has(c.handle))
+    && (!this.interactives || this.interactives.predicate(c));
+
+  private roomPhysics(): GamePhysics {
+    const physics = this.world.physics;
+    return {
+      ...physics,
+      castRay: (o, d, length, groups, predicate) => {
+        const solid = physics.castRay(o, d, length, groups, (c) => this.roomCollider(c) && (!predicate || predicate(c)));
+        const ability = (groups === undefined || groups === GROUPS_WORLD_QUERY) ? this.abilities?.occludeRay(o, d, length) : null;
+        return ability && (!solid || ability.toi < solid.toi) ? ability : solid;
+      },
+      castRayNormal: (o, d, length, groups, predicate) => physics.castRayNormal(o, d, length, groups, (c) => this.roomCollider(c) && (!predicate || predicate(c))),
+      boxOverlaps: (center, half, side, up, forward, groups, predicate) => physics.boxOverlaps(center, half, side, up, forward, groups, (c) => this.roomCollider(c) && (!predicate || predicate(c))),
+      ballOverlaps: (center, radius, groups, predicate) => physics.ballOverlaps(center, radius, groups, (c) => this.roomCollider(c) && (!predicate || predicate(c))),
+    };
+  }
   private readonly players = new Map<string, ServerPlayer>();
   /** Private practice: one human, no one else may join. */
   private solo = false;
@@ -336,9 +451,17 @@ export class GraaoMatchRoom extends Room {
   private roomStateDirty = false;
   /** Chests and items on the ground (authoritative). */
   private loot!: GRALootSystem;
+  /** Doors and breakable crates (authoritative; reset with every loot generation). */
+  private interactives!: InteractiveSystem;
   private lootSeed: number | null = null;
   private lootSpots: string[] = [];
   private chestCount: number = LOOT_RULES.chestsPerMatch;
+  /** Creatures that give XP (authoritative), their cap, and whether the development warmup uses empty hands too. */
+  private creeps!: GRACreepSystem;
+  private creepCount: number = CREEP_RULES.maxActive;
+  private creepSeed: number | null = null;
+  private unarmedStart = false;
+  private snapshotCount = 0;
 
   override async onCreate(options: RoomCreateOptions = {}): Promise<void> {
     await hostPolicy.admitCreate(options as Record<string, unknown>);
@@ -383,13 +506,20 @@ export class GraaoMatchRoom extends Room {
     if (typeof options.reconnectSeconds === 'number' && Number.isFinite(options.reconnectSeconds)) this.reconnectSeconds = Math.max(0, Math.min(120, options.reconnectSeconds));
     if (DEV) this.configureTormenta(options);
     if (DEV) this.configureLoot(options);
+    this.configureCreeps(options);
     this.world = await getWorld();
     this.motor = new CharacterMotor(this.world.physics);
+    this.motor.barrierFilter = this.abilityColliders;
     this.abilities = new GRAAbilitySystem(this.abilityHost());
     this.loot = new GRALootSystem(this.lootHost(), getChestSpots(this.world));
     // The server's world is shared by every room: this room's characters only bump into this room's chests.
     this.motor.chestFilter = this.loot.colliders;
+    // Doors and breakable crates: per room in the shared world too.
+    this.interactives = new InteractiveSystem({ physics: this.world.physics, layout: this.world.layout, actors: () => this.interactiveActors(), emit: (e) => this.events.push(e) });
+    this.motor.interactiveFilter = this.interactives.colliders;
     this.newLootGeneration();
+    this.creeps = new GRACreepSystem(this.creepHost(), getCreepAreas(this.world));
+    this.startCreeps();
 
     this.onMessage(C2S.PLAYER_INPUT, (c, m) => this.onInput(c, m));
     this.onMessage(C2S.APPEARANCE_UPDATE, (c, m) => this.onAppearance(c, m));
@@ -407,6 +537,9 @@ export class GraaoMatchRoom extends Room {
     this.onMessage(C2S.INTERACT, (c, m) => this.onInteract(c, m));
     this.onMessage(C2S.USE_ITEM, (c, m) => this.onUseItem(c, m));
     this.onMessage(C2S.DEV_LOOT, (c, m) => this.onDevLoot(c, m));
+    this.onMessage(C2S.MELEE, (c, m) => this.onMelee(c, m));
+    this.onMessage(C2S.ALLOCATE_STAT, (c, m) => this.onAllocate(c, m));
+    this.onMessage(C2S.WORLD_USE, (c, m) => this.onWorldUse(c, m));
     this.onMessage(C2S.PING, (c, m) => {
       const v = validatePing(m);
       if (v) c.send(S2C.PONG, { c: v.c, t: Date.now(), tick: Math.round(this.tickCost * 100) / 100 });
@@ -476,6 +609,8 @@ export class GraaoMatchRoom extends Room {
     client.send(S2C.WELCOME, welcome);
     client.send(S2C.SELF, p.statusIfChanged());
     client.send(S2C.LOOT_STATE, this.loot.view());
+    client.send(S2C.ABILITY_STATE, { entities: this.abilities.entities });
+    client.send(S2C.WORLD_STATE, this.interactives.view());
     this.broadcastRoomState();
     // Joining mid-draft: watch it (not a seat; plays from the next match).
     if (this.draft) client.send(S2C.DRAFT_STATE, this.draft.view(index));
@@ -561,12 +696,16 @@ export class GraaoMatchRoom extends Room {
     this.broadcastRoomState();
     client.send(S2C.SELF, p.statusIfChanged(true));
     client.send(S2C.LOOT_STATE, this.loot.view());
+    client.send(S2C.ABILITY_STATE, { entities: this.abilities.entities });
+    client.send(S2C.WORLD_STATE, this.interactives.view());
     if (this.draft) client.send(S2C.DRAFT_STATE, this.draft.view(p.index));
   }
 
   override onDispose(): void {
-    // Chest colliders live in the process-wide world: they must leave with the room.
+    this.abilities?.clear();
+    // Chest, door and crate colliders live in the process-wide world: they must leave with the room.
     this.loot?.clear();
+    this.interactives?.dispose();
     for (const p of this.players.values()) p.body.dispose();
     this.bots.clear();
     activeCodes.delete(this.roomId);
@@ -593,6 +732,12 @@ export class GraaoMatchRoom extends Room {
   }
 
   /** Average simulation tick cost (ms). */
+  /**
+   * Server cost breakdown (ms, smoothed like `tickCost`): the creeps' AI and movement and the bots' brains have their
+   * own budget, separate from the participants' simulation; `peakTickMs` is the worst tick since the last read.
+   */
+  readonly perf = { creepMs: 0, botMs: 0, peakTickMs: 0, ticks: 0 };
+
   get tickCostMs(): number {
     return this.tickCost;
   }
@@ -637,7 +782,12 @@ export class GraaoMatchRoom extends Room {
     p.simTime = Date.now() - 60;
     resetCooldowns(p.cooldownEnds, Date.now(), this.ultimateChargeMs);
     this.players.set(connection.sessionId, p);
-    this.bots.set(index, { seq: 0, fireSeq: 0, acc: 0, target: -1, acquiredAt: 0, nextShotAt: 0 });
+    this.bots.set(index, {
+      seq: 0, fireSeq: 0, abilitySeq: 0, nextAbilityAt: 0, acc: 0, target: -1, acquiredAt: 0, nextShotAt: 0, nav: new BotNavigator(), chest: -1, chestSince: 0, lootSeq: 0, skipChests: new Map(),
+      profile: BOT_STAT_PROFILE_IDS[index % BOT_STAT_PROFILE_IDS.length]!, creep: -1, creepSince: 0, skipCreeps: new Map(),
+    });
+    // The navigation graph is built once per process (about 2 s), when the first bot sits down: never mid-match.
+    getNav(this.world);
   }
 
   /** Takes out the newest bot (highest seat). False when there is none. */
@@ -947,6 +1097,7 @@ export class GraaoMatchRoom extends Room {
     }
     this.beginLedger(now);
     this.newLootGeneration();
+    this.startCreeps();
     this.broadcastRoomState();
     log('ufo deploy', { code: this.roomId, riders: [...this.players.values()].filter((p) => p.inMatch).map((p) => p.name), opensIn: route.open - now, closesIn: route.close - now });
   }
@@ -954,16 +1105,24 @@ export class GraaoMatchRoom extends Room {
   /** Full vitals, ammo and abilities, nothing pending (boarding, fight start). */
   private refresh(p: ServerPlayer, now: number): void {
     p.vitals = newVitals();
+    p.prog = newProgression();
+    p.damageCarry = 0;
+    p.lastHurtBy = -1;
+    this.applyStats(p);
     this.freshKit(p);
     p.respawnAt = 0;
     p.queue.length = 0;
     this.resetAbilities(p, now);
   }
 
-  /** The starting kit in hand (E equipped), nothing reloading, nothing being used. */
+  /**
+   * A fresh kit: Battle Royale (boarding, the fight start) means empty hands for everyone, bots included; the
+   * development warmup keeps the training kit (E equipped). Nothing reloading, nothing being used.
+   */
   private freshKit(p: ServerPlayer): void {
-    p.inv = p.freshInventory();
+    p.inv = p.freshInventory(this.battleRoyaleKit());
     p.weapon = 0;
+    p.fists = false;
     p.reloading = -1;
     p.useUntil = 0;
     p.useItem = -1;
@@ -1075,11 +1234,13 @@ export class GraaoMatchRoom extends Room {
       p.kills = 0;
       p.deaths = 0;
       p.damageDealt = 0;
+      p.prog = newProgression();
       if (p.inMatch) this.resetForSpawn(p, this.spawnState(slot++, undefined, !this.closeSpawns));
     }
     this.beginLedger(now);
     this.newLootGeneration();
     this.startTormenta();
+    this.startCreeps();
     this.broadcastRoomState();
     log('match start', { code: this.roomId, players: this.players.size });
   }
@@ -1174,9 +1335,11 @@ export class GraaoMatchRoom extends Room {
       // Still aboard or in the air (the match ended during the deployment): back on a spawn.
       const airborne = p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING;
       p.deploy = DeployState.NONE;
+      p.prog = newProgression();
       if (!p.vitals.alive || airborne) this.respawn(p);
       else {
         p.vitals = newVitals();
+        this.applyStats(p);
         this.freshKit(p);
         this.resetAbilities(p, Date.now());
       }
@@ -1184,6 +1347,7 @@ export class GraaoMatchRoom extends Room {
     // Seats people left during the match go back to bots.
     this.syncBots();
     this.newLootGeneration();
+    this.startCreeps();
     this.broadcastRoomState();
   }
 
@@ -1195,11 +1359,19 @@ export class GraaoMatchRoom extends Room {
     return true;
   }
 
+  /** E / Q take that weapon in hand; FISTS_SLOT puts the weapons away (they stay in the inventory) to punch. */
   private onSwitch(c: Client, m: unknown): void {
     if (!this.legacyWarmup && this.phase !== MatchPhase.MATCH) return;
     const p = this.players.get(c.sessionId);
     const v = validateSwitch(m);
-    if (!p || !v || !p.vitals.alive || v.w === p.weapon || !p.inv.slots[v.w]) return;
+    if (!p || !v || !p.vitals.alive) return;
+    if (v.w === FISTS_SLOT) {
+      if (p.fists) return;
+      p.fists = true;
+      p.reloading = -1;
+      return;
+    }
+    if (!p.inv.slots[v.w] || (v.w === p.weapon && !p.fists)) return;
     this.equip(p, v.w, Date.now());
   }
 
@@ -1208,10 +1380,12 @@ export class GraaoMatchRoom extends Room {
     const s = p.inv.slots[slot];
     if (!s) return;
     p.weapon = slot;
+    p.fists = false;
     p.reloading = -1;
     const w = WEAPONS[s.id];
     // Equip delay: treat the switch as a recent shot.
-    p.lastShotAt[slot] = Math.max(p.lastShotAt[slot]!, now - (1000 / w.fireRate) * FIRE_RATE_TOLERANCE + SWITCH_DELAY_MS);
+    const passive = passiveModifiers(p.loadout, p.runtime.passive, now, p.vitals.alive);
+    p.lastShotAt[slot] = Math.max(p.lastShotAt[slot]!, now - weaponShotInterval(w, p.mods.attackSpeed) * FIRE_RATE_TOLERANCE + Math.max(80, SWITCH_DELAY_MS * passive.weaponSwap));
   }
 
   private onReload(c: Client): void {
@@ -1237,16 +1411,20 @@ export class GraaoMatchRoom extends Room {
     if (p.lastFireSeen < 0 || seqGreater(f.s, p.lastFireSeen)) p.lastFireSeen = f.s;
     if (!p.vitals.alive) return;
     if (f.w !== p.weapon || p.reloading >= 0) return;
+    // Weapons put away (or none at all): the attack is a punch (MELEE), never a shot.
+    if (p.fists) return;
     if (!this.canFight(p, Date.now())) return;
     // Hands are busy while swimming, while an ability winds up and while a consumable is being used.
     if (p.state.swimming) return;
+    if (this.abilities.attackLocked(p, Date.now())) return;
     if (Date.now() < p.castUntil || Date.now() < p.useUntil) return;
     if (p.lastShotSeq >= 0 && !seqGreater(f.s, p.lastShotSeq)) return;
     const slot = p.inv.slots[f.w];
     if (!slot) return;
     const w = WEAPONS[slot.id];
     const now = Date.now();
-    if (now - p.lastShotAt[f.w]! < (1000 / w.fireRate) * FIRE_RATE_TOLERANCE) return;
+    // Velocidade de Ataque shortens the interval, up to the weapon's own limit (the client predicts the same number).
+    if (now - p.lastShotAt[f.w]! < weaponShotInterval(w, p.mods.attackSpeed) * FIRE_RATE_TOLERANCE) return;
     if (slot.ammo <= 0) {
       this.startReload(p);
       return;
@@ -1262,32 +1440,45 @@ export class GraaoMatchRoom extends Room {
     p.lastShotAt[f.w] = now;
     slot.ammo -= 1;
     p.fireUntil = now + 160;
+    recordPassiveCombat(p.runtime.passive, now, 'fire');
+    this.abilities.recordActivity(p.index, now);
     // The shooter faces the aim when firing (the controller turns toward it too).
     const flat = v3projectOnPlane(dir, up);
     const facing = Math.hypot(flat.x, flat.y, flat.z) > 1e-3 ? v3normalize(flat) : s.facing;
     const muzzle = muzzlePoint(s.pos, facing);
 
     const targets: PlayerHitTarget[] = [...this.players.values()].map((q) => ({ index: q.index, feet: q.state.pos, alive: q.vitals.alive }));
-    const dirs = spreadDirections(dir, f.a ? w.spreadAim : w.spreadHip, w.pellets, shotSeed(p.index, f.s));
+    // Creeps stop shots too (and take them).
+    targets.push(...this.creeps.hitTargets());
+    const passive = passiveModifiers(p.loadout, p.runtime.passive, now, p.vitals.alive);
+    const dirs = spreadDirections(dir, (f.a ? w.spreadAim : w.spreadHip) * passive.weaponSpread, w.pellets, shotSeed(p.index, f.s));
     const perTarget = new Map<number, { amount: number; crit: boolean }>();
     let eliminated = false;
     const to: [number, number, number][] = [];
     const hitT: number[] = [];
     for (const d of dirs) {
-      const r = resolvePellet(this.world.physics, origin, d, muzzle, w.range, targets, p.index);
+      const r = resolvePellet(this.roomPhysics(), origin, d, muzzle, w.range, targets, p.index);
       to.push(mm(r.point));
       hitT.push(r.target);
       if (r.target >= 0) {
         const acc = perTarget.get(r.target) ?? { amount: 0, crit: false };
-        acc.amount += w.damage * (r.head ? w.critMultiplier : 1) * falloff(w, r.distance);
+        acc.amount += w.damage * (r.head ? w.critMultiplier : 1) * falloff(w, r.distance) * p.mods.damage;
         acc.crit ||= r.head;
         perTarget.set(r.target, acc);
+      } else {
+        const damage = w.damage * falloff(w, r.distance) * p.mods.damage;
+        if (!this.abilities.damageBarrier(r.handle, damage) && r.handle >= 0) this.interactives.damageHandle(r.handle, damage, p.index);
       }
     }
     this.events.push({ e: 'shot', by: p.index, w: f.w, id: slot.id, s: f.s, from: mm(muzzle), to, t: hitT });
-    this.ledger?.shot(p.index, perTarget.size > 0);
+    this.ledger?.shot(p.index, [...perTarget.keys()].some((k) => k < CREEP_TARGET_BASE));
 
     for (const [ti, dmg] of perTarget) {
+      const cid = creepIdOf(ti);
+      if (cid >= 0) {
+        this.creeps.damage(cid, p.index, this.attributeDamage(p, dmg.amount), now);
+        continue;
+      }
       const q = this.byIndex(ti);
       if (q && this.dealDamage(p, q, dmg.amount, dmg.crit, now)) eliminated = true;
     }
@@ -1304,14 +1495,26 @@ export class GraaoMatchRoom extends Room {
    * and, on elimination, does the kill/death bookkeeping. Returns true when the target was eliminated (the caller
    * then checks the match end).
    */
-  private dealDamage(by: ServerPlayer, q: ServerPlayer, amount: number, crit: boolean, now: number, ability?: AbilityId, hazard?: 'water' | DamageCause): boolean {
+  private dealDamage(by: ServerPlayer, q: ServerPlayer, amount: number, crit: boolean, now: number, ability?: AbilityId, hazard?: 'water' | DamageCause, extra: { cr?: number; m?: 1 } = {}): boolean {
     if (!q.vitals.alive || !this.canFight(q, now)) return false;
-    const res = hazard === 'tormenta' ? applyTormentaDamage(q.vitals, amount) : hazard ? applyDrowning(q.vitals, amount) : ability ? applyAbilityDamage(q.vitals, amount) : applyDamage(q.vitals, amount, crit);
+    expireTemporaryShield(q.vitals, now);
+    if (!hazard && !ability && !extra.m && this.abilities.blocksAttack(q, by.state.pos, now)) return false;
+    // Defesa takes its share off combat damage (weapons, punches, abilities, creeps), never off the Tormenta or water.
+    // Damage the attributes changed is rounded with a carried remainder (the attacker's, or the victim's for a creep).
+    if (!hazard || hazard === 'creep') {
+      const scaled = q.mods.defense !== 1 || (!hazard && !ability && by !== q && by.mods.damage !== 1);
+      if (scaled) amount = roundWithCarry(defendedDamage(amount, q.mods), hazard ? q : by);
+    }
+    // A creep's blow is an ordinary hit (Shield first); the Tormenta and the water take Health only.
+    const res = hazard === 'tormenta' ? applyTormentaDamage(q.vitals, amount) : hazard === 'creep' ? applyDamage(q.vitals, amount, false) : hazard ? applyDrowning(q.vitals, amount) : ability ? applyAbilityDamage(q.vitals, amount) : applyDamage(q.vitals, amount, crit);
     if (!res.kinds.length) return false;
-    const cause = hazard === 'tormenta' ? { c: hazard } : {};
+    recordPassiveCombat(q.runtime.passive, now, 'damage');
+    const cause = hazard === 'tormenta' || hazard === 'creep' ? { c: hazard, ...extra } : extra;
     // Self harm changes nothing public (damage dealt, kills): no room-state broadcast for every hazard pulse.
     if (by !== q) {
       by.damageDealt += res.shieldDamage + res.healthDamage;
+      q.lastHurtBy = by.index;
+      q.lastHurtAt = now;
       this.roomStateDirty = true;
     }
     this.events.push({ e: 'dmg', by: by.index, target: q.index, amount: res.shieldDamage + res.healthDamage, kinds: res.kinds, health: q.vitals.health, shield: q.vitals.shield, ...(ability ? { a: ability } : {}), ...cause });
@@ -1328,6 +1531,10 @@ export class GraaoMatchRoom extends Room {
     q.pendingDash = null;
     q.state.dashSteps = 0;
     this.abilities.cancelFor(q.index);
+    resetAbilityRuntime(q.runtime, now);
+    q.vitals.temporaryShield = 0;
+    q.vitals.temporaryShieldUntil = 0;
+    delete q.state.abilityMovement;
     this.events.push({ e: 'elim', by: by.index, target: q.index, ...cause });
     // Everything the fallen player carried goes to the ground (the same pickups as a chest's).
     this.loot.dropAll(q);
@@ -1339,7 +1546,7 @@ export class GraaoMatchRoom extends Room {
 
   private lootHost(): LootHost {
     return {
-      physics: this.world.physics,
+      physics: this.roomPhysics(),
       actors: () => this.players.values(),
       gate: (a, now) => this.lootGate(a as ServerPlayer, now),
       emit: (e) => this.events.push(e),
@@ -1367,10 +1574,13 @@ export class GraaoMatchRoom extends Room {
    * the old generation still waiting for this tick's flush are dropped, so nobody applies them to the new one.
    */
   private newLootGeneration(): void {
-    this.events = this.events.filter((e) => e.e !== 'chest' && e.e !== 'items' && e.e !== 'take');
+    this.events = this.events.filter((e) => e.e !== 'chest' && e.e !== 'items' && e.e !== 'take' && e.e !== 'door' && e.e !== 'crate');
     const seed = this.lootSeed ?? Math.floor(Math.random() * 0x100000000);
     this.loot.generate(seed, this.chestCount, this.lootSpots);
     this.broadcast(S2C.LOOT_STATE, this.loot.view());
+    // Every match starts with its doors as built and every crate whole.
+    this.interactives.reset();
+    this.broadcast(S2C.WORLD_STATE, this.interactives.view());
     log('loot generation', { code: this.roomId, gen: this.loot.gen, seed: this.loot.seed, chests: this.loot.chests.length });
   }
 
@@ -1410,12 +1620,267 @@ export class GraaoMatchRoom extends Room {
     c.send(S2C.LOOT_DEV, this.loot.devView());
   }
 
+  // ------------------------------------------------------------------------------------------------ fists, creeps, progression
+
+  /** Battle Royale rules for the kit: every competitive room, and the development warmup when asked (tests). */
+  private battleRoyaleKit(): boolean {
+    return (!this.legacyWarmup || this.unarmedStart) && (this.phase === MatchPhase.UFO || this.phase === MatchPhase.MATCH);
+  }
+
+  /** Creep options: the cap in any build (a host's performance), the seed and empty-hands warmup in dev only. */
+  private configureCreeps(o: RoomCreateOptions): void {
+    if (typeof o.creepCount === 'number' && Number.isFinite(o.creepCount)) this.creepCount = Math.max(0, Math.min(32, Math.floor(o.creepCount)));
+    if (DEV && typeof o.creepSeed === 'number' && Number.isFinite(o.creepSeed)) this.creepSeed = o.creepSeed >>> 0;
+    this.unarmedStart = DEV && o.unarmedStart === true;
+  }
+
+  /** A fresh creep population for the match (boarding, or the start without the UFO); the warmup gets one too. */
+  private startCreeps(): void {
+    if (!this.creeps) return;
+    const live = this.phase === MatchPhase.UFO || this.phase === MatchPhase.MATCH || this.phase === MatchPhase.FREE_ROAM;
+    if (!live) {
+      this.creeps.clear();
+      return;
+    }
+    this.creeps.start(this.creepSeed ?? Math.floor(Math.random() * 0x100000000), Date.now(), this.creepCount);
+    log('creeps', { code: this.roomId, alive: this.creeps.alive, cap: this.creepCount });
+  }
+
+  private creepHost(): CreepHost {
+    const targetable = (p: ServerPlayer) => p.vitals.alive && p.deploy !== DeployState.SHIP && p.deploy !== DeployState.DIVING && !p.state.diving && (this.phase !== MatchPhase.MATCH || p.inMatch);
+    return {
+      physics: this.roomPhysics(),
+      players: () => [...this.players.values()].filter(targetable).map((p) => ({ index: p.index, pos: p.state.pos, alive: true })),
+      hostile: (now) => (this.phase === MatchPhase.MATCH && now >= this.startsAt) || (this.legacyWarmup && this.phase === MatchPhase.FREE_ROAM),
+      hurt: (c, target, amount, now) => {
+        const q = this.byIndex(target);
+        if (q && this.dealDamage(q, q, amount, false, now, undefined, 'creep', { cr: c.id })) {
+          this.broadcastRoomState();
+          this.checkMatchEnd();
+        }
+      },
+      defeated: (c, _by, shares, now) => {
+        for (const [index, xp] of shares) {
+          const p = this.byIndex(index);
+          if (p) this.awardXp(p, xp, c, index === _by, now);
+        }
+      },
+      eligible: (index) => {
+        const p = this.byIndex(index);
+        return !!p && p.vitals.alive && (this.phase !== MatchPhase.MATCH || p.inMatch);
+      },
+      emit: (e) => this.events.push(e),
+      // The Tormenta: new creeps only well inside the region it is closing onto; outside the safe region they dissolve.
+      spawnable: (pos) => {
+        const t = this.tormenta.target;
+        return !t || angularDistance(t.center, pos) < t.radius - CREEP_RULES.tormentaMarginDeg * (Math.PI / 180);
+      },
+      inStorm: (pos) => this.phase === MatchPhase.MATCH && this.tormenta.outside(pos),
+      capFactor: () => {
+        const t = this.tormenta.target;
+        return t ? (t.radius * 180) / Math.PI / CREEP_RULES.tormentaFullRadiusDeg : 1;
+      },
+    };
+  }
+
+  /**
+   * MELEE: a punch with empty hands. Checks (in order): a newer sequence (no replays), alive, the fight is on, no
+   * weapon in hand, hands free (not swimming, casting, using an item, in the air out of the UFO), the interval
+   * (Velocidade de Ataque shortens it), and a camera origin near the attacker. One punch reaches at most one body.
+   */
+  private onMelee(c: PlayerConnection, m: unknown): void {
+    const p = this.players.get(c.sessionId);
+    const v = validateMelee(m);
+    if (!p || !v) return;
+    if (p.lastMeleeSeen >= 0 && !seqGreater(v.s, p.lastMeleeSeen)) return;
+    p.lastMeleeSeen = v.s;
+    const now = Date.now();
+    if (!p.vitals.alive || !this.canFight(p, now) || !p.unarmed) return;
+    if (p.state.swimming || now < p.castUntil || now < p.useUntil || p.state.diving || p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING) return;
+    if (this.abilities.attackLocked(p, now)) return;
+    if (!meleeReady(p.lastMeleeAt, now, p.mods.meleeIntervalMs)) return;
+    const up = v3normalize(p.state.pos);
+    const head = { x: p.state.pos.x + up.x * 1.6, y: p.state.pos.y + up.y * 1.6, z: p.state.pos.z + up.z * 1.6 };
+    const origin = { x: v.o[0] / POS_SCALE, y: v.o[1] / POS_SCALE, z: v.o[2] / POS_SCALE };
+    if (Math.hypot(origin.x - head.x, origin.y - head.y, origin.z - head.z) > MELEE.maxCameraOffset) return;
+    const dir = v3normalize({ x: v.d[0] / DIR_SCALE, y: v.d[1] / DIR_SCALE, z: v.d[2] / DIR_SCALE });
+    p.lastMeleeAt = now;
+    recordPassiveCombat(p.runtime.passive, now, 'fire');
+    p.meleeHand ^= 1;
+    const bodies: MeleeBody[] = [];
+    for (const q of this.players.values()) {
+      if (q === p || !q.vitals.alive || (this.phase === MatchPhase.MATCH && !q.inMatch)) continue;
+      bodies.push({ id: q.index, creep: false, feet: q.state.pos, alive: true, ...PLAYER_MELEE_BODY });
+    }
+    bodies.push(...this.creeps.meleeBodies());
+    const out = resolveMelee(this.roomPhysics(), p.state.pos, dir, bodies, p.index, GROUPS_WORLD_QUERY, MELEE, p.state.facing);
+    this.events.push({ e: 'melee', by: p.index, s: v.s, h: p.meleeHand, r: out.result, t: out.target, at: mm(out.point) });
+    const amount = MELEE.damage * p.mods.damage;
+    if (out.result === 1) {
+      const q = this.byIndex(out.target);
+      if (q && this.dealDamage(p, q, amount, false, now, undefined, undefined, { m: 1 })) {
+        this.broadcastRoomState();
+        this.checkMatchEnd();
+      }
+    } else if (out.result === 2) this.creeps.damage(out.target, p.index, this.attributeDamage(p, amount), now, { m: 1 });
+    else {
+      // A punch into a breakable crate (the same reach, from the chest).
+      const chest = { x: p.state.pos.x + up.x * 1.1, y: p.state.pos.y + up.y * 1.1, z: p.state.pos.z + up.z * 1.1 };
+      this.interactives.meleeHit(chest, v3normalize(v3projectOnPlane(dir, up)), MELEE.range + 0.3, amount, p.index);
+    }
+  }
+
+  /** Damage to a creep scaled by the attacker's Ataque: rounded with the attacker's carried remainder. */
+  private attributeDamage(p: ServerPlayer, amount: number): number {
+    return p.mods.damage !== 1 ? roundWithCarry(amount, p) : amount;
+  }
+
+  /** WORLD_USE: open or close a door (a living player in the world; the room checks reach, rate and the doorway). */
+  private onWorldUse(c: Client, m: unknown): void {
+    const p = this.players.get(c.sessionId);
+    const v = validateWorldUse(m);
+    if (!p || !v || !p.vitals.alive) return;
+    if (p.deploy === DeployState.SHIP || p.deploy === DeployState.DIVING || p.state.diving) return;
+    if (this.phase === MatchPhase.MATCH && !p.inMatch) return;
+    this.interactives.use(p, v, Date.now());
+  }
+
+  /** The characters standing in this room's world (doors do not close on them). */
+  private *interactiveActors(): Iterable<{ index: number; state: { pos: Vec3 } }> {
+    for (const p of this.players.values()) if (p.vitals.alive && p.deploy !== DeployState.SHIP) yield p;
+  }
+
+  /** ALLOCATE_STAT: one unspent point into an attribute (in the match, alive). */
+  private onAllocate(c: Client, m: unknown): void {
+    const p = this.players.get(c.sessionId);
+    const v = validateAllocateStat(m);
+    if (!p || !v) return;
+    if (p.lastAllocSeq >= 0 && !seqGreater(v.s, p.lastAllocSeq)) return;
+    p.lastAllocSeq = v.s;
+    if (!this.allocate(p, v.k)) return;
+    c.send(S2C.SELF, p.statusIfChanged(true));
+  }
+
+  /** Spends one point (in the match, alive; the attribute below its cap). Bots come through here too. */
+  private allocate(p: ServerPlayer, k: number): boolean {
+    if (!p.vitals.alive || (!this.legacyWarmup && this.phase !== MatchPhase.MATCH)) return false;
+    if (!allocateStat(p.prog, k)) return false;
+    this.applyStats(p);
+    return true;
+  }
+
+  /**
+   * The spent points' effects on this life (statModifiers): Health and Mana maxima, Mana regeneration, damage,
+   * Defesa and attack speed. Growing maxima keep Health and Mana at the same fraction — a point never refills.
+   */
+  private applyStats(p: ServerPlayer): void {
+    const mods = statModifiers(p.prog);
+    p.mods = mods;
+    const v = p.vitals;
+    const prev = { maxHealth: maxHealthOf(v), maxMana: maxManaOf(v) };
+    v.maxHealth = mods.maxHealth;
+    v.maxMana = mods.maxMana;
+    v.manaRegen = mods.manaRegen;
+    rescaleVitals(v, prev, mods);
+  }
+
+  /** XP from a creep: levels (each one a point), the private PROGRESS note, and the public level-up. */
+  private awardXp(p: ServerPlayer, xp: number, creep: CreepRuntime, last: boolean, _now: number): void {
+    if (xp <= 0) return;
+    const up = addXp(p.prog, xp);
+    const [level, cur, next, points] = progressionTuple(p.prog);
+    const msg: ProgressMsg = { xp, creep: CREEP_TYPE_IDS.indexOf(creep.type), last, up, level, cur, next, points };
+    p.client.send(S2C.PROGRESS, msg);
+    if (up > 0) {
+      this.events.push({ e: 'lvl', target: p.index, level: p.prog.level });
+      this.roomStateDirty = true;
+      log('level up', { code: this.roomId, name: p.name, level: p.prog.level });
+      // Bots spend their points at once, in their profile's order (the same rules and caps as a person's request).
+      const brain = p.bot ? this.bots.get(p.index) : undefined;
+      if (brain) while (p.prog.points > 0 && this.allocate(p, botStatChoice(p.prog, brain.profile)));
+    }
+  }
+
+  /**
+   * A bot's attack this tick, through the same handlers a person's messages go through. With empty hands it punches
+   * its opponent, or a creep that is after it, when in reach; armed, it shoots its opponent as before, or a creep
+   * biting it when no opponent is close.
+   */
+  private botAttack(p: ServerPlayer, brain: BotRuntime, target: ServerPlayer | undefined, intent: { origin: Vec3; distance: number; aim: Vec3 }, seekZone: boolean, now: number): void {
+    if (this.phase !== MatchPhase.MATCH || !this.canFight(p, now) || now < brain.nextShotAt) return;
+    const head = intent.origin;
+    const aimAt = (feet: Vec3, h: number): [number, number, number] => {
+      const u = v3normalize(feet);
+      const d = v3normalize({ x: feet.x + u.x * h - head.x, y: feet.y + u.y * h - head.y, z: feet.z + u.z * h - head.z });
+      return [Math.round(d.x * DIR_SCALE), Math.round(d.y * DIR_SCALE), Math.round(d.z * DIR_SCALE)];
+    };
+    const dist = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+    let creep: CreepRuntime | undefined;
+    let creepD = Infinity;
+    for (const c of this.creeps.creeps.values()) {
+      if (c.state === CreepStateCode.DEAD || c.state === CreepStateCode.RETURN) continue;
+      const d = dist(c.pos, p.state.pos);
+      if ((c.target === p.index || d < MELEE.range + c.def.radius) && d < creepD) {
+        creepD = d;
+        creep = c;
+      }
+    }
+    // The creep it is farming counts even when it is not after the bot (yet).
+    const hunted = brain.creep >= 0 ? this.creeps.creeps.get(brain.creep) : undefined;
+    const huntedD = hunted && hunted.state !== CreepStateCode.DEAD ? dist(hunted.pos, p.state.pos) : Infinity;
+    if (!creep && hunted && huntedD < Infinity) {
+      creep = hunted;
+      creepD = huntedD;
+    }
+    if (p.unarmed) {
+      // Loot first: an opponent gets punched when it provoked the bot, or when there is no chest left to go to.
+      const brawl = !!target && (brain.chest < 0 || this.botProvoked(p, target, now));
+      const reach = target && brawl ? dist(target.state.pos, p.state.pos) : Infinity;
+      const at = target && reach < MELEE.range + 0.5 && reach <= creepD ? aimAt(target.state.pos, 1.0) : creep && creepD < MELEE.range + creep.def.radius + 0.2 ? aimAt(creep.pos, creep.def.hitbox.top * 0.5) : null;
+      if (!at) return;
+      brain.nextShotAt = now + p.mods.meleeIntervalMs + 40;
+      brain.fireSeq = (brain.fireSeq + 1) & 0x7fffffff;
+      this.onMelee(p.client, { s: brain.fireSeq, o: mm(head), d: at });
+      return;
+    }
+    const farming = !!creep && creep === hunted && creepD < 24 && (!target || intent.distance > BOT_FIGHT_RANGE) && this.botSeesPoint(p, creep.pos, creep.def.hitbox.top * 0.5);
+    if (creep && ((creepD < 5 && (!target || intent.distance > 10)) || farming)) {
+      brain.nextShotAt = now + 340 + p.index * 20;
+      brain.fireSeq = (brain.fireSeq + 1) & 0x7fffffff;
+      this.onFire(p.client, { s: brain.fireSeq, w: p.weapon, o: mm(head), d: aimAt(creep.pos, creep.def.hitbox.top * 0.5), a: 1 });
+      return;
+    }
+    if (seekZone || !target || intent.distance > 55 || now - brain.acquiredAt < 650) return;
+    brain.nextShotAt = now + 340 + p.index * 20;
+    brain.fireSeq = (brain.fireSeq + 1) & 0x7fffffff;
+    this.onFire(p.client, { s: brain.fireSeq, w: p.weapon, o: mm(intent.origin), d: [Math.round(intent.aim.x * DIR_SCALE), Math.round(intent.aim.y * DIR_SCALE), Math.round(intent.aim.z * DIR_SCALE)], a: 1 });
+  }
+
   // ------------------------------------------------------------------------------------------------ abilities
 
   private abilityHost(): AbilityHost {
     return {
-      physics: this.world.physics,
+      physics: this.roomPhysics(),
       actors: () => this.players.values(),
+      sendPrivate: (a, message) => (a as ServerPlayer).client.send(S2C.ABILITY_REVEAL, message),
+      teleport: (a, feet, facing) => {
+        const p = a as ServerPlayer;
+        p.state.pos = { ...feet };
+        p.state.facing = { ...facing };
+        p.state.vel = { x: 0, y: 0, z: 0 };
+        this.motor.placeCollider(p.body.collider, feet);
+        p.queue.length = 0;
+        p.pendingDash = null;
+      },
+      resources: () => [
+        ...this.loot.chests.filter((c) => c.state === 0).map((c) => ({ id: c.id, kind: 'chest' as const, at: c.spot.pos })),
+        ...[...this.loot.items.values()].map((item) => ({ id: item.id, kind: 'pickup' as const, at: item.pos })),
+      ],
+      createBarrier: (_view, frame) => {
+        const barrier = createAbilityBarrier(this.world.physics, frame);
+        this.abilityColliders.add(barrier.handle);
+        return { handle: barrier.handle, dispose: () => { this.abilityColliders.delete(barrier.handle); barrier.dispose(); } };
+      },
       canFight: (a, now) => this.canFight(a as ServerPlayer, now),
       damage: (by, target, amount, ability, now) => {
         if (this.dealDamage(by as ServerPlayer, target as ServerPlayer, amount, false, now, ability)) {
@@ -1430,10 +1895,15 @@ export class GraaoMatchRoom extends Room {
         p.pendingDash = { seq: ahead >= 1 && ahead <= MAX_DASH_LEAD ? cmdSeq : -1, dir: { ...dir }, distance, duration };
       },
       emit: (e) => this.events.push(e),
+      others: () => this.creeps.hitTargets(),
+      damageOther: (by, target, amount, ability, now) => {
+        const id = creepIdOf(target);
+        if (id >= 0) this.creeps.damage(id, by.index, amount, now, { a: ability });
+      },
     };
   }
 
-  private onAbility(c: Client, m: unknown): void {
+  private onAbility(c: PlayerConnection, m: unknown): void {
     const p = this.players.get(c.sessionId);
     const v = validateAbilityRequest(m);
     if (!p || !v) return;
@@ -1453,6 +1923,7 @@ export class GraaoMatchRoom extends Room {
     const r = this.abilities.request(p,{ slot: v.k, id: v.a, seq: v.s, cmdSeq: v.c, dir, point }, now);
     if (r === AbilityReject.OK) {
       p.castUltimate = v.k === ULTIMATE_SLOT;
+      this.abilities.recordActivity(p.index, now);
       this.ledger?.cast(p.index);
     }
     reply(r);
@@ -1460,6 +1931,10 @@ export class GraaoMatchRoom extends Room {
 
   /** Fresh life: basics ready, Ultimate charging, no wind-up, slow or pending dash. */
   private resetAbilities(p: ServerPlayer, now: number): void {
+    resetAbilityRuntime(p.runtime, now);
+    p.vitals.temporaryShield = 0;
+    p.vitals.temporaryShieldUntil = 0;
+    delete p.state.abilityMovement;
     resetCooldowns(p.cooldownEnds, now, this.ultimateChargeMs);
     p.castUntil = 0;
     p.slowUntil = 0;
@@ -1528,23 +2003,209 @@ export class GraaoMatchRoom extends Room {
       const goal = this.phase === MatchPhase.MATCH ? this.tormenta.target : null;
       const near = target && Math.hypot(target.state.pos.x - p.state.pos.x, target.state.pos.y - p.state.pos.y, target.state.pos.z - p.state.pos.z) < 20;
       const seekZone = !!goal && !near && tormentaEdgeMeters(goal, p.state.pos) > -4;
-      const seek = seekZone && goal ? this.world.terrain.surfaceAt(goal.center) : target?.state.pos;
-      let intent = botIntent(p.state, seek, index, now);
-      if (p.state.grounded && seek) {
-        const up = v3normalize(p.state.pos);
-        const probe = { x: p.state.pos.x + up.x * 0.7, y: p.state.pos.y + up.y * 0.7, z: p.state.pos.z + up.z * 0.7 };
-        if (this.world.physics.castRay(probe, intent.wish, 2)) intent = botIntent(p.state, seek, index, now, true);
+      const zone = seekZone && goal ? this.world.terrain.surfaceAt(goal.center) : undefined;
+      const targetDistance = target ? Math.hypot(target.state.pos.x - p.state.pos.x, target.state.pos.y - p.state.pos.y, target.state.pos.z - p.state.pos.z) : Infinity;
+      const sees = !!target && targetDistance < BOT_FIGHT_RANGE + 20 && this.botSees(p, target);
+      // What it walks toward, in order: the Tormenta's safe region; away from a tough creep it cannot face (empty
+      // hands or badly hurt); a creep to farm while nobody is near (with empty hands only a basic one right there);
+      // the nearest closed chest while nobody is near (always first without any weapon, unless an opponent is within
+      // punching reach); an opponent in plain sight (straight at it, strafing); the nearest opponent out of sight.
+      const weaponless = !p.inv.slots.some(Boolean);
+      const provoked = this.botProvoked(p, target, now);
+      const inMatch = this.phase === MatchPhase.MATCH;
+      const hurt = p.vitals.health < maxHealthOf(p.vitals) * BOT_HURT_FRACTION && p.vitals.shield <= 0;
+      const fighting = sees && targetDistance < BOT_FIGHT_RANGE + 6;
+      const threat = !zone && inMatch && (weaponless || hurt) ? this.botCreepThreat(p) : null;
+      const hunt = !zone && !threat && !hurt && inMatch && !fighting && targetDistance > BOT_CALM_RANGE * 0.6 ? this.botCreep(p, brain, weaponless, now) : null;
+      if (!hunt) brain.creep = -1;
+      const chest = !zone && !threat && !hunt && inMatch && (targetDistance > BOT_CALM_RANGE || (weaponless && !provoked)) ? this.botChest(p, brain, now) : null;
+      const flee = threat ? awayFrom(p.state.pos, threat.pos, 8) : undefined;
+      const huntClose = !!hunt && Math.hypot(hunt.pos.x - p.state.pos.x, hunt.pos.y - p.state.pos.y, hunt.pos.z - p.state.pos.z) < 18 && this.botSeesPoint(p, hunt.pos, hunt.def.hitbox.top * 0.5);
+      const direct = !zone && !chest && (!!flee || huntClose || (!hunt && sees && targetDistance < BOT_FIGHT_RANGE));
+      const seek = zone ?? flee ?? hunt?.pos ?? chest ?? target?.state.pos;
+      let intent: ReturnType<typeof botIntent>;
+      if (direct || !seek) {
+        brain.nav.reset();
+        // Unarmed, it closes in to punching distance; armed, it keeps a few metres of room (a little less from a creep).
+        const keep = flee ? 0 : hunt ? (p.unarmed ? 0.7 : 5) : p.unarmed ? 0.9 : 6;
+        intent = botIntent(p.state, seek, index, now, false, null, true, keep);
+        if (p.state.grounded && seek) {
+          const up = v3normalize(p.state.pos);
+          const probe = { x: p.state.pos.x + up.x * 0.7, y: p.state.pos.y + up.y * 0.7, z: p.state.pos.z + up.z * 0.7 };
+          if (this.roomPhysics().castRay(probe, intent.wish, 2)) intent = botIntent(p.state, seek, index, now, true, null, true, keep);
+        }
+      } else {
+        const walking = p.state.grounded || p.state.swimming;
+        const step = walking ? brain.nav.next(getNav(this.world), p.state.pos, seek, now) : { point: null, stuck: false, left: 0 };
+        intent = botIntent(p.state, sees ? target!.state.pos : undefined, index, now, step.stuck, step.point ?? seek, sees);
       }
+      if (chest) this.botLoot(p, brain, now);
+      // A closed door in the way: the bot opens it.
+      if (p.state.grounded) this.interactives.assist(p, intent.wish, now);
       brain.acc = Math.min(brain.acc + dt * SIM_HZ, MAX_INPUT_BACKLOG);
       while (brain.acc >= 1 && p.queue.length < MAX_INPUT_BACKLOG) {
         brain.seq = (brain.seq + 1) & 0x7fffffff;
         p.queue.push([brain.seq, Math.round(intent.wish.x * WISH_SCALE), Math.round(intent.wish.y * WISH_SCALE), Math.round(intent.wish.z * WISH_SCALE), Math.round(intent.aim.x * AIM_SCALE), Math.round(intent.aim.y * AIM_SCALE), Math.round(intent.aim.z * AIM_SCALE), intent.buttons]);
         brain.acc -= 1;
       }
-      if (seekZone || this.phase !== MatchPhase.MATCH || !this.canFight(p, now) || !target || intent.distance > 55 || now - brain.acquiredAt < 650 || now < brain.nextShotAt) continue;
-      brain.nextShotAt = now + 340 + index * 20;
-      brain.fireSeq = (brain.fireSeq + 1) & 0x7fffffff;
-      this.onFire(p.client, { s: brain.fireSeq, w: p.weapon, o: mm(intent.origin), d: [Math.round(intent.aim.x * DIR_SCALE), Math.round(intent.aim.y * DIR_SCALE), Math.round(intent.aim.z * DIR_SCALE)], a: 1 });
+      this.botAbility(p, brain, target, intent, seekZone, now);
+      this.botAttack(p, brain, target, intent, seekZone, now);
+    }
+  }
+
+  /** Line of sight from a bot's eyes to another player's chest (the same world query shots use). */
+  private botAbility(p: ServerPlayer, brain: BotRuntime, target: ServerPlayer | undefined, intent: ReturnType<typeof botIntent>, seekZone: boolean, now: number): void {
+    if (now < brain.nextAbilityAt || !this.canFight(p, now)) return;
+    brain.nextAbilityAt = now + 600 + p.index * 17;
+    const physics = this.roomPhysics();
+    const up = v3normalize(p.state.pos);
+    const from = { x: p.state.pos.x + up.x * 1.1, y: p.state.pos.y + up.y * 1.1, z: p.state.pos.z + up.z * 1.1 };
+    const wall = physics.castRayNormal(from, intent.wish, 12);
+    const choice = chooseBotAbility(p, {
+      now, distance: intent.distance, hasEnemy: !!target, enemyVisible: !!target && this.botSees(p, target),
+      seekingZone: seekZone, hasResources: this.loot.chests.some((c) => c.state === 0 && Math.hypot(c.spot.pos.x - p.state.pos.x, c.spot.pos.y - p.state.pos.y, c.spot.pos.z - p.state.pos.z) < 12),
+      nearWall: !!wall, recentlyHurt: now - p.runtime.passive.lastDamageAt < 3500, canFight: true,
+    }, Math.floor(now / 1000 + p.index) % 4);
+    if (!choice) return;
+    const { def, slot } = choice;
+    const mobility = def.effects.find((e) => e.kind === 'mobility');
+    const dir = mobility || def.effects.some((e) => e.kind === 'dash' || e.kind === 'portal') ? intent.wish : intent.aim;
+    const point = def.targetType === 'point'
+      ? resolveTargetPoint(physics, this.world.terrain, p.state.pos, from, dir, def.range) : undefined;
+    brain.abilitySeq = (brain.abilitySeq + 1) & 0x7fffffff;
+    this.onAbility(p.client, {
+      s: brain.abilitySeq, k: slot, a: def.id, c: (p.lastSeq + 1) & 0x7fffffff,
+      d: [Math.round(dir.x * DIR_SCALE), Math.round(dir.y * DIR_SCALE), Math.round(dir.z * DIR_SCALE)],
+      ...(point ? { p: mm(point) } : {}),
+    });
+  }
+
+  private botSees(p: ServerPlayer, q: ServerPlayer): boolean {
+    const up = v3normalize(p.state.pos);
+    const from = { x: p.state.pos.x + up.x * 1.5, y: p.state.pos.y + up.y * 1.5, z: p.state.pos.z + up.z * 1.5 };
+    const qu = v3normalize(q.state.pos);
+    const to = { x: q.state.pos.x + qu.x * 1.1, y: q.state.pos.y + qu.y * 1.1, z: q.state.pos.z + qu.z * 1.1 };
+    const d = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z };
+    const l = Math.hypot(d.x, d.y, d.z);
+    return l < 0.5 || !this.roomPhysics().castRay(from, { x: d.x / l, y: d.y / l, z: d.z / l }, l);
+  }
+
+  /** Line of sight from a bot's eyes to a point `h` metres above some feet (creeps). */
+  private botSeesPoint(p: ServerPlayer, feet: Vec3, h: number): boolean {
+    const up = v3normalize(p.state.pos);
+    const from = { x: p.state.pos.x + up.x * 1.5, y: p.state.pos.y + up.y * 1.5, z: p.state.pos.z + up.z * 1.5 };
+    const fu = v3normalize(feet);
+    const to = { x: feet.x + fu.x * h, y: feet.y + fu.y * h, z: feet.z + fu.z * h };
+    const d = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z };
+    const l = Math.hypot(d.x, d.y, d.z);
+    return l < 0.5 || !this.roomPhysics().castRay(from, { x: d.x / l, y: d.y / l, z: d.z / l }, l, GROUPS_WORLD_QUERY);
+  }
+
+  /** Did this opponent hurt the bot within BOT_RETALIATE_MS (an unarmed bot then fights back instead of looting)? */
+  private botProvoked(p: ServerPlayer, target: ServerPlayer | undefined, now: number): boolean {
+    return !!target && p.lastHurtBy === target.index && now - p.lastHurtAt < BOT_RETALIATE_MS;
+  }
+
+  /** May this bot take this creep on? Empty hands: basic creeps only. Armed: all but the elite, which waits for level 4 and good health. */
+  private botCanTake(p: ServerPlayer, c: CreepRuntime, weaponless: boolean): boolean {
+    if (weaponless) return c.def.tier === 'basic';
+    if (c.def.tier === 'elite') return p.prog.level >= 4 && p.vitals.health >= maxHealthOf(p.vitals) * 0.7;
+    return true;
+  }
+
+  /** The creep a bot farms (kept while it lives and the hunt is not taking too long), or null. */
+  private botCreep(p: ServerPlayer, brain: BotRuntime, weaponless: boolean, now: number): CreepRuntime | null {
+    const usable = (c: CreepRuntime) => c.state !== CreepStateCode.DEAD && c.state !== CreepStateCode.RETURN && (brain.skipCreeps.get(c.id) ?? 0) <= now && this.botCanTake(p, c, weaponless);
+    const range = weaponless ? BOT_PUNCH_CREEP_RANGE : BOT_CREEP_RANGE;
+    const dist = (c: CreepRuntime) => Math.hypot(c.pos.x - p.state.pos.x, c.pos.y - p.state.pos.y, c.pos.z - p.state.pos.z);
+    const current = brain.creep >= 0 ? this.creeps.creeps.get(brain.creep) : undefined;
+    if (current && now - brain.creepSince > BOT_HUNT_MS) brain.skipCreeps.set(current.id, now + 60000);
+    else if (current && usable(current) && dist(current) < range + 12) return current;
+    brain.creep = -1;
+    let best: CreepRuntime | undefined;
+    let bestD: number = range;
+    for (const c of this.creeps.creeps.values()) {
+      if (!usable(c)) continue;
+      const d = dist(c);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    if (!best) return null;
+    brain.creep = best.id;
+    brain.creepSince = now;
+    brain.nav.reset();
+    return best;
+  }
+
+  /** A tough or elite creep chasing this bot from close by (it backs away from it), or null. */
+  private botCreepThreat(p: ServerPlayer): CreepRuntime | null {
+    for (const c of this.creeps.creeps.values()) {
+      if (c.target !== p.index || (c.def.tier !== 'tough' && c.def.tier !== 'elite')) continue;
+      if (c.state !== CreepStateCode.ALERT && c.state !== CreepStateCode.CHASE && c.state !== CreepStateCode.ATTACK) continue;
+      if (Math.hypot(c.pos.x - p.state.pos.x, c.pos.y - p.state.pos.y, c.pos.z - p.state.pos.z) < 12) return c;
+    }
+    return null;
+  }
+
+  /** The closed chest a bot explores toward (kept until opened and emptied, or given up), or null. */
+  private botChest(p: ServerPlayer, brain: BotRuntime, now: number): Vec3 | null {
+    const chests = this.loot.chests;
+    const current = brain.chest >= 0 ? chests[brain.chest] : undefined;
+    if (current && (brain.skipChests.get(current.id) ?? 0) <= now) {
+      if (current.state === ChestState.CLOSED) return current.spot.pos;
+      // Opened by this bot: it stays for the rewards.
+      if (current.by === p.index && current.state !== ChestState.EMPTY) return current.spot.pos;
+    }
+    brain.chest = -1;
+    const taken = new Set([...this.bots.values()].map((b) => b.chest));
+    let best: (typeof chests)[number] | undefined;
+    let bestD = BOT_CHEST_RANGE;
+    for (const c of chests) {
+      if (c.state !== ChestState.CLOSED || taken.has(c.id) || (brain.skipChests.get(c.id) ?? 0) > now) continue;
+      const d = Math.hypot(c.spot.pos.x - p.state.pos.x, c.spot.pos.y - p.state.pos.y, c.spot.pos.z - p.state.pos.z);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    if (!best) return null;
+    brain.chest = best.id;
+    brain.chestSince = now;
+    brain.nav.reset();
+    return best.spot.pos;
+  }
+
+  /** Near its chest: open it, then take what came out of it (the same requests a person sends). */
+  private botLoot(p: ServerPlayer, brain: BotRuntime, now: number): void {
+    const c = brain.chest >= 0 ? this.loot.chests[brain.chest] : undefined;
+    if (!c) return;
+    // A chest it cannot get to in a minute is left for later.
+    if (c.state === ChestState.CLOSED && now - brain.chestSince > 60000) {
+      brain.skipChests.set(c.id, now + 120000);
+      brain.chest = -1;
+      return;
+    }
+    const d = Math.hypot(c.spot.pos.x - p.state.pos.x, c.spot.pos.y - p.state.pos.y, c.spot.pos.z - p.state.pos.z);
+    if (d > LOOT_RULES.chestRange) return;
+    if (c.state === ChestState.CLOSED) {
+      brain.lootSeq = (brain.lootSeq + 1) & 0x7fffffff;
+      const r = this.loot.interact(p, { s: brain.lootSeq, k: 0, id: c.id, g: this.loot.gen }, now);
+      if (r.ok) brain.chestSince = now;
+      return;
+    }
+    if (c.state === ChestState.OPENING) return;
+    for (const id of c.items) {
+      brain.lootSeq = (brain.lootSeq + 1) & 0x7fffffff;
+      const r = this.loot.interact(p, { s: brain.lootSeq, k: 1, id, g: this.loot.gen }, now);
+      if (r.ok || r.r === LootReject.RATE) break;
+    }
+    // Done once it is empty, or what is left is nothing it can carry (a weapon with both hands full).
+    if (c.state === ChestState.EMPTY || now - brain.chestSince > 3500) {
+      brain.skipChests.set(c.id, now + 600000);
+      brain.chest = -1;
+      brain.nav.reset();
     }
   }
 
@@ -1560,7 +2221,9 @@ export class GraaoMatchRoom extends Room {
       this.broadcast(S2C.NOTICE, { kind: 'error', code: NoticeCode.LOAD_TIMEOUT, text: 'O carregamento demorou demais. A sala voltou ao lobby; tente novamente.' } satisfies NoticeMsg);
       this.returnToWarmup();
     }
+    const tb = performance.now();
     this.updateBots(wall, dt);
+    this.perf.botMs = this.perf.botMs * 0.9 + (performance.now() - tb) * 0.1;
     if (this.phase === MatchPhase.ABILITY_DRAFT && this.draft?.update(wall)) {
       this.sendDraftStates();
       this.checkDraftDone();
@@ -1603,7 +2266,14 @@ export class GraaoMatchRoom extends Room {
         continue;
       }
       regenMana(p.vitals, dt);
-      p.state.slow = currentSlow(p, wall);
+      updateStatusEffects(p.runtime, wall, p.vitals.alive);
+      const passive = updatePassives(p.loadout, p.runtime.passive, p.vitals, dt, wall);
+      const statuses = statusModifiers(p.runtime, wall);
+      p.state.slow = statuses.speedFactor;
+      p.state.rooted = statuses.rooted;
+      p.state.noSprint = statuses.noSprint;
+      p.state.airControl = passive.airControl;
+      p.state.sprintSpeed = passive.speed;
       let stepped = 0;
       // Keep a small jitter buffer once the stream is flowing: steady consumption = smooth remote motion.
       const keep = p.queue.length > INPUT_JITTER_BUFFER + 6 ? 0 : INPUT_JITTER_BUFFER;
@@ -1644,6 +2314,9 @@ export class GraaoMatchRoom extends Room {
     }
 
     this.abilities.update(wall, dt);
+    const tc = performance.now();
+    this.creeps.update(wall, dt);
+    this.perf.creepMs = this.perf.creepMs * 0.9 + (performance.now() - tc) * 0.1;
     this.loot.update(wall);
     if (this.roomStateDirty) this.broadcastRoomState();
 
@@ -1663,6 +2336,8 @@ export class GraaoMatchRoom extends Room {
     }
     const cost = performance.now() - t0;
     this.tickCost = this.tickCost * 0.9 + cost * 0.1;
+    this.perf.peakTickMs = Math.max(this.perf.peakTickMs, cost);
+    this.perf.ticks++;
   }
 
   /** Out of breath with the head under water: drowning takes Health every MOVEMENT.drownInterval s of simulated time. */
@@ -1692,6 +2367,7 @@ export class GraaoMatchRoom extends Room {
     p.state = state;
     this.motor.placeCollider(p.body.collider, p.state.pos);
     p.vitals = newVitals();
+    this.applyStats(p);
     p.breath = MOVEMENT.breathTime;
     p.drownT = 0;
     this.freshKit(p);
@@ -1746,11 +2422,13 @@ export class GraaoMatchRoom extends Room {
         p.vitals.health,
         p.vitals.shield,
         manaShown(p.vitals),
-        p.weapon,
+        p.unarmed ? FISTS_SLOT : p.weapon,
         Math.round(p.simTime - now),
       ]);
     }
     const msg: SnapshotMsg = { t: now, k: this.tick, p: snaps };
+    // Creeps at half the snapshot rate (they are slow and many).
+    if (this.creeps.active && this.snapshotCount++ % 2 === 0) msg.c = this.creeps.snapshot();
     this.broadcast(S2C.SNAPSHOT, msg);
   }
 
@@ -1774,6 +2452,7 @@ export class GraaoMatchRoom extends Room {
       deploy: p.deploy,
       wins: p.wins,
       back: p.back,
+      level: p.prog.level,
       ...(p.bot ? { bot: true } : {}),
     }));
     const room = this.roomMetadata();

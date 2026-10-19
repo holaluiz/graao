@@ -132,7 +132,30 @@ export function validatePrepared(m: unknown): import('./protocol').PreparedMsg |
 export function validateSwitch(m: unknown): import('./protocol').SwitchWeaponMsg | null {
   if (!m || typeof m !== 'object') return null;
   const w = (m as { w?: unknown }).w;
-  return w === 0 || w === 1 ? { w } : null;
+  return w === 0 || w === 1 || w === 2 ? { w } : null;
+}
+
+/** MELEE shape check (reach, direction, walls, interval and empty hands are the room's job). */
+export function validateMelee(m: unknown): import('./protocol').MeleeMsg | null {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
+  const o = m as Record<string, unknown>;
+  const ints = (v: unknown, n: number, max: number) =>
+    Array.isArray(v) && v.length === n && v.every((x) => isInt(x) && Math.abs(x as number) <= max);
+  if (!isInt(o.s) || (o.s as number) < 0 || (o.s as number) > 0x7fffffff) return null;
+  if (!ints(o.o, 3, 1_000_000) || !ints(o.d, 3, 10000)) return null;
+  const d = o.d as number[];
+  const len = Math.hypot(d[0]!, d[1]!, d[2]!);
+  if (len < 9000 || len > 11000) return null;
+  return { s: o.s as number, o: o.o as [number, number, number], d: d as [number, number, number] };
+}
+
+/** ALLOCATE_STAT shape check (points left and the match phase are the room's job). */
+export function validateAllocateStat(m: unknown): import('./protocol').AllocateStatMsg | null {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
+  const o = m as Record<string, unknown>;
+  if (!isInt(o.s) || (o.s as number) < 0 || (o.s as number) > 0x7fffffff) return null;
+  if (!isInt(o.k) || (o.k as number) < 0 || (o.k as number) > 7) return null;
+  return { s: o.s as number, k: o.k as number };
 }
 
 /** DRAFT_PICK shape check (pool, ownership and round are the draft's job). */
@@ -189,6 +212,15 @@ export function validateInteract(m: unknown): import('./protocol').InteractMsg |
   if (!isInt(o.g) || (o.g as number) < 0 || (o.g as number) > 0x7fffffff) return null;
   if (o.w !== undefined && o.w !== 0 && o.w !== 1) return null;
   return { s: o.s as number, k: o.k, id: o.id as number, g: o.g as number, ...(o.w !== undefined ? { w: o.w as number } : {}) };
+}
+
+/** WORLD_USE shape check. */
+export function validateWorldUse(m: unknown): import('./protocol').WorldUseMsg | null {
+  if (!m || typeof m !== 'object') return null;
+  const o = m as Record<string, unknown>;
+  if (!isInt(o.s) || (o.s as number) < 0 || (o.s as number) > 0x7fffffff) return null;
+  if (!isInt(o.id) || (o.id as number) < 0 || (o.id as number) > 0xffff) return null;
+  return { s: o.s as number, id: o.id as number };
 }
 
 /** USE_ITEM shape check. */

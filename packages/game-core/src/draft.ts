@@ -2,15 +2,13 @@
  * Ability Draft rules (pure, deterministic given an rng; the server runs it, tests drive it with fake clocks).
  *
  * Four simultaneous rounds: Basic, Basic, Basic, Ultimate. In each round every seat chooses in secret; the round
- * resolves as soon as everyone has chosen (or when time runs out: missing choices are made at random). When two seats
- * want the same ability and ownership is unique, the seat with priority this round keeps it and the others repick
- * at once from what is left (a short repick window). Priority rotates every round, starting from a random seat.
+ * resolves as soon as everyone has chosen (or when time runs out: missing choices are made at random).
  * After each round the result stays on screen briefly (reveal), then the next round opens.
  *
- * Ownership is unique for a slot type when its pool covers every seat (2 players: 8 basics ≥ 2 × 3, 3 ultimates
- * ≥ 2 × 1); larger rooms fall back to "never twice in the same loadout".
+ * Exclusivity is individual in every room size: never repeat a spell within one build and at most one passive.
+ * Different players may freely choose identical spells. Legacy priority/repick protocol fields stay compatible.
  */
-import { ABILITIES, BASIC_ABILITIES, LOADOUT_SLOTS, ULTIMATE_ABILITIES, isAbilityId, type AbilityId, type Loadout } from '@graao/game-data';
+import { ABILITIES, ABILITY_RULES, BASIC_ABILITIES, LOADOUT_SLOTS, ULTIMATE_ABILITIES, isAbilityId, type AbilityId, type Loadout } from '@graao/game-data';
 import { DraftReject, type DraftKind, type DraftStage, type DraftStateMsg } from '@graao/shared';
 
 /** Slot type of each round, in order: keys 1, 2, 3 then the Ultimate on 4. */
@@ -71,18 +69,13 @@ export class AbilityDraft {
   private readonly firstPriority: number;
   /** Seats whose ability this round was chosen automatically / was disputed. */
   private readonly auto = new Set<number>();
-  private readonly contested = new Set<number>();
 
   constructor(indices: readonly number[], now: number, opts: { timings?: Partial<DraftTimings>; rng?: () => number; firstPriority?: number } = {}) {
     this.seats = [...indices].sort((a, b) => a - b).map((index) => ({ index, picks: [], pending: null, repick: false, lostTo: null }));
     this.t = { ...DRAFT_RULES, ...opts.timings };
     this.rng = opts.rng ?? Math.random;
     this.firstPriority = opts.firstPriority ?? 0;
-    const per = (kind: DraftKind) => DRAFT_ROUNDS.filter((k) => k === kind).length;
-    this.unique = {
-      basic: BASIC_ABILITIES.length >= this.seats.length * per('basic'),
-      ultimate: ULTIMATE_ABILITIES.length >= this.seats.length * per('ultimate'),
-    };
+    this.unique = { basic: false, ultimate: false };
     this.priority = draftPriority(indices, 0, this.firstPriority);
     this.endsAt = now + this.t.pickMs;
   }
@@ -115,20 +108,20 @@ export class AbilityDraft {
   available(index: number): AbilityId[] {
     const seat = this.seat(index);
     if (!seat || this.stage !== 'pick' || seat.picks.length > this.round) return [];
-    const owners = this.owners();
-    const unique = this.unique[this.kind];
-    return draftPool(this.kind).filter((id) => !seat.picks.includes(id) && !(unique && owners.has(id)));
+    const passiveLimit = seat.picks.filter((id) => ABILITIES[id].kind === 'passive').length >= ABILITY_RULES.maxPassives;
+    return draftPool(this.kind).filter((id) => !seat.picks.includes(id) && !(passiveLimit && ABILITIES[id].kind === 'passive'));
   }
 
   /** A secret choice for the current window (may be changed until the round resolves). */
-  pick(index: number, round: number, id: string, _now: number): DraftReject {
+  pick(index: number, round: number, id: string, now: number): DraftReject {
     if (this.stage !== 'pick') return DraftReject.NOT_DRAFTING;
     if (round !== this.round) return DraftReject.WRONG_ROUND;
     const seat = this.seat(index);
     if (!seat || seat.picks.length > this.round) return DraftReject.NOT_PICKING;
+    if (!Number.isFinite(now) || now >= this.endsAt) return DraftReject.EXPIRED;
     if (!isAbilityId(id) || ABILITIES[id].slotType !== this.kind || !draftPool(this.kind).includes(id)) return DraftReject.NOT_IN_POOL;
     if (seat.picks.includes(id)) return DraftReject.ALREADY_OWNED;
-    if (this.unique[this.kind] && this.owners().has(id)) return DraftReject.TAKEN;
+    if (ABILITIES[id].kind === 'passive' && seat.picks.filter((pick) => ABILITIES[pick].kind === 'passive').length >= ABILITY_RULES.maxPassives) return DraftReject.PASSIVE_LIMIT;
     seat.pending = id;
     return DraftReject.OK;
   }
@@ -166,50 +159,27 @@ export class AbilityDraft {
     for (const s of waiting) {
       if (s.pending) continue;
       const options = this.available(s.index);
-      const fallback = draftPool(this.kind).filter((id) => !s.picks.includes(id));
-      const from = options.length ? options : fallback;
-      s.pending = from[Math.floor(this.rng() * from.length) % from.length]!;
+      // The 30/10 catalogue always leaves valid options for three basics and one Ultimate.
+      const roll = this.rng();
+      const position = Number.isFinite(roll) ? Math.max(0, Math.min(options.length - 1, Math.floor(roll * options.length))) : 0;
+      s.pending = options[position]!;
       this.auto.add(s.index);
     }
     this.resolve(now);
     return true;
   }
 
-  /** Commits uncontested choices; disputed ones go to the seat with priority, the others repick. */
+  /** Every seat commits its own valid choice, including choices shared with other players. */
   private resolve(now: number): void {
-    const unique = this.unique[this.kind];
-    const claims = new Map<AbilityId, DraftSeat[]>();
     for (const s of this.awaiting()) {
-      const list = claims.get(s.pending!) ?? [];
-      list.push(s);
-      claims.set(s.pending!, list);
+      const id = s.pending!;
+      s.picks.push(id);
+      this.roundResults.push({ index: s.index, id, auto: this.auto.has(s.index), contested: false });
+      s.repick = false;
+      s.lostTo = null;
+      s.pending = null;
     }
-    const rank = (i: number) => {
-      const r = this.priority.indexOf(i);
-      return r < 0 ? 1e9 : r;
-    };
-    let losers = 0;
-    for (const [id, seats] of claims) {
-      const winners = unique ? [...seats].sort((a, b) => rank(a.index) - rank(b.index)).slice(0, 1) : seats;
-      for (const s of seats) {
-        if (winners.includes(s)) {
-          s.picks.push(id);
-          if (seats.length > 1 && unique) this.contested.add(s.index);
-          this.roundResults.push({ index: s.index, id, auto: this.auto.has(s.index), contested: this.contested.has(s.index) });
-          s.repick = false;
-          s.lostTo = null;
-        } else {
-          s.repick = true;
-          s.lostTo = { index: winners[0]!.index, id };
-          this.contested.add(s.index);
-          this.auto.delete(s.index);
-          losers++;
-        }
-        s.pending = null;
-      }
-    }
-    if (losers) this.endsAt = now + this.t.repickMs;
-    else this.startReveal(now);
+    this.startReveal(now);
   }
 
   private startReveal(now: number): void {
@@ -221,7 +191,6 @@ export class AbilityDraft {
     this.round++;
     this.roundResults = [];
     this.auto.clear();
-    this.contested.clear();
     for (const s of this.seats) {
       s.pending = null;
       s.repick = false;

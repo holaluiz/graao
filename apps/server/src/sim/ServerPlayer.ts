@@ -1,7 +1,7 @@
 /** Authoritative per-player state on the server (movement, vitals, weapons, abilities). */
 import type { Client } from '@colyseus/core';
-import { manaShown, newAbilityRuntime, passiveModifiers, statusModifiers, newInput, newInventory, newVitals, type AbilityActor, type CharacterBody, type CharacterInput, type CharacterState, type Inventory, type LootActor, type Vitals } from '@graao/game-core';
-import { ABILITIES, AMMO_TYPES, BOT_KIT, CONSUMABLE_ORDER, LOADOUT_SLOTS, MOVEMENT, STARTING_KIT, WEAPON_SLOT_COUNT, type Loadout } from '@graao/game-data';
+import { manaShown, maxHealthOf, maxManaOf, newAbilityRuntime, newProgression, passiveModifiers, progressionTuple, statModifiers, statusModifiers, newInput, newInventory, newVitals, type AbilityActor, type CharacterBody, type CharacterInput, type CharacterState, type Inventory, type LootActor, type Progression, type StatModifiers, type Vitals } from '@graao/game-core';
+import { ABILITIES, AMMO_TYPES, BOT_KIT, CONSUMABLE_ORDER, LOADOUT_SLOTS, MATCH_KIT, MOVEMENT, STARTING_KIT, WEAPON_SLOT_COUNT, type Loadout } from '@graao/game-data';
 import { DeployState, type CharacterAppearance, type InputCmd, type SelfStatusMsg, type Vec3 } from '@graao/shared';
 
 /** A dash accepted by the ability system, started when movement command `seq` is simulated. */
@@ -33,6 +33,21 @@ export class ServerPlayer implements AbilityActor, LootActor {
 
   /** Equipped weapon slot (0 = E, 1 = Q). */
   weapon = 0;
+  /** Weapons put away: fighting with fists even with a weapon in the slot (SWITCH_WEAPON to FISTS_SLOT). */
+  fists = false;
+  /** Last punch accepted (server ms), the hand it used (0 left, 1 right) and the last MELEE sequence seen. */
+  lastMeleeAt = 0;
+  meleeHand = 1;
+  lastMeleeSeen = -1;
+  /** In-match progression (level, XP, attribute points) and what the spent points add up to. */
+  prog: Progression = newProgression();
+  mods: StatModifiers = statModifiers(this.prog);
+  lastAllocSeq = -1;
+  /** Rounding remainder of attribute-scaled damage (roundWithCarry). */
+  damageCarry = 0;
+  /** The last opponent who hurt this player and when (server ms): an unarmed bot fights back only when provoked. */
+  lastHurtBy = -1;
+  lastHurtAt = 0;
   /** Weapons (with their magazines), reserve ammunition and consumables (GRAInventory). */
   inv: Inventory;
   /** Slot being reloaded, or -1. */
@@ -75,6 +90,8 @@ export class ServerPlayer implements AbilityActor, LootActor {
   slowUntil = 0;
   slowFactor = 1;
   lastAbilitySeq = -1;
+  frontShieldUntil = 0;
+  frontShieldArc = 0;
   runtime = newAbilityRuntime(Date.now());
   pendingDash: PendingDash | null = null;
   private lastStatusKey = '';
@@ -92,9 +109,18 @@ export class ServerPlayer implements AbilityActor, LootActor {
     this.inv = this.freshInventory();
   }
 
-  /** A fresh life's inventory: the starting kit (bots: the classic two weapons, reserve never runs out). */
-  freshInventory(): Inventory {
+  /**
+   * A fresh life's inventory. Battle Royale (`unarmed`): empty hands for everyone, bots included (their reloads still
+   * never run dry once they find a weapon). Training: the starting kit (bots: the classic two weapons).
+   */
+  freshInventory(unarmed = false): Inventory {
+    if (unarmed) return newInventory(MATCH_KIT, this.bot);
     return this.bot ? newInventory(BOT_KIT, true) : newInventory(STARTING_KIT);
+  }
+
+  /** No weapon in hand: none in the selected slot, or weapons put away. The attack punches. */
+  get unarmed(): boolean {
+    return this.fists || !this.inv.slots[this.weapon];
   }
 
   status(): SelfStatusMsg {
@@ -114,8 +140,8 @@ export class ServerPlayer implements AbilityActor, LootActor {
       cd: [...this.cooldownEnds],
       castUntil: this.castUntil,
       abilitySeq: this.lastAbilitySeq,
-      slowUntil: this.slowUntil,
-      slow: Math.round(this.slowFactor * 100),
+      slowUntil: until('slow'),
+      slow: Math.round(Math.min(1, ...this.runtime.effects.filter((e) => e.kind === 'slow' && e.endsAt > now).map((e) => e.factor)) * 100),
       wpn: this.inv.slots.map((s) => s?.id ?? ''),
       res: AMMO_TYPES.map((t) => this.inv.reserve[t]),
       inv: CONSUMABLE_ORDER.map((c) => this.inv.consumables[c]),
@@ -126,11 +152,18 @@ export class ServerPlayer implements AbilityActor, LootActor {
       silencedUntil: until('silence'),
       rootedUntil: until('root'),
       noSprintUntil: until('noSprint'),
-      blockedUntil: this.state.abilityMovement?.mode === 'flight' ? now + this.state.abilityMovement.remaining * 1000 : 0,
+      blockedUntil: Math.max(this.frontShieldUntil, this.state.abilityMovement?.mode === 'flight' ? Math.round((now + this.state.abilityMovement.remaining * 1000) / 100) * 100 : 0),
       passiveActive: this.loadout.map((id) => ABILITIES[id].kind === 'passive' && this.runtime.passive.active),
-      speed: Math.round(passive.speed * status.speedFactor * 100),
+      speed: Math.round(status.speedFactor * 100),
+      sprintSpeed: Math.round(passive.speed * 100),
       airControl: Math.round(passive.airControl * 100),
       abilityMovement: this.state.abilityMovement ? { ...this.state.abilityMovement } : null,
+      fists: this.unarmed,
+      meleeSeq: this.lastMeleeSeen,
+      prog: progressionTuple(this.prog),
+      stats: [...this.prog.stats],
+      maxHealth: maxHealthOf(this.vitals),
+      maxMana: maxManaOf(this.vitals),
     };
   }
 

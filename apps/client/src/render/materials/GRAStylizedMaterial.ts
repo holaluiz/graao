@@ -129,6 +129,12 @@ attribute float instanceFade;
 #ifdef USE_TERRAIN
 attribute float aHeight;
 varying float vHeight;
+attribute vec3 aSoil;
+varying vec3 vSoil;
+#endif
+#ifdef USE_KIT_LOD
+attribute float aLod;
+uniform float uLodNear;
 #endif
 
 uniform vec3 uBaseColor;
@@ -155,6 +161,12 @@ void main() {
   #endif
   worldPosition = modelMatrix * worldPosition;
   vWorldPos = worldPosition.xyz;
+  #ifdef USE_KIT_LOD
+    // Small kit decoration (frames, sills, little props) folds away far from the camera: the vertex goes past the far
+    // plane on its own line of sight (same place on screen), so a triangle straddling the distance is clipped within
+    // its own few pixels instead of stretching to a shared point (long slivers across the view).
+    if (aLod > 0.5 && distance(worldPosition.xyz, cameraPosition) > uLodNear) gl_Position.z = gl_Position.w * 2.0;
+  #endif
   vWorldNormal = normalize(inverseTransformDirection(transformedNormal, viewMatrix));
 
   vBase = uBaseColor;
@@ -175,6 +187,7 @@ void main() {
   #endif
   #ifdef USE_TERRAIN
     vHeight = aHeight;
+    vSoil = aSoil;
   #endif
 
   #include <shadowmap_vertex>
@@ -233,6 +246,10 @@ varying float vFade;
 varying float vUnlit;
 #ifdef USE_TERRAIN
 varying float vHeight;
+varying vec3 vSoil;
+uniform vec3 uTrailColor;
+uniform vec3 uRedEarth;
+uniform vec3 uIronRock;
 uniform vec3 uGrassColor;
 uniform vec3 uGrassDry;
 uniform vec3 uSandColor;
@@ -272,9 +289,23 @@ void main() {
     vec3 grass = mix(uGrassColor, uGrassDry, smoothstep(0.5, 0.72, patches) * 0.8);
     grass = mix(grass, uGrassColor * vec3(0.82, 0.95, 0.9), smoothstep(0.45, 0.25, patches) * 0.6);
     float sand = 1.0 - smoothstep(0.1, 0.65, vHeight - uSeaLevel + (fine - 0.5) * 0.35);
-    base = mix(grass, uSandColor, sand);
-    float rocky = smoothstep(0.32, 0.5, slope + (patches - 0.5) * 0.25);
-    base = mix(base, mix(uRockColor, uCliffColor, smoothstep(0.55, 0.8, slope)), rocky);
+    // Soil of the landscape (vSoil.x: iron-ore country, the serras; vSoil.y: lush, the mata): the serra's grass dries
+    // over red earth in patches and its rock is the dark, rusty iron ore; the mata's green is deeper.
+    grass = mix(grass, grass * vec3(0.84, 0.97, 0.86), vSoil.y * 0.7);
+    float earth = vSoil.x * smoothstep(0.42, 0.66, patches + (fine - 0.5) * 0.3);
+    vec3 ground = mix(grass, uRedEarth, earth * 0.75);
+    ground = mix(ground, mix(grass, uGrassDry, 0.6) * vec3(1.05, 0.95, 0.8), vSoil.x * 0.35 * (1.0 - earth));
+    float rocky = smoothstep(0.32 - vSoil.x * 0.08, 0.5, slope + (patches - 0.5) * 0.25);
+    base = mix(ground, uSandColor, sand);
+    vec3 rock = mix(mix(uRockColor, uCliffColor, smoothstep(0.55, 0.8, slope)), uIronRock, vSoil.x * 0.85);
+    base = mix(base, rock, rocky);
+    // Trails (vSoil.z: signed distance to the nearest trail's edge, m): packed earth with a ragged, hand-painted edge,
+    // a little darker along the rim and redder on the iron-ore serras; rock still shows on steep banks.
+    float edge = vSoil.z + (fine - 0.5) * 0.35 + (patches - 0.5) * 0.25;
+    float onTrail = (1.0 - smoothstep(-0.06, 0.06, edge)) * (1.0 - rocky * 0.7) * (1.0 - sand);
+    vec3 dirt = mix(uTrailColor, uRedEarth, vSoil.x * 0.55) * (0.92 + 0.16 * smoothstep(0.35, 0.65, fine));
+    dirt *= mix(0.86, 1.0, smoothstep(0.0, 0.35, -edge));
+    base = mix(base, dirt, onTrail);
     base *= 0.94 + 0.12 * fine;
   #endif
 
@@ -372,6 +403,8 @@ export interface GRAStylizedOptions {
   side?: THREE.Side;
   /** Reads the Tormenta (default: every non-character variant). Held weapons opt out, like characters. */
   tormenta?: boolean;
+  /** Kit pieces: small decoration (aLod = 1) folds away beyond `uLodNear` metres. */
+  kitLod?: boolean;
 }
 
 /** Look constants shared by every GRAStylizedMaterial (golden hour). */
@@ -390,6 +423,7 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
   if (o.variant === 'world' || o.variant === 'terrain' || o.variant === 'foliage') defines.USE_PIGMENT = '';
   if (o.variant === 'terrain') defines.USE_TERRAIN = '';
   if (o.instanceFade) defines.USE_INSTANCE_FADE = '';
+  if (o.kitLod) defines.USE_KIT_LOD = '';
   const tormenta = o.tormenta ?? o.variant !== 'character';
   if (tormenta) defines.USE_TORMENTA = '';
 
@@ -425,6 +459,10 @@ export function createStylizedMaterial(o: GRAStylizedOptions): THREE.ShaderMater
       uSandColor: { value: new THREE.Color('#ead9b0') },
       uRockColor: { value: new THREE.Color('#a7a49a') },
       uCliffColor: { value: new THREE.Color('#8c8a86') },
+      uRedEarth: { value: new THREE.Color('#b9714f') },
+      uTrailColor: { value: new THREE.Color('#c99a68') },
+      uIronRock: { value: new THREE.Color('#6a4a42') },
+      uLodNear: { value: 45 },
     },
   ]);
   if (tormenta) useTormenta(uniforms);

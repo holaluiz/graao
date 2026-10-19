@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ABILITIES, ABILITY_IDS, ABILITY_RULES, ATTRIBUTES, DEFAULT_LOADOUTS, ULTIMATE_SLOT, type AbilityId, type Loadout } from '@graao/game-data';
-import { AbilityReject, HitKind, v3normalize, v3sub, type GameEvent, type Vec3 } from '@graao/shared';
+import { AbilityReject, HitKind, v3normalize, v3sub, type AbilityRevealMsg, type GameEvent, type Vec3 } from '@graao/shared';
 import {
   applyAbilityDamage,
   applyHeal,
@@ -27,6 +27,7 @@ import {
 import { GRAAbilitySystem, type AbilityActor, type AbilityHost } from './abilitySystem';
 import { createCharacterState } from './character';
 import { newVitals, raySphere } from './combat';
+import { statusModifiers } from './statusEffects';
 
 // ------------------------------------------------------------------------------------------------ fake world
 
@@ -67,6 +68,7 @@ function actor(index: number, feet: Vec3, loadout: Loadout = DEFAULT_LOADOUTS[0]
 
 function harness(actors: AbilityActor[], world = fakeWorld()) {
   const events: GameEvent[] = [];
+  const privateReveals: { recipient: number; message: AbilityRevealMsg }[] = [];
   const dashes: { index: number; dir: Vec3; distance: number; cmdSeq: number }[] = [];
   const state = { fight: true };
   const host: AbilityHost = {
@@ -79,6 +81,7 @@ function harness(actors: AbilityActor[], world = fakeWorld()) {
     },
     dash: (a, dir, distance, _duration, cmdSeq) => dashes.push({ index: a.index, dir, distance, cmdSeq }),
     emit: (e) => events.push(e),
+    sendPrivate: (caster, message) => privateReveals.push({ recipient: caster.index, message }),
   };
   const sys = new GRAAbilitySystem(host);
   /** Runs the system at the server's 20 Hz for `ms`. */
@@ -87,7 +90,7 @@ function harness(actors: AbilityActor[], world = fakeWorld()) {
     for (; t < from + ms; t += 50) sys.update(t, 0.05);
     return t;
   };
-  return { sys, events, dashes, state, run };
+  return { sys, events, dashes, state, run, privateReveals };
 }
 
 const dirTo = (from: Vec3, to: Vec3) => v3normalize(v3sub(to, from));
@@ -134,8 +137,8 @@ describe('loadouts', () => {
       const d = ABILITIES[id];
       if (d.slotType === 'ultimate') {
         expect(d.presentation.mark, id).toBeTruthy();
-        // Counterplay: an Ultimate warns for 0.5–1.5 s (wind-up plus ground delay) or is a visible projectile.
-        expect(d.presentation.telegraph, id).toBeTruthy();
+        // Offensive Ultimates announce their affected area/lane; defensive ones retain their persistent mark.
+        if (d.tags.some((tag) => tag === 'damage' || tag === 'wave')) expect(d.presentation.telegraph, id).toBeTruthy();
       }
       expect(d.name.length, id).toBeGreaterThan(3);
     }
@@ -292,7 +295,8 @@ describe('effect primitives', () => {
 
 describe('aiming helpers', () => {
   it('lobs an arcing projectile so it lands on the aimed point', () => {
-    const seed = ABILITIES.thorn_seed.effects[0]! as { speed: number; gravity: number };
+    // Arcing projectile support remains a reusable primitive even though Semente is now a ground trap.
+    const seed = { speed: 24, gravity: 14 };
     for (const meters of [6, 14, 24, 30]) {
       const from = castOrigin(ground(0), { x: 1, y: 0, z: 0 });
       const aim = ground(meters);
@@ -308,7 +312,7 @@ describe('aiming helpers', () => {
 // ------------------------------------------------------------------------------------------------ the system
 
 describe('GRAAbilitySystem (server execution with a fake host)', () => {
-  it('a projectile ability travels, hits the target and reports cast → proj → projEnd → dmg', () => {
+  it('Orbe Solar travels, reveals only to its caster and preserves the target health and shield', () => {
     const a = actor(0, ground(0));
     const b = actor(1, ground(10), DEFAULT_LOADOUTS[1]!);
     const h = harness([a, b]);
@@ -320,16 +324,17 @@ describe('GRAAbilitySystem (server execution with a fake host)', () => {
     h.run(1050, 400);
     const kinds = h.events.map((e) => e.e);
     expect(kinds).toContain('projEnd');
-    const dmg = h.events.find((e) => e.e === 'dmg');
-    expect(dmg && dmg.e === 'dmg' && dmg.target === 1 && dmg.amount === 26 && dmg.kinds.includes(HitKind.ABILITY)).toBe(true);
+    expect(h.events.some((e) => e.e === 'dmg')).toBe(false);
+    expect(h.privateReveals).toContainEqual(expect.objectContaining({ recipient: 0, message: expect.objectContaining({ kind: 'enemy', targets: [expect.objectContaining({ index: 1 })] }) }));
+    expect([b.vitals.health, b.vitals.shield]).toEqual([100, 100]);
     expect(h.sys.projectileCount).toBe(0);
     // Spam: same slot again is on cooldown; an ability A does not own is refused.
     expect(h.sys.request(a, { slot: 0, id: 'sun_orb', seq: 2, cmdSeq: 0, dir }, 1500)).toBe(AbilityReject.COOLDOWN);
     expect(h.sys.request(a, { slot: 1, id: 'leaf_shell', seq: 3, cmdSeq: 0 }, 1500)).toBe(AbilityReject.NOT_OWNED);
-    expect(h.sys.request(a, { slot: 0, id: 'sun_orb', seq: 4, cmdSeq: 0 }, 9000)).toBe(AbilityReject.BAD_TARGET);
+    expect(h.sys.request(a, { slot: 0, id: 'sun_orb', seq: 4, cmdSeq: 0 }, 12000)).toBe(AbilityReject.BAD_TARGET);
   });
 
-  it('an area at a point waits for its ground warning, then damages and slows everyone inside', () => {
+  it('Pólen announces its area, slows enemies for three seconds and deals no damage', () => {
     const a = actor(0, ground(0));
     const b = actor(1, ground(12));
     const h = harness([a, b]);
@@ -342,58 +347,54 @@ describe('GRAAbilitySystem (server execution with a fake host)', () => {
     expect(h.events.some((e) => e.e === 'dmg')).toBe(false);
     h.run(1000 + warnMs - 60, 200);
     expect(h.events.some((e) => e.e === 'area')).toBe(true);
-    expect(b.vitals.shield).toBe(100 - 34);
-    expect(b.slowFactor).toBe(0.55);
-    expect(currentSlow(b, 1000 + warnMs + 500)).toBe(0.55);
+    expect(b.vitals.shield).toBe(100);
+    expect(statusModifiers(b.runtime, 1000 + warnMs + 500).speedFactor).toBe(0.7);
+    expect(statusModifiers(b.runtime, 1000 + warnMs + 3100).speedFactor).toBe(1);
     // Out of range point.
     a.cooldownEnds[s] = 0;
     a.castUntil = 0;
     expect(h.sys.request(a, { slot: s, id: 'pollen_burst', seq: 3, cmdSeq: 0, point: ground(40) }, 20_000)).toBe(AbilityReject.OUT_OF_RANGE);
   });
 
-  it('an arcing seed bursts in an area where it lands', () => {
-    // Lob it at several angles: some landing lands next to B, and the burst (not a direct hit) damages B.
-    let dealt = 0;
-    for (let tilt = 0; tilt < 0.6 && dealt === 0; tilt += 0.05) {
-      const a = actor(0, ground(0), DEFAULT_LOADOUTS[1]!);
-      const b = actor(1, ground(9));
-      const h = harness([a, b]);
-      const up = v3normalize(a.state.pos);
-      const d = v3normalize({ x: 1 + up.x * tilt, y: up.y * tilt, z: up.z * tilt });
-      h.sys.request(a, { slot: 0, id: 'thorn_seed', seq: 1, cmdSeq: 0, dir: d }, 1000);
-      h.run(1050, 2500);
-      const dmg = h.events.find((e) => e.e === 'dmg');
-      if (dmg && dmg.e === 'dmg') {
-        dealt = dmg.amount;
-        expect(h.events.some((e) => e.e === 'area')).toBe(true);
-        expect(h.sys.projectileCount).toBe(0);
-      }
-    }
-    expect(dealt).toBeGreaterThan(0);
+  it('Semente creates a visible trap that roots one enemy briefly, then disappears without damage', () => {
+    const a = actor(0, ground(0), DEFAULT_LOADOUTS[1]!);
+    const b = actor(1, ground(6));
+    const h = harness([a, b]);
+    expect(h.sys.request(a, { slot: 0, id: 'thorn_seed', seq: 1, cmdSeq: 0, point: ground(6) }, 1000)).toBe(AbilityReject.OK);
+    expect(h.sys.entities.some((entity) => entity.kind === 'trap')).toBe(true);
+    h.run(1000, 100);
+    expect(statusModifiers(b.runtime, 1100).rooted).toBe(true);
+    expect(statusModifiers(b.runtime, 1900).rooted).toBe(false);
+    expect(h.sys.entities.some((entity) => entity.kind === 'trap')).toBe(false);
+    expect(h.events.some((event) => event.e === 'dmg')).toBe(false);
+    expect(b.vitals.health).toBe(100);
   });
 
-  it('the cyclone Ultimate follows its caster and pulses several times; self abilities shield, heal and dash', () => {
+  it('Festa persists at its chosen point; self abilities give temporary protection, heal over time and dash', () => {
     const a = actor(0, ground(0), DEFAULT_LOADOUTS[1]!);
     const b = actor(1, ground(3));
     const h = harness([a, b]);
     a.cooldownEnds[ULTIMATE_SLOT] = 0;
-    expect(h.sys.request(a, { slot: ULTIMATE_SLOT, id: 'petal_cyclone', seq: 1, cmdSeq: 0 }, 1000)).toBe(AbilityReject.OK);
-    h.run(1000, 4000);
+    expect(h.sys.request(a, { slot: ULTIMATE_SLOT, id: 'petal_cyclone', seq: 1, cmdSeq: 0, point: ground(3) }, 1000)).toBe(AbilityReject.OK);
+    h.run(1000, 9000);
     const pulses = h.events.filter((e) => e.e === 'area');
-    expect(pulses.length).toBe(4);
-    expect(h.events.filter((e) => e.e === 'dmg' && e.target === 1).length).toBe(4);
+    expect(pulses.length).toBe(32);
+    expect(h.events.filter((e) => e.e === 'dmg' && e.target === 1)).toHaveLength(0);
 
     a.vitals.shield = 20;
-    expect(h.sys.request(a, { slot: slotOf(a.loadout, 'leaf_shell'), id: 'leaf_shell', seq: 2, cmdSeq: 0 }, 6000)).toBe(AbilityReject.OK);
-    expect(a.vitals.shield).toBe(70);
+    expect(h.sys.request(a, { slot: slotOf(a.loadout, 'leaf_shell'), id: 'leaf_shell', seq: 2, cmdSeq: 0 }, 11000)).toBe(AbilityReject.OK);
+    expect(a.vitals.shield).toBe(20);
+    expect(a.vitals.temporaryShield).toBe(40);
 
     const c = actor(2, ground(0, 5), DEFAULT_LOADOUTS[2]!);
     const h3 = harness([c]);
     c.vitals.health = 40;
     expect(h3.sys.request(c, { slot: slotOf(c.loadout, 'bloom'), id: 'bloom', seq: 1, cmdSeq: 0 }, 1000)).toBe(AbilityReject.OK);
+    expect(c.vitals.health).toBe(40);
+    h3.run(1000, 2500);
     expect(c.vitals.health).toBe(75);
-    expect(h3.sys.request(c, { slot: slotOf(c.loadout, 'wind_step'), id: 'wind_step', seq: 2, cmdSeq: 77, dir: { x: 1, y: 0, z: 0 } }, 1000)).toBe(AbilityReject.OK);
-    expect(h3.dashes).toEqual([{ index: 2, dir: { x: 1, y: 0, z: 0 }, distance: 7, cmdSeq: 77 }]);
+    expect(h3.sys.request(c, { slot: slotOf(c.loadout, 'wind_step'), id: 'wind_step', seq: 2, cmdSeq: 77, dir: { x: 1, y: 0, z: 0 } }, 4000)).toBe(AbilityReject.OK);
+    expect(h3.dashes).toEqual([{ index: 2, dir: { x: 1, y: 0, z: 0 }, distance: 6, cmdSeq: 77 }]);
   });
 
   it('refuses everything outside fighting phases and drops the wind-up of an eliminated caster', () => {

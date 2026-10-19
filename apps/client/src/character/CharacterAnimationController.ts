@@ -5,7 +5,8 @@
  * Layers (manual weights, smoothed every frame):
  *   - Locomotion LOWER (hips + legs): idle / walk / run / sprint / air / fall — always full weight.
  *   - Locomotion UPPER (spine, arms, head): same clips × (1 − upper action weight).
- *   - Upper actions: aim (pitch blend up/neutral/down), fire, reload, cast, castEnter, castHold (channel), throw.
+ *   - Upper actions: aim (pitch blend up/neutral/down), fire, reload, cast, castEnter, castHold (channel), throw,
+ *     punchL / punchR (empty hands; upper body only, so a punch never moves the feet: no root motion).
  *   - Full-body one-shots: jump start, land, hit, death, dash, victory (override both locomotion halves).
  */
 import * as THREE from 'three';
@@ -63,6 +64,9 @@ export class CharacterAnimationController {
   private upperShot: { name: ClipName; until: number } | null = null;
   private time = 0;
   private dead = false;
+  /** Footsteps (audio/Footsteps.ts): the feet left the ground for a jump; they touched it after this long in the air. */
+  private jumpPending = false;
+  private landPending = 0;
 
   constructor(root: THREE.Object3D, private readonly lib: GRAAnimationLibrary) {
     this.mixer = new THREE.AnimationMixer(root);
@@ -73,7 +77,7 @@ export class CharacterAnimationController {
       this.lower.set(name, this.layer(lower, THREE.LoopRepeat));
       this.upper.set(name, this.layer(upper, THREE.LoopRepeat));
     }
-    for (const name of ['aim', 'aimUp', 'aimDown', 'fire', 'reload', 'cast', 'castEnter', 'castHold', 'throw'] as ClipName[]) {
+    for (const name of ['aim', 'aimUp', 'aimDown', 'fire', 'reload', 'cast', 'castEnter', 'castHold', 'throw', 'punchL', 'punchR'] as ClipName[]) {
       const clip = lib.get(name);
       if (!clip) continue;
       const loop = name === 'aim' || name === 'aimUp' || name === 'aimDown' || name === 'castHold' ? THREE.LoopRepeat : THREE.LoopOnce;
@@ -145,8 +149,12 @@ export class CharacterAnimationController {
     // Jump / land transitions (the water carries a swimmer: wading out of it is not a landing).
     const swimming = s.moveState === MovementState.SWIM;
     if (!s.grounded) this.airTime += dt;
-    if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP && !s.diving) this.playOneShot('jumpStart', { speed: 1.6 });
+    if (this.wasGrounded && !s.grounded && s.moveState === MovementState.JUMP && !s.diving) {
+      this.playOneShot('jumpStart', { speed: 1.6 });
+      this.jumpPending = true;
+    }
     if (!this.wasGrounded && s.grounded && this.airTime > 0.35) this.playOneShot('land', { speed: 2.2 });
+    if (!this.wasGrounded && s.grounded && !swimming) this.landPending = this.airTime;
     if (s.grounded || swimming) this.airTime = 0;
     this.wasGrounded = s.grounded;
 
@@ -221,6 +229,20 @@ export class CharacterAnimationController {
     for (const l of this.upperActions.values()) this.blend(l, kFast);
     for (const l of this.full.values()) this.blend(l, kFast);
     this.mixer.update(dt);
+  }
+
+  /** True once after the feet left the ground for a jump. */
+  consumeJump(): boolean {
+    const j = this.jumpPending;
+    this.jumpPending = false;
+    return j;
+  }
+
+  /** Seconds the body was in the air before its feet touched the ground, once (0 when they did not this frame). */
+  consumeLanding(): number {
+    const l = this.landPending;
+    this.landPending = 0;
+    return l;
   }
 
   private blend(l: Layer, k: number): void {

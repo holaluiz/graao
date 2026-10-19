@@ -52,10 +52,28 @@ export interface MapWaypoint {
   kind?: 'rua' | 'porta' | 'escada' | 'telhado' | 'ponte' | 'mirante' | 'interior' | 'trilha';
 }
 
+/**
+ * A dirt trail painted on the terrain (docs/world/PLANET_LAYOUT.md, "Caminhos"): a polyline of [lat, lon] points
+ * joined by great-circle arcs, `width` m wide. The ground under it keeps its shape (a trail follows every hill and
+ * bank of the planet, never a flat tile over a curve); the client paints it into the terrain and the layout keeps wild
+ * trees, rocks and grass off it.
+ */
+export interface MapTrail {
+  id: string;
+  points: [number, number][];
+  width: number;
+  region?: string;
+}
+
 export interface GraaoMap {
   mapId: string;
   /** Bumped on any layout change. */
   mapVersion: number;
+  /**
+   * Set by the map editor (`?editor`) when it saves (ISO date): the file then holds hand edits that the region scripts
+   * do not know, and `tools/world/seed-map.ts --write` refuses to overwrite it without `--force`.
+   */
+  editedAt?: string;
   /** Bumped when shared geometry (kit prefabs, classic structures) changes. */
   geometryVersion: number;
   /** Bumped when colliders change. */
@@ -64,6 +82,8 @@ export interface GraaoMap {
   chestSpots: ChestSpotDef[];
   /** Bot navigation waypoints and links (the rest of the nav graph is generated from the terrain and colliders). */
   waypoints?: MapWaypoint[];
+  /** Dirt trails painted on the terrain between and inside the regions. */
+  trails?: MapTrail[];
 }
 
 /**
@@ -119,10 +139,17 @@ export function validateMap(m: GraaoMap): string[] {
   const wps = new Set((m.waypoints ?? []).map((w) => w.id));
   if (wps.size !== (m.waypoints ?? []).length) out.push('waypoint repetido');
   for (const w of m.waypoints ?? []) for (const l of w.links) if (!wps.has(l)) out.push(`${w.id}: ligação para waypoint desconhecido ${l}`);
+  const trails = new Set<string>();
+  for (const t of m.trails ?? []) {
+    if (trails.has(t.id)) out.push(`trilha repetida: ${t.id}`);
+    trails.add(t.id);
+    if (t.points.length < 2 || !t.points.every(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180)) out.push(`${t.id}: pontos inválidos`);
+    if (!(t.width > 0.4 && t.width < 8)) out.push(`${t.id}: largura ${t.width} fora de 0,4–8 m`);
+  }
   return out;
 }
 
-export const GRAAO_MAP: GraaoMap = MAP_FILE as GraaoMap;
+export const GRAAO_MAP: GraaoMap = MAP_FILE as unknown as GraaoMap;
 {
   const problems = validateMap(GRAAO_MAP);
   if (problems.length) throw new Error(`planeta-graao.map.json: ${problems.join('; ')}`);
@@ -130,9 +157,9 @@ export const GRAAO_MAP: GraaoMap = MAP_FILE as GraaoMap;
 
 /** The map file's text: one placement or chest spot per line, so diffs and reviews stay readable. */
 export function serializeMap(m: GraaoMap): string {
-  const head = JSON.stringify({ mapId: m.mapId, mapVersion: m.mapVersion, geometryVersion: m.geometryVersion, collisionVersion: m.collisionVersion }, null, 2).slice(0, -2);
+  const head = JSON.stringify({ mapId: m.mapId, mapVersion: m.mapVersion, ...(m.editedAt ? { editedAt: m.editedAt } : {}), geometryVersion: m.geometryVersion, collisionVersion: m.collisionVersion }, null, 2).slice(0, -2);
   const list = (items: unknown[]) => (items.length ? `[\n    ${items.map((i) => JSON.stringify(i)).join(',\n    ')}\n  ]` : '[]');
-  return `${head},\n  "placements": ${list(m.placements)},\n  "chestSpots": ${list(m.chestSpots)},\n  "waypoints": ${list(m.waypoints ?? [])}\n}\n`;
+  return `${head},\n  "placements": ${list(m.placements)},\n  "chestSpots": ${list(m.chestSpots)},\n  "waypoints": ${list(m.waypoints ?? [])},\n  "trails": ${list(m.trails ?? [])}\n}\n`;
 }
 
 /** FNV-1a (32 bit) of a string, as 8 hex digits. */

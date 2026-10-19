@@ -33,6 +33,14 @@ async function start(): Promise<void> {
   if (import.meta.env.DEV) (window as unknown as { __graao: unknown }).__graao = app;
   await app.load((f, label) => setProgress(0.12 + f * 0.86, label));
   setProgress(1, 'Pronto');
+  // ?editor (development): the map editor takes the loaded world instead of the game (src/editor/MapEditor.ts).
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has('editor')) {
+    const { MapEditor } = await import('./editor/MapEditor');
+    new MapEditor(app).start();
+    boot.classList.add('reveal');
+    setTimeout(() => boot.remove(), 1200);
+    return;
+  }
   enter.hidden = false;
   enter.focus();
   // ?auto skips the ENTER click (development and automated tests).

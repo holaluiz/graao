@@ -9,7 +9,7 @@ describe('saved keyboard bindings', () => {
       result.forward = 'KeyI';
       expect(DEFAULT_BINDINGS.forward).toBe('KeyW');
     }
-    expect(BINDING_ACTIONS).toHaveLength(18);
+    expect(BINDING_ACTIONS).toHaveLength(20);
   });
 
   it('preserves valid custom mappings while filling new or corrupt saved fields', () => {
@@ -29,7 +29,7 @@ describe('saved keyboard bindings', () => {
     expect(result.back).toBe('KeyW');
     expect(result.sprint).toBe('Space');
     expect(result.left).toBe('KeyA');
-    expect(new Set(Object.values(result)).size).toBe(18);
+    expect(new Set(Object.values(result)).size).toBe(20);
     expect(Object.values(result).every(isBindingCode)).toBe(true);
   });
 

@@ -67,7 +67,7 @@ export function applyStatus(
   updateStatusEffects(runtime, now);
   let duration = Math.min(ABILITY_RULES.maxStatusSeconds, durationSeconds) * 1000;
   if (kind !== 'speed') {
-    let resistance = (kind === 'slow' || kind === 'silence') ? Math.max(0, Math.min(0.8, passiveResistance)) : 0;
+    let resistance = (kind === 'slow' || kind === 'silence') && Number.isFinite(passiveResistance) ? Math.max(0, Math.min(0.8, passiveResistance)) : 0;
     for (const entry of runtime.resistances) if (entry.kinds.includes(kind)) resistance = Math.max(resistance, entry.factor);
     if (resistance >= 1) return false;
     duration = Math.max(ABILITY_RULES.minDebuffMs, duration * (1 - resistance));
@@ -80,11 +80,10 @@ export function applyStatus(
   }
   const magnitude = kind === 'slow' ? Math.max(ABILITY_RULES.minSlowFactor, Math.min(1, factor))
     : kind === 'speed' ? Math.max(1, Math.min(ABILITY_RULES.maxSpeedFactor, factor)) : 1;
-  const previous = runtime.effects.find((effect) => effect.kind === kind && effect.source === source);
+  const previous = runtime.effects.find((effect) => effect.kind === kind && effect.source === source && effect.factor === magnitude);
   if (previous) {
     // Each source refreshes its own effect only; a stronger short slow cannot inherit another source's duration.
-    previous.factor = magnitude;
-    previous.endsAt = now + duration;
+    previous.endsAt = Math.max(previous.endsAt, now + duration);
     return true;
   }
   runtime.effects.push({ id: runtime.nextId++, kind, source, factor: magnitude, startedAt: now, endsAt: now + duration });

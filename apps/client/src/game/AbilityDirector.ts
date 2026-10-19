@@ -13,15 +13,19 @@
 import * as THREE from 'three';
 import {
   GRAAbilitySystem,
+  createAbilityBarrier,
   castOrigin,
   defaultLoadout,
   lobDirection,
   newVitals,
+  newAbilityRuntime,
+  passiveModifiers,
   rayPlayers,
   regenMana,
   resetCooldowns,
   resolveTargetPoint,
   stepProjectile,
+  statusModifiers,
   projectileReach,
   type AbilityActor,
   type ProjectileBody,
@@ -35,6 +39,8 @@ import {
   VEL_SCALE,
   type AbilityRequestMsg,
   type AbilityResultMsg,
+  type AbilityStateMsg,
+  type AbilityRevealMsg,
   type GameEvent,
   type RoomStateMsg,
   type SelfStatusMsg,
@@ -47,6 +53,7 @@ import type { GraaoCharacter } from '../character/GraaoCharacter';
 import type { AbilitySlotView } from '../ui/Hud';
 import { DecalMode, Shape } from '../render/vfx/GRAVFXSystem';
 import type { UltimateMark } from '../render/vfx/UltimateMarks';
+import { AbilityWorldPresentation } from '../render/vfx/AbilityWorldPresentation';
 import { AbilityController } from './AbilityController';
 import { keyLabel } from './KeyBindings';
 
@@ -101,6 +108,7 @@ interface Aura {
   def: AbilityDefinition;
   until: number;
   acc: number;
+  seq: number;
 }
 
 /** The local player as an ability actor for solo practice (its state is the live predicted state). */
@@ -112,6 +120,7 @@ class SoloActor implements AbilityActor {
   castUntil = 0;
   slowUntil = 0;
   slowFactor = 1;
+  runtime = newAbilityRuntime(Date.now());
   constructor(private readonly app: GraaoApp) {}
   get state() {
     return this.app.local.state;
@@ -120,6 +129,7 @@ class SoloActor implements AbilityActor {
 
 export class AbilityDirector {
   readonly ctl = new AbilityController();
+  readonly world: AbilityWorldPresentation;
   private online = false;
   private readonly sent = new Map<number, SentCast>();
   private readonly projectiles: VisualProjectile[] = [];
@@ -137,8 +147,11 @@ export class AbilityDirector {
   private soloActor: SoloActor | null = null;
   private readonly tmp = new THREE.Vector3();
   private readonly tmp2 = new THREE.Vector3();
+  private readonly deniedAt = new Array<number>(4).fill(-Infinity);
 
-  constructor(private readonly app: GraaoApp) {}
+  constructor(private readonly app: GraaoApp) {
+    this.world = new AbilityWorldPresentation(app.r.scene, app.world.physics, app.r.camera, document.getElementById('ui')!);
+  }
 
   private get me(): number {
     return this.app.net?.myIndex ?? 0;
@@ -154,6 +167,9 @@ export class AbilityDirector {
 
   /** Entering the world (solo or online). */
   enter(online: boolean): void {
+    this.solo?.clear();
+    this.world.clear();
+    this.world.mirrorCollisions = online;
     this.online = online;
     this.sent.clear();
     this.projectiles.length = 0;
@@ -178,6 +194,9 @@ export class AbilityDirector {
           if (this.app.local.nextSeq === cmdSeq) this.app.local.scheduleDash(dir, distance, duration);
         },
         emit: (e) => this.onEvent(e),
+        sendPrivate: (_actor, message) => this.onReveal(message),
+        createBarrier: (_view, frame) => createAbilityBarrier(this.app.world.physics, frame),
+        teleport: (_actor, feet, facing) => this.app.local.teleport(feet, facing),
       });
       this.ctl.setLoadout(actor.loadout);
       this.setMark(this.me, actor.loadout[ULTIMATE_SLOT]!, this.app.character);
@@ -189,6 +208,17 @@ export class AbilityDirector {
   onRespawn(): void {
     this.ctl.reset();
     this.ultKnown = false;
+    this.world.clearReveals();
+    this.world.removeAttachment(this.me);
+  }
+
+  setAbilityState(state: AbilityStateMsg): void { this.world.setState(state); }
+  onReveal(message: AbilityRevealMsg): void { this.world.onReveal(message); }
+  clearWorld(): void {
+    this.solo?.clear(); this.world.clear();
+    for (const entry of this.marks.values()) this.app.vfx.detachMark(entry.mark);
+    this.marks.clear(); this.remoteFx.clear();
+    this.projectiles.length = this.auras.length = this.timers.length = 0;
   }
 
   casting(): boolean {
@@ -206,7 +236,11 @@ export class AbilityDirector {
       this.syncSolo();
     }
     for (let k = 0; k < ACTIONS.length; k++) if (app.input.consume(ACTIONS[k]!)) this.press(k);
-    app.local.slow = this.ctl.slowNow(now);
+    app.local.slow = this.ctl.speed;
+    app.local.state.rooted = now < this.ctl.rootedEnd;
+    app.local.state.noSprint = now < this.ctl.noSprintEnd;
+    app.local.state.airControl = this.ctl.airControl;
+    app.local.state.sprintSpeed = this.ctl.sprintSpeed;
     for (let i = this.timers.length - 1; i >= 0; i--) {
       if (now >= this.timers[i]!.at) {
         const t = this.timers[i]!;
@@ -218,6 +252,7 @@ export class AbilityDirector {
     this.updateAuras(dt, now);
     this.updateStatusFx(dt, now);
     this.updateHud(now);
+    this.world.update(this.serverNow());
   }
 
   /** Can this player fight right now (phase rule mirror; the server decides). */
@@ -232,6 +267,7 @@ export class AbilityDirector {
 
   private press(slot: number): void {
     const app = this.app;
+    if (this.ctl.def(slot).kind === 'passive') return;
     if (!app.input.locked) return;
     if (app.local.state.swimming && app.combat.alive) {
       app.hud.notice('NADANDO · SEM MAGIAS NA ÁGUA', 1.1);
@@ -248,6 +284,7 @@ export class AbilityDirector {
     }
     const now = performance.now();
     const p = this.ctl.press(slot, now, app.combat.alive, this.canFight());
+    if (!p) return;
     const def = p.def;
     const cam = app.r.camera;
     const origin = cam.getWorldPosition(new THREE.Vector3());
@@ -312,8 +349,16 @@ export class AbilityDirector {
     const a = this.soloActor;
     if (!a) return;
     const n = Date.now();
+    const status = statusModifiers(a.runtime, n);
+    const passive = passiveModifiers(a.loadout, a.runtime.passive, n, a.vitals.alive);
+    const until = (kind: string) => Math.max(0, ...a.runtime.effects.filter((effect) => effect.kind === kind).map((effect) => effect.endsAt));
     this.ctl.applyServer(
-      { weapon: 0, ammo: [], reloading: false, reloadEndsAt: 0, alive: true, respawnAt: 0, shotSeq: -1, mana: Math.floor(a.vitals.mana + 1e-6), cd: [...a.cooldownEnds], castUntil: a.castUntil, abilitySeq: -1, slowUntil: a.slowUntil, slow: Math.round(a.slowFactor * 100), wpn: [], res: [], inv: [], useUntil: 0, useItem: -1 },
+      { weapon: 0, ammo: [], reloading: false, reloadEndsAt: 0, alive: true, respawnAt: 0, shotSeq: -1, mana: Math.floor(a.vitals.mana + 1e-6), cd: [...a.cooldownEnds], castUntil: a.castUntil, abilitySeq: -1, slowUntil: a.slowUntil, slow: Math.round(a.slowFactor * 100), wpn: [], res: [], inv: [], useUntil: 0, useItem: -1,
+        tempShield: a.vitals.temporaryShield ?? 0, tempShieldUntil: a.vitals.temporaryShieldUntil ?? 0,
+        silencedUntil: until('silence'), rootedUntil: until('root'), noSprintUntil: until('noSprint'),
+        speed: Math.round(status.speedFactor * 100), airControl: Math.round(passive.airControl * 100), sprintSpeed: Math.round(passive.speed * 100),
+        passiveActive: a.loadout.map((id) => ABILITIES[id].kind === 'passive' && a.runtime.passive.active),
+      },
       performance.now(),
       n,
       (t) => performance.now() + (t - n),
@@ -329,6 +374,8 @@ export class AbilityDirector {
     const cast = this.sent.get(r.s);
     this.sent.delete(r.s);
     if (r.ok && cast) {
+      const who = this.characterOf(this.me);
+      if (who) this.world.onCast(this.me, cast.def, who.character.root, this.serverNow(), cast.dir);
       if (res.late) this.presentCast(this.me, cast.def, cast.dir, cast.point, true, cast.seq);
       // Own telegraphs wait for the server's yes (a refused one would linger on the ground).
       this.telegraph(this.me, cast.def, cast.dir, cast.point, true);
@@ -338,10 +385,13 @@ export class AbilityDirector {
       app.local.cancelDash(cast.cmdSeq);
       this.cancelPredicted(cast.seq);
     }
+    const now = performance.now();
+    if (now - (this.deniedAt[r.k] ?? -Infinity) < 600) return;
+    this.deniedAt[r.k] = now;
     switch (r.r) {
       case AbilityReject.NO_MANA:
-        app.hud.notice('SEM MANA', 1.0);
         app.hud.abilityDenied(r.k);
+        app.hud.manaDenied();
         app.audio.play('ab.denied');
         break;
       case AbilityReject.COOLDOWN:
@@ -356,6 +406,10 @@ export class AbilityDirector {
       case AbilityReject.BLOCKED:
         app.hud.notice('SEM LINHA DE VISÃO', 1.0);
         app.hud.abilityDenied(r.k);
+        break;
+      case AbilityReject.SILENCED:
+        app.hud.abilityDenied(r.k);
+        app.audio.play('ab.denied');
         break;
       case AbilityReject.BAD_TARGET:
         app.hud.notice('ALVO INVÁLIDO', 1.0);
@@ -374,6 +428,8 @@ export class AbilityDirector {
     const net = this.app.net;
     if (!net) return;
     this.ctl.applyServer(s, performance.now(), net.serverNow(), (t) => this.toLocal(t));
+    if (s.abilityMovement) this.app.local.state.abilityMovement = { ...s.abilityMovement, ...(s.abilityMovement.anchor ? { anchor: { ...s.abilityMovement.anchor } } : {}) };
+    else delete this.app.local.state.abilityMovement;
   }
 
   onRoomState(m: RoomStateMsg): void {
@@ -415,6 +471,8 @@ export class AbilityDirector {
   onEvent(e: GameEvent): void {
     const me = this.me;
     switch (e.e) {
+      case 'abilityEntity': this.world.onEntity(e.entity); break;
+      case 'abilityEntityEnd': this.world.removeEntity(e.id); break;
       case 'cast': {
         if (e.by === me) return; // presented on prediction or on the late acceptance
         if (!isAbilityId(e.a)) return;
@@ -423,6 +481,8 @@ export class AbilityDirector {
         const point = e.p ? { x: e.p[0] / POS_SCALE, y: e.p[1] / POS_SCALE, z: e.p[2] / POS_SCALE } : undefined;
         this.presentCast(e.by, def, dir, point, false, e.s);
         this.telegraph(e.by, def, dir, point, false);
+        const who = this.characterOf(e.by);
+        if (who) this.world.onCast(e.by, def, who.character.root, this.serverNow(), dir);
         break;
       }
       case 'proj': {
@@ -468,6 +528,7 @@ export class AbilityDirector {
       case 'fx':
         this.statusFx(e.target, e.k, e.v, e.by);
         break;
+      case 'elim': this.world.removeAttachment(e.target); break;
     }
   }
 
@@ -541,7 +602,7 @@ export class AbilityDirector {
     }
     // Areas that follow the caster (gust, cyclone) get an aura of particles for their lifetime.
     const area = def.effects.find((e) => e.kind === 'area') as Extract<AbilityEffect, { kind: 'area' }> | undefined;
-    if (area?.follow) this.auras.push({ index: by, def, until: performance.now() + (castTime + area.delay + Math.max(0, area.pulses - 1) * area.interval) * 1000 + 150, acc: 0 });
+    if (area?.follow) this.auras.push({ index: by, def, until: performance.now() + (castTime + area.delay + Math.max(0, area.pulses - 1) * area.interval) * 1000 + 150, acc: 0, seq: mine ? seq : -1 });
   }
 
   /** WORLD warning everyone sees: ground ring for areas, a lane for charged shots. */
@@ -588,6 +649,7 @@ export class AbilityDirector {
   }
 
   private cancelPredicted(seq: number): void {
+    for (let i = this.auras.length - 1; i >= 0; i--) if (this.auras[i]!.seq === seq && this.auras[i]!.index === this.me) this.auras.splice(i, 1);
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i]!;
       if (p.mine && p.seq === seq) {
@@ -840,15 +902,19 @@ export class AbilityDirector {
     const slots: AbilitySlotView[] = this.ctl.loadout.map((id: AbilityId, i) => {
       const def = ABILITIES[id];
       const left = this.ctl.cooldownLeft(i, now);
-      const state: AbilitySlotView['state'] = !alive || !fight ? 'locked' : casting && i === this.ctl.castSlot ? 'casting' : left > 0 ? 'cooldown' : mana < def.manaCost ? 'nomana' : 'ready';
-      return { key: keyLabel(this.app.input.keyFor(ACTIONS[i]!)), name: def.name, icon: def.presentation.icon, color: def.presentation.color, cost: def.manaCost, ultimate: i === ULTIMATE_SLOT, cd: this.ctl.cooldownFrac(i, now), secondsLeft: left, state };
+      const state: AbilitySlotView['state'] = !alive ? 'disabled' : def.kind === 'passive' ? 'passive' : !fight ? 'disabled'
+        : now < this.ctl.silencedEnd && !def.tags.includes('cleanse') ? 'silenced'
+          : now < this.ctl.blockedEnd && !def.tags.includes('cleanse') ? 'blocked'
+            : this.ctl.targetState(i, now) ?? (casting && i === this.ctl.castSlot ? 'casting' : left > 0 ? 'cooldown' : mana < def.manaCost ? 'nomana' : 'ready');
+      return { key: keyLabel(this.app.input.keyFor(ACTIONS[i]!)), name: def.name, description: def.blurb, kind: def.kind, active: alive && this.ctl.passiveActive[i], icon: def.presentation.icon, color: def.presentation.color, cost: def.manaCost, ultimate: i === ULTIMATE_SLOT, cd: this.ctl.cooldownFrac(i, now), secondsLeft: left, state };
     });
     hud.setAbilities(slots);
     hud.setEffects(Math.max(0, (this.ctl.slowEnd - now) / 1000), this.ctl.slowFactor);
+    hud.setAbilityStatus(Math.max(0, (this.ctl.silencedEnd - now) / 1000), now < this.ctl.temporaryShieldEnd ? this.ctl.temporaryShield : 0);
     // Ultimate charged (cooldown over, alive, allowed to fight — never announced aboard the UFO or mid-drop):
     // URGENT once, then the HUD settles to RELEVANT/QUIET.
     const ult = this.ctl.loadout[ULTIMATE_SLOT]!;
-    const ready = alive && fight && this.ctl.cooldownLeft(ULTIMATE_SLOT, now) <= 0;
+    const ready = alive && fight && now >= this.ctl.silencedEnd && now >= this.ctl.blockedEnd && this.ctl.cooldownLeft(ULTIMATE_SLOT, now) <= 0;
     if (this.ultKnown && ready && !this.ultWasReady) {
       hud.ultimateReady(ABILITIES[ult].name);
       this.app.audio.play('ult.ready');
@@ -859,6 +925,6 @@ export class AbilityDirector {
 
   /** F3: live ability visuals. */
   stats(): string {
-    return `${this.projectiles.length} projéteis · ${this.auras.length} auras · ${this.marks.size} marcas`;
+    return `${this.projectiles.length} projéteis · ${this.auras.length} auras · ${this.marks.size} marcas · ${this.world.stats()}`;
   }
 }

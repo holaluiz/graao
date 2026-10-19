@@ -123,10 +123,12 @@ mod('pilotis-volume', 'Bloco sobre pilotis: volume', 'alta', (() => {
   return P;
 })());
 mod('rampa-pilotis', 'Rampa com guarda-corpo', 'passagem', [
-  // Ramp rising toward +Z from the ground to the upper floor (20°), on a central wall.
-  slope(0, 0.95, 0, 0, 9.2, PIL.floor, 0.3, 'brancoModerno'),
+  // Ramp rising toward +Z from the ground to the upper floor (20°), on a central wall; it runs on 3.2 m into the ground
+  // past its foot, so it meets the garden as a slope wherever the ground under the block falls away.
+  slope(0, 0.95, -3.2, (-3.2 * PIL.floor) / 9.2, 9.2, PIL.floor, 0.3, 'brancoModerno'),
   ...[-1, 1].map((sx) => slope(sx * 1.02, 0.08, 0, 0.9, 9.2, PIL.floor + 0.9, 0.9, 'brancoModerno')),
-  box(0, PIL.floor / 2 - 0.2, 6.5, 0.3, PIL.floor / 2 - 0.1, 0.3, 'brancoModerno'),
+  // Support wall under the ramp, up to its underside.
+  span(-0.3, -0.5, 6.2, 0.3, (6.2 * PIL.floor) / 9.2 - 0.35, 6.8, 'brancoModerno'),
   span(-0.95, PIL.floor - 0.3, 9.1, 0.95, PIL.floor, 10.4, 'brancoModerno'),
   ...[-1, 1].map((sx) => span(sx * 0.95, PIL.floor, 9.1, sx * 1.1, PIL.floor + 0.9, 10.4, 'brancoModerno')),
 ]);
@@ -157,16 +159,28 @@ mod('deck-madeira', 'Deck de madeira', 'passagem', [
   box(0, 1.0, 2.15, 2.6, 0.04, 0.05, 'madeiraEscura', near),
   ...[-2.5, -1.25, 0, 1.25, 2.5].map((x) => box(x, 0.5, 2.15, 0.04, 0.5, 0.04, 'madeiraEscura', near)),
 ]);
-/** Footbridge over the water, 8 m along Z, 1.8 m wide, railings (movement only) and stilts. */
-mod('passarela-lago', 'Passarela sobre o lago 8 m', 'passagem', [
-  box(0, -0.1, 0, 0.9, 0.12, 4.1, 'deck'),
-  ...[-1, 1].flatMap((sx) => [
-    box(sx * 0.88, 0.5, 0, 0.03, 0.5, 4.1, 'brancoModerno', { solid: 'move', visible: false }),
-    box(sx * 0.88, 1.0, 0, 0.04, 0.04, 4.1, 'brancoModerno', near),
-    ...[-3.6, -1.2, 1.2, 3.6].map((z) => box(sx * 0.88, 0.5, z, 0.03, 0.5, 0.03, 'brancoModerno', near)),
-  ]),
-  ...[-3.8, 0, 3.8].flatMap((z) => [-0.75, 0.75].map((x) => cyl(x, -3.0, z, 0.1, 2.9, 'brancoModerno', { seg: 6 }))),
-]);
+/**
+ * Footbridges over the water along Z, 1.8 m wide, railings (movement only) and stilts every ≈ 4 m. Each end runs on
+ * as a gentle ramp 0.6 m down into the bank, so a shore a little under the deck is a slope, not a ledge.
+ */
+function lakeFootbridge(len: number): KitPart[] {
+  const h = len / 2;
+  const posts = Math.max(2, Math.round(len / 3.8) + 1);
+  return [
+    box(0, -0.1, 0, 0.9, 0.12, h, 'deck'),
+    slope(0, 0.9, -h - 2.0, -0.6, -h + 0.1, 0, 0.24, 'deck'),
+    slope(0, 0.9, h - 0.1, 0, h + 2.0, -0.6, 0.24, 'deck'),
+    ...[-1, 1].flatMap((sx) => [
+      box(sx * 0.88, 0.5, 0, 0.03, 0.5, h, 'brancoModerno', { solid: 'move', visible: false }),
+      box(sx * 0.88, 1.0, 0, 0.04, 0.04, h, 'brancoModerno', near),
+      ...Array.from({ length: posts }, (_, i) => box(sx * 0.88, 0.5, -h + 0.1 + (i * (len - 0.2)) / (posts - 1), 0.03, 0.5, 0.03, 'brancoModerno', near)),
+    ]),
+    ...Array.from({ length: posts }, (_, i) => -h + 0.3 + (i * (len - 0.6)) / (posts - 1)).flatMap((z) => [-0.75, 0.75].map((x) => cyl(x, -3.0, z, 0.1, 2.9, 'brancoModerno', { seg: 6 }))),
+  ];
+}
+mod('passarela-lago', 'Passarela sobre o lago 8 m', 'passagem', lakeFootbridge(8.2));
+/** The long footbridge from the north shore to the island (one rigid piece: on a 100 m planet it rises 0.35 m at the ends). */
+mod('passarela-ilha', 'Passarela da ilha 17 m', 'passagem', lakeFootbridge(16.8));
 /** Blue-and-white tile panel on a white frame (freestanding cover, 4 × 2.6 m); original pattern. */
 mod('painel-azulejo', 'Painel de azulejos', 'alta', [
   box(0, 1.4, 0, 2.1, 1.4, 0.15, 'brancoModerno'),

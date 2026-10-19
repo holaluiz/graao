@@ -8,7 +8,7 @@ import { CharacterMotor, cloneCharacterState, createCharacterState, headUnderWat
 import { applyDrowning, newVitals } from './combat';
 import { landedInWater } from './deploy';
 import { GROUPS_PROP_QUERY, quatFromUp } from './physics';
-import { latLonToDir, northTangent, transportTangent } from './sphere';
+import { latLonToDir, northTangent, headingTangent, transportTangent } from './sphere';
 import { createGameWorld } from './world';
 
 const world = await createGameWorld({ includeVisual: false });
@@ -160,15 +160,17 @@ describe('spherical character controller', () => {
   });
 
   it('runs a full lap around the planet without flips, NaNs or getting stuck', () => {
-    // Run along the meridian through the village plaza, heading north up Rua do Norte (the spawn itself faces the
-    // Casa da Laje's wall: a straight runner would just stand against it) and on around the planet.
-    const lapDir = latLonToDir(8.9, 0.35);
+    // From the largo of the Vila das Lanternas, heading south past the fountain and down toward the córrego (north, the
+    // ladeira and the stairway end at the chapel's closed back wall: a straight runner would just stand against it),
+    // and on around the planet.
+    const lapDir = latLonToDir(6.4, 1.39);
     const lapGround = world.terrain.surfaceAt(lapDir);
-    const s = createCharacterState({ x: lapGround.x + lapDir.x * 0.3, y: lapGround.y + lapDir.y * 0.3, z: lapGround.z + lapDir.z * 0.3 }, northTangent(lapDir));
+    const south = { x: -northTangent(lapDir).x, y: -northTangent(lapDir).y, z: -northTangent(lapDir).z };
+    const s = createCharacterState({ x: lapGround.x + lapDir.x * 0.3, y: lapGround.y + lapDir.y * 0.3, z: lapGround.z + lapDir.z * 0.3 }, south);
     const body = motor.createBody(s);
     const inp = newInput();
-    let heading = northTangent(spawnDir);
-    let prevUp = v3normalize(s.pos);
+    let heading = { ...south };
+    let prevUp = lapDir;
     let travelled = 0;
     let steps = 0;
     let stuckSteps = 0;
@@ -331,9 +333,9 @@ describe('water: wading, swimming and plunges (Lago Espelho, ≈ 3.6 m deep in t
     return { s, body: motor.createBody(s) };
   };
   /** Steps with a constant heading transported along the way (like a held W key). */
-  const walk = (s: ReturnType<typeof overLake>['s'], body: ReturnType<typeof overLake>['body'], steps: number, buttons = 0, each?: () => void) => {
+  const walk = (s: ReturnType<typeof overLake>['s'], body: ReturnType<typeof overLake>['body'], steps: number, buttons = 0, each?: () => void, yaw = 0) => {
     const inp = newInput();
-    let heading = northTangent(v3normalize(s.pos));
+    let heading = headingTangent(v3normalize(s.pos), yaw);
     let prevUp = v3normalize(s.pos);
     for (let i = 0; i < steps; i++) {
       const up = v3normalize(s.pos);
@@ -368,6 +370,7 @@ describe('water: wading, swimming and plunges (Lago Espelho, ≈ 3.6 m deep in t
     let swimSteps = 0;
     let leftWaterAt = -1;
     let step = 0;
+    // South, to the open shore (the north shore is the orla: its decks and the pavilion stand in the water).
     walk(s, body, 60 * 14, 0, () => {
       step++;
       const up = v3normalize(s.pos);
@@ -377,7 +380,7 @@ describe('water: wading, swimming and plunges (Lago Espelho, ≈ 3.6 m deep in t
         maxSwim = Math.max(maxSwim, flat);
         if (step > 60) minSwim = Math.min(minSwim, flat);
       } else if (leftWaterAt < 0) leftWaterAt = step;
-    });
+    }, 180);
     body.dispose();
     expect(swimSteps).toBeGreaterThan(60);
     expect(maxSwim).toBeLessThanOrEqual(MOVEMENT.swimSpeed + 1e-6);
