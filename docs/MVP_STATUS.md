@@ -29,6 +29,28 @@ O Draft deixou as abas e páginas: um tabuleiro só ([Draft](UX/ABILITY_DRAFT.md
 - Achado de CSS: a classe global `.blocked` (retícula de mira) posiciona em absoluto qualquer elemento com esse nome;
   o Draft usa `passive-limit`.
 
+## 2026-10-20 — Master Plan 3.0, fase A: a falha de reconexão e os estados da conexão
+
+O plano 3.0 mantém o contrato do 2.0 e agrupa os marcos em fases A–H ([roadmap](product/MASTER_GAME_DESIGN_2.md#master-plan-30-20102026));
+o baseline desta rodada está em [BASELINE_2026_10.md](qa/BASELINE_2026_10.md).
+
+- **Repositório:** tudo da `mvp-online-1v1` já estava em `main` (PR #12, `049fdf1`, deploy `success`) — o relatório
+  dava o merge como pendente. A branch `fix/online-empurrao` (protocolo 10, fila de 1 s) nunca entrou e ficou
+  obsoleta; decisão no backlog.
+- **A falha intermitente de reconexão era do teste:** o servidor anuncia "B voltou" antes de mandar `JOIN_ROOM` a B,
+  e o teste só escutava depois do `onReconnect` de B (perdia a mensagem em ≈ 11 % das reconexões, medido). Corrigido
+  sem afrouxar prazo; 20/20 sob carga de CPU.
+- **Rede da sala na aba:** estados explícitos (`SIGNALING → CONNECTING → CONNECTED ⇄ RECONNECTING → FAILED/CLOSED`);
+  cada tentativa de reconexão termina com a janela (antes, uma sinalização travada deixava "reconectando…" para
+  sempre); "vaga não guardada" deixou de aparecer como "a conexão caiu". F3 mostra **conexão** e **rota** ICE
+  (`direta`/`STUN`/`relay`) — o dado da alfa externa para decidir sobre TURN.
+- **Navegador (WebRTC real, um PC):** entrar, cair e voltar em 0,3 s, desistir em 19,0 s com a sinalização travada
+  (a anfitriã libera a vaga) e a anfitriã fechando a sala.
+
+**Validação:** suíte completa 695/695 em 72 arquivos (13 testes novos); typecheck, build e ESLint dos arquivos
+alterados passaram. **Gate da fase A continua BLOCKED** por máquinas e redes: nada foi testado entre PCs
+([roteiro](networking/HOST_VALIDATION.md)).
+
 ## 2026-10-20 — Mundo vertical, 5ª rodada: magias como rotas, parede não é chão, loot nas alturas
 
 Continuação da frente vertical ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)):

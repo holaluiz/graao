@@ -13,7 +13,13 @@ reescrevem o mesmo contrato.
       mensagem clara). `shared/validate.ts parseRoomListing` + `map` na metadata da sala; para salas do Graao Host
       (desligado no site, ADR-006) exige coluna na central (migration nova) e nova versão do app — só se ele voltar.
       Feito quando uma sala de outro mapa aparece indisponível na lista nas origens ligadas (dedicado, navegador).
-- [ ] Merge de `origin/main` (PR #7, `.env.production`) nesta branch antes do próximo PR.
+- [x] Merge de `origin/main` (PR #7, `.env.production`) nesta branch antes do próximo PR — tudo em `main` desde o
+      PR #12 (`049fdf1`, deploy `success`).
+- [x] Falha intermitente `keeps the seat while B reconnects` (fase A do plano 3.0): era o teste escutando depois do
+      evento; corrigida e provada ([baseline §3](../qa/BASELINE_2026_10.md#3-a-falha-intermitente-de-reconexão--causa-e-correção)).
+- [x] Estados explícitos da conexão (`LinkState`), tentativas de reconexão cortadas na janela, rota ICE no F3.
+- [ ] Decidir sobre `fix/online-empurrao` (`82f3b5a`): fila de comandos de 1 s também no servidor dedicado. Feito
+      quando houver medida de engasgo na rede real (alfa) mostrando se a fila de 12 descarta comandos fora da sala na aba.
 
 ## M2 — Alfa externa
 

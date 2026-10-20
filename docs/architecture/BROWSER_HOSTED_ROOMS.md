@@ -47,7 +47,11 @@ inputs, fire, ready… ◄═══ [type, payload] ═════════�
   tab hidden while a guest played.
 - A guest's connection that dies (or stays "disconnected" for 4 s) is a **drop**: the room holds the seat for
   `RECONNECT_SECONDS` while `PeerLink` signals again and sends `["rejoin", {sid, token}]`; only the right token takes
-  the seat back. Measured: back in 0.9 s, same seat.
+  the seat back. Measured: back in 0.9 s, same seat (0.3 s on 2026-10-20). Every attempt is cut at the end of the
+  window (one second early), so a negotiation that never answers ends in `FAILED` at ≈ 19 s instead of keeping
+  "reconectando…" up; a room that says the seat is gone ends it as `REFUSED`. The link's state
+  (`SIGNALING → CONNECTING → CONNECTED ⇄ RECONNECTING → FAILED/CLOSED`, table in `RoomLink.ts`) and the ICE route of
+  the selected candidate pair (`direta`, `STUN`, `relay`) show in F3 and in the console.
 - The **host leaving** (SAIR DA SALA, closing or reloading the tab) closes the room: guests get `["bye", 4100]` →
   "Quem criou a sala saiu: a sala fechou." There is no host migration.
 - A code another host already answers for (very rare) makes the host rebuild the room with a new code.
