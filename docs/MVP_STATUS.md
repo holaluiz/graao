@@ -24,6 +24,8 @@ O Draft deixou as abas e páginas: um tabuleiro só ([Draft](UX/ABILITY_DRAFT.md
   [draft-visual-checks.json](UX/draft-visual-checks.json)) e `tools/ux/draft-live.ts` — draft real pela tela contra o
   servidor com 9 bots, uma rodada fechada pelo tempo, 10 combinações válidas ([draft-live-check.json](UX/draft-live-check.json)).
 - Regras, protocolo e servidor intocados. **M3: TESTING** — falta celular físico e pessoas em redes diferentes.
+- `pnpm typecheck` e `pnpm build` verdes; `pnpm exec vitest run`: 695/695 em 72 arquivos (525 s), incluindo os 3
+  arquivos novos/reescritos do Draft (32 testes de UI).
 - Achado de CSS: a classe global `.blocked` (retícula de mira) posiciona em absoluto qualquer elemento com esse nome;
   o Draft usa `passive-limit`.
 
