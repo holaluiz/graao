@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- Template of the link preview image; `node tools/ux/og-image.mjs` fills in the background and renders it at 1200×630. -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: #f3e9d8; }
+  .frame { position: relative; width: 1200px; height: 630px; font-family: ui-rounded, 'SF Pro Rounded', 'Nunito', 'Segoe UI', system-ui, sans-serif; color: #2a2130; }
+  .shot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 38%; }
+  /* Soft cream wash on the left so the card reads against the blue house. */
+  .wash { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(243,233,216,.55) 0%, rgba(243,233,216,.18) 34%, rgba(243,233,216,0) 50%); }
+  .card { position: absolute; left: 40px; top: 40px; width: 392px; padding: 18px 26px 24px; background: #f3e9d8;
+    border: 4px solid #2a2130; border-radius: 26px; box-shadow: 0 8px 0 #2a2130; }
+  .card svg { display: block; width: 100%; height: auto; margin: -6px 0 4px; }
+  .tag { font-weight: 900; font-size: 33px; line-height: 1.08; letter-spacing: -.01em; }
+  .sub { margin-top: 12px; font-weight: 700; font-size: 21px; line-height: 1.3; opacity: .8; }
+  .sub span { display: block; }
+  .cta { position: absolute; right: 44px; bottom: 44px; font-weight: 900; font-size: 24px; letter-spacing: .1em;
+    padding: 14px 30px; border: 4px solid #2a2130; border-radius: 999px; background: #ffd36e; box-shadow: 0 6px 0 #2a2130; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <img class="shot" src="BG_URL" alt="" />
+    <div class="wash"></div>
+    <div class="card">
+      <!-- The boot logo of apps/client/index.html, unchanged. -->
+      <svg viewBox="0 0 340 120" role="img" aria-label="graao">
+        <path d="M28 70c-8-30 30-52 70-46 26 4 40-12 74-10 44 2 84 14 120 30 22 10 26 34 6 48-30 20-80 22-130 18-48-4-128 6-140-40z" fill="#ffd36e" opacity=".9"/>
+        <path d="M60 40c30-16 80-8 110-14" stroke="#ec8a3a" stroke-width="6" fill="none" stroke-linecap="round" opacity=".55"/>
+        <text x="170" y="86" text-anchor="middle" font-family="ui-rounded, 'SF Pro Rounded', Nunito, 'Segoe UI', system-ui, sans-serif"
+          font-size="78" font-weight="900" fill="#2a2130" letter-spacing="2">graao</text>
+        <circle cx="282" cy="30" r="9" fill="#4f86c9"/><circle cx="282" cy="30" r="9" fill="none" stroke="#2a2130" stroke-width="3"/>
+      </svg>
+      <div class="tag">Battle Royale no navegador</div>
+      <div class="sub"><span>Um planeta mineiro em miniatura</span><span>até 10 na sala · 40 magias</span></div>
+    </div>
+    <div class="cta">SEM INSTALAR NADA</div>
+  </div>
+</body>
+</html>
