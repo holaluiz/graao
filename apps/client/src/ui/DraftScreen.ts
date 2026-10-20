@@ -1,10 +1,17 @@
-/** Server-authoritative ability draft: inspect, select locally, then confirm a secret choice. */
-import { ABILITIES, isAbilityId, type AbilityDefinition, type AbilityEffect } from '@graao/game-data';
+/**
+ * Server-authoritative Ability Draft on one board: ten participants (five above, five below), a central bar with the
+ * clock, round, turn and your build, the 30 basics and the 10 Ultimates always visible, and a detail panel. Inspect,
+ * select locally, then confirm a secret choice; the server validates and reveals.
+ */
+import { ABILITIES, isAbilityId, type AbilityDefinition, type AbilityId } from '@graao/game-data';
 import type { CharacterAppearance, DraftStateMsg } from '@graao/shared';
 import type { Cue } from '../audio/GRAAudioManager';
 import { ABILITY_ICONS } from './abilityIcons';
 import { avatarPortrait } from './creatorPreviews';
 import { DEFAULT_BINDINGS, keyLabel, type KeyBindings } from '../game/KeyBindings';
+import { CATEGORY_INFO, abilityFacts, abilityHeadline, abilityStats, abilityTagLabels, draftCatalogSections, kindLabel } from './abilityFacts';
+import { ROLE_INFO, abilityRoles, synergyHints, synergyMatches } from './abilityRoles';
+import { abilityDiagram } from './abilityDiagram';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -16,34 +23,21 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?:
   return e;
 }
 
-function icon(def: AbilityDefinition, cls: string): SVGSVGElement {
+function svg(viewBox: string, cls: string, body: string, color?: string): SVGSVGElement {
   const s = document.createElementNS(SVG_NS, 'svg');
   s.setAttribute('class', cls);
-  s.setAttribute('viewBox', '-16 -16 32 32');
+  s.setAttribute('viewBox', viewBox);
   s.setAttribute('aria-hidden', 'true');
-  s.innerHTML = ABILITY_ICONS[def.presentation.icon];
-  s.style.color = def.presentation.color;
+  s.innerHTML = body;
+  if (color) s.style.color = color;
   return s;
 }
 
-const TAGS: Record<string, string> = {
-  projectile: 'Projétil', damage: 'Dano', area: 'Área', slow: 'Lentidão', dash: 'Avanço',
-  mobility: 'Mobilidade', defensive: 'Defesa', shield: 'Escudo', heal: 'Cura', knockback: 'Empurrão',
-};
-const number = (n: number) => String(Math.round(n * 10) / 10).replace('.', ',');
-const seconds = (n: number) => `${number(n)} s`;
-const CATEGORIES = { all: 'Todas', mobility: 'Mobilidade', control: 'Controle', defense: 'Defesa', exploration: 'Exploração', passive: 'Passivas', ultimate: 'Supremos' } as const;
-type Category = keyof typeof CATEGORIES;
+const icon = (def: AbilityDefinition, cls: string) => svg('-16 -16 32 32', cls, ABILITY_ICONS[def.presentation.icon]!, def.presentation.color);
+const categoryGlyph = (def: AbilityDefinition) => svg('-8 -8 16 16', 'dc-glyph', CATEGORY_INFO[def.category].glyph);
+const ORDINAL = ['1ª', '2ª', '3ª'];
 
-/** The same page powers keyboard selection and cards, so hidden pages cannot be selected by accident. */
-export function draftCatalogPage(pool: readonly string[], category: Category, page: number, size: number): { ids: string[]; page: number; pages: number; total: number } {
-  const filtered = pool.filter((id) => isAbilityId(id) && (category === 'all' || ABILITIES[id].category === category));
-  const pages = Math.max(1, Math.ceil(filtered.length / size));
-  const current = Math.max(0, Math.min(page, pages - 1));
-  return { ids: filtered.slice(current * size, (current + 1) * size), page: current, pages, total: filtered.length };
-}
-
-/** Ownership can repeat across players in larger rooms, but never inside a player's own build. */
+/** Ownership can repeat across players, but never inside a player's own build; at most one passive. */
 export function isDraftChoiceAvailable(s: DraftStateMsg, me: number, id: string | null): boolean {
   if (!id || !isAbilityId(id) || s.stage !== 'pick' || !s.pool.includes(id) || ABILITIES[id].slotType !== s.kind) return false;
   const seat = s.seats.find((x) => x.index === me);
@@ -58,33 +52,23 @@ export function shouldAutoConfirmDraftChoice(s: DraftStateMsg, me: number, selec
   return left > 0 && left <= 200 && selected !== s.mine && sending === null && isDraftChoiceAvailable(s, me, selected);
 }
 
-function effectFacts(effects: readonly AbilityEffect[]): string[] {
-  return effects.flatMap((e): string[] => {
-    switch (e.kind) {
-      case 'damage': return [`${number(e.amount)} de dano`];
-      case 'heal': return [`Recupera ${number(e.amount)} de vida`];
-      case 'shield': return [`Recupera ${number(e.amount)} de escudo`];
-      case 'slow': return [`Reduz a velocidade em ${number((1 - e.factor) * 100)}% por ${seconds(e.duration)}`];
-      case 'dash': return [`Avança ${number(e.distance)} m em ${seconds(e.duration)}`];
-      case 'knockback': return ['Empurra e levanta os alvos atingidos'];
-      case 'temporaryShield': return [`${number(e.amount)} de proteção temporária por ${seconds(e.duration)}`];
-      case 'status': return [`${({ slow: 'Lentidão', root: 'Imobilização', silence: 'Silenciamento', noSprint: 'Sem corrida', speed: 'Velocidade' } as const)[e.status]} por ${seconds(e.duration)}`];
-      case 'cleanse': return [`Remove efeitos negativos e resiste à reaplicação por ${seconds(e.duration)}`];
-      case 'mobility': return [e.duration ? `Movimento especial por até ${seconds(e.duration)}` : 'Impulso de mobilidade', ...(e.distance ? [`Deslocamento de até ${number(e.distance)} m`] : [])];
-      case 'barrier': return [`${e.count} cobertura${e.count > 1 ? 's' : ''} · ${number(e.health)} de resistência cada`, `Duração máxima: ${seconds(e.duration)}`];
-      case 'reveal': return [`Informação autorizada por ${seconds(e.duration)}`, `Raio: ${number(e.radius)} m`];
-      case 'trap': return [`Armadilha identificável por até ${seconds(e.duration)}`, ...effectFacts(e.effects)];
-      case 'cloud': return [`Oculta a visão · ${number(e.radius)} m de raio por ${seconds(e.duration)}`];
-      case 'wave': return [`Percorre até ${number(e.distance)} m pela superfície`, `Largura: ${number(e.width)} m`];
-      case 'portal': return [`Portais por ${seconds(e.duration)} · só o conjurador atravessa`, `Até ${number(e.range)} m entre os extremos`];
-      case 'frontShield': return [`Bloqueia disparos num setor frontal de ${number(e.arc)}°`, `Protege por até ${seconds(e.duration)} · impede disparar`];
-      case 'projectile': return effectFacts(e.onHit);
-      case 'area': return [
-        `Área de ${number(e.radius)} m de raio${e.delay ? ` · aviso de ${seconds(e.delay)}` : ''}${e.pulses > 1 ? ` · ${e.pulses} pulsos` : ''}`,
-        ...effectFacts(e.effects),
-      ];
-      default: return [];
+/**
+ * What a participant's four slots show. `confirmed` = public pick, or your own choice already sent; `preview` = your
+ * local selection; `hidden` = someone else locked a secret choice; `current` = still choosing; `empty` = later round.
+ * Another player's pending choice is never exposed, only their lock.
+ */
+export type DraftSlotState = 'empty' | 'current' | 'preview' | 'confirmed' | 'hidden';
+export function draftSlots(s: DraftStateMsg, seatIndex: number, me: number, preview: string | null): { state: DraftSlotState; id: string | null }[] {
+  const seat = s.seats.find((x) => x.index === seatIndex);
+  return Array.from({ length: s.rounds }, (_, k) => {
+    const committed = seat?.picks[k];
+    if (committed) return { state: 'confirmed', id: committed };
+    if (!seat || s.stage !== 'pick' || k !== s.round || !seat.picking) return { state: 'empty', id: null };
+    if (seatIndex === me) {
+      if (preview && preview !== s.mine) return { state: 'preview', id: preview };
+      return s.mine ? { state: 'confirmed', id: s.mine } : { state: 'current', id: null };
     }
+    return { state: seat.locked ? 'hidden' : 'current', id: null };
   });
 }
 
@@ -96,50 +80,51 @@ export interface DraftActions {
 export class DraftScreen {
   readonly el = el('div', 'draft');
   private readonly shell = el('div', 'draft-shell', this.el);
-  private readonly head = el('header', 'draft-head', this.shell);
-  private readonly heading = el('div', 'draft-heading', this.head);
-  private readonly kicker = el('div', 'draft-kicker', this.heading, 'ABILITY DRAFT');
-  private readonly title = el('h1', 'draft-title', this.heading, 'Escolha suas habilidades');
-  private readonly subtitle = el('p', 'draft-subtitle', this.heading, '3 básicas + 1 Supremo, uma por rodada. Clique numa carta, confira os detalhes e confirme.');
-  private readonly clock = el('div', 'draft-clock', this.head);
-  private readonly roundEl = el('div', 'draft-round', this.clock);
+  private readonly seatsTop = el('section', 'draft-seats top', this.shell);
+  private readonly bar = el('header', 'draft-bar', this.shell);
+  private readonly clock = el('div', 'draft-clock', this.bar);
+  private readonly kicker = el('span', 'draft-kicker', this.clock, 'ABILITY DRAFT');
+  private readonly roundEl = el('strong', 'draft-round', this.clock);
   private readonly timerText = el('strong', 'draft-timer-text', this.clock);
   private readonly timer = el('div', 'draft-timer', this.clock);
   private readonly timerFill = el('i', '', this.timer);
-  private readonly build = el('section', 'draft-build', this.shell);
+  private readonly turn = el('div', 'draft-turn', this.bar);
+  private readonly turnTitle = el('strong', 'draft-turn-title', this.turn);
+  private readonly turnSub = el('span', 'draft-turn-sub', this.turn);
+  private readonly build = el('div', 'draft-build', this.bar);
   private readonly buildHead = el('div', 'draft-build-head', this.build);
   private readonly buildLabel = el('strong', '', this.buildHead, 'SUA COMBINAÇÃO');
   private readonly buildProgress = el('span', 'draft-build-progress', this.buildHead);
   private readonly buildSlots = el('div', 'draft-build-slots', this.build);
-  private readonly workspace = el('div', 'draft-workspace', this.shell);
-  private readonly catalogue = el('section', 'draft-catalogue', this.workspace);
-  private readonly catalogueHead = el('div', 'draft-catalogue-head', this.catalogue);
-  private readonly catalogueTitle = el('strong', '', this.catalogueHead);
-  private readonly priorityEl = el('span', 'draft-priority', this.catalogueHead);
-  private readonly filters = el('nav', 'draft-filters', this.catalogue);
-  private readonly cardsEl = el('div', 'draft-cards', this.catalogue);
-  private readonly pagination = el('nav', 'draft-pagination', this.catalogue);
-  private readonly details = el('aside', 'draft-details', this.workspace);
+  private readonly board = el('div', 'draft-board', this.shell);
+  private readonly pools = el('div', 'draft-pools', this.board);
+  private readonly basicPool = el('section', 'draft-pool', this.pools);
+  private readonly basicHead = el('div', 'draft-pool-head', this.basicPool);
+  private readonly basicNote = el('span', 'draft-pool-note', this.basicHead);
+  private readonly basicGrid = el('div', 'draft-grid basic', this.basicPool);
+  private readonly ultimatePool = el('section', 'draft-pool ultimate', this.pools);
+  private readonly ultimateHead = el('div', 'draft-pool-head', this.ultimatePool);
+  private readonly ultimateNote = el('span', 'draft-pool-note', this.ultimateHead);
+  private readonly ultimateGrid = el('div', 'draft-grid ultimate', this.ultimatePool);
+  private readonly details = el('aside', 'draft-details', this.board);
   private readonly detailBody = el('div', 'draft-detail-body', this.details);
-  private readonly detailHead = el('div', 'draft-detail-head', this.detailBody);
-  private readonly detailArt = el('div', 'draft-detail-art', this.detailHead);
-  private readonly detailIdentity = el('div', 'draft-detail-identity', this.detailHead);
-  private readonly detailCategory = el('div', 'draft-detail-category', this.detailIdentity);
-  private readonly detailName = el('h2', 'draft-detail-name', this.detailIdentity);
-  private readonly detailDescription = el('p', 'draft-detail-description', this.detailBody);
-  private readonly detailStats = el('div', 'draft-detail-stats', this.detailBody);
-  private readonly detailEffects = el('ul', 'draft-detail-effects', this.detailBody);
-  private readonly detailTags = el('div', 'dc-tags', this.detailBody);
+  private readonly detailHead = el('div', 'dd-head', this.detailBody);
+  private readonly detailArt = el('div', 'dd-art', this.detailHead);
+  private readonly detailIdentity = el('div', 'dd-identity', this.detailHead);
+  private readonly detailCategory = el('div', 'dd-category', this.detailIdentity);
+  private readonly detailName = el('h2', 'dd-name', this.detailIdentity);
+  private readonly detailDescription = el('p', 'dd-desc', this.detailBody);
+  private readonly detailStats = el('dl', 'dd-stats', this.detailBody);
+  private readonly detailPreview = el('figure', 'dd-preview', this.detailBody);
+  private readonly detailEffects = el('ul', 'dd-effects', this.detailBody);
+  private readonly detailTags = el('div', 'dd-tags', this.detailBody);
+  private readonly detailSynergy = el('div', 'dd-synergy', this.detailBody);
   private readonly actionsEl = el('div', 'draft-actions', this.details);
   private readonly statusEl = el('div', 'draft-status', this.actionsEl);
   private readonly confirm = el('button', 'draft-confirm', this.actionsEl, 'CONFIRMAR ESCOLHA');
   private readonly change = el('button', 'draft-change', this.actionsEl, 'ALTERAR SELEÇÃO');
   private readonly help = el('p', 'draft-help', this.actionsEl);
-  private readonly participants = el('section', 'draft-participants', this.shell);
-  private readonly participantsHead = el('div', 'draft-participants-head', this.participants);
-  private readonly participantsLabel = el('strong', '', this.participantsHead, 'NA PARTIDA');
-  private readonly participantsProgress = el('span', '', this.participantsHead);
-  private readonly seatsEl = el('div', 'draft-seats', this.participants);
+  private readonly seatsBottom = el('section', 'draft-seats bottom', this.shell);
   private state: DraftStateMsg | null = null;
   private me = -1;
   private names: (index: number) => string = (i) => `Jogador ${i + 1}`;
@@ -152,49 +137,41 @@ export class DraftScreen {
   private lastTick = -1;
   private windowEnds = 0;
   private windowTotal = 1;
-  private cardKey = '';
   private detailKey = '';
-  private readonly cards = new Map<string, HTMLButtonElement>();
+  private readonly cards = new Map<AbilityId, HTMLButtonElement>();
   private keyBindings: KeyBindings = { ...DEFAULT_BINDINGS };
-  private category: Category = 'all';
-  private page = 0;
-  private visibleIds: string[] = [];
-  private readonly small = window.matchMedia('(max-width: 560px), (max-height: 620px)');
-  private readonly short = window.matchMedia('(max-height: 450px)');
 
   constructor(private readonly actions: DraftActions) {
     this.el.hidden = true;
     this.el.setAttribute('aria-label', 'Escolha de habilidades');
+    this.seatsTop.setAttribute('aria-label', 'Participantes');
+    this.seatsBottom.setAttribute('aria-label', 'Participantes');
     this.build.setAttribute('aria-label', 'Sua combinação de quatro habilidades');
-    this.cardsEl.setAttribute('aria-label', 'Habilidades disponíveis');
-    this.filters.setAttribute('aria-label', 'Categorias de magias');
-    this.pagination.setAttribute('aria-label', 'Páginas de magias');
-    this.small.addEventListener('change', () => { this.cardKey = ''; this.render(); });
-    this.short.addEventListener('change', () => { this.cardKey = ''; this.render(); });
+    this.details.setAttribute('aria-label', 'Detalhes da habilidade');
+    this.turnTitle.setAttribute('role', 'status');
     this.statusEl.setAttribute('role', 'status');
+    const sections = draftCatalogSections();
+    el('strong', '', this.basicHead, `BÁSICAS · ${sections.basic.length}`);
+    this.basicHead.prepend(this.legend());
+    el('strong', '', this.ultimateHead, `SUPREMOS · ${sections.ultimate.length}`);
+    this.basicHead.append(this.basicNote);
+    this.ultimateHead.append(this.ultimateNote);
+    this.basicGrid.setAttribute('aria-label', 'Habilidades básicas');
+    this.ultimateGrid.setAttribute('aria-label', 'Supremos');
+    for (const id of sections.basic) this.basicGrid.appendChild(this.card(id));
+    for (const id of sections.ultimate) this.ultimateGrid.appendChild(this.card(id));
+    this.pools.addEventListener('mouseleave', () => this.inspect(this.selected ?? this.state?.mine ?? this.inspected));
     this.confirm.type = this.change.type = 'button';
     this.confirm.addEventListener('click', () => this.submitSelection());
     this.change.addEventListener('click', () => this.startChange());
-    window.addEventListener('keydown', (e) => {
-      if (this.el.hidden || e.repeat || !this.state || e.altKey || e.ctrlKey || e.metaKey) return;
-      // Enter is the explicit confirm step; digits only select a preview.
-      if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
-        e.preventDefault();
-        this.submitSelection();
-        return;
-      }
-      const n = Number(e.key);
-      if (!Number.isInteger(n) || n < 1 || n > this.visibleIds.length) return;
-      e.preventDefault();
-      this.choose(this.visibleIds[n - 1]!);
-    });
+    window.addEventListener('keydown', (e) => this.onKey(e));
   }
 
   show(on: boolean): void {
     this.el.hidden = !on;
     if (!on) {
       this.state = null;
-      this.cardKey = this.detailKey = '';
+      this.detailKey = '';
       this.selected = this.inspected = this.sending = null;
       this.editing = this.automaticPreview = false;
       this.windowEnds = 0;
@@ -218,15 +195,18 @@ export class DraftScreen {
     this.names = names;
     if (looks) this.looks = looks;
     if (newWindow) {
-      if (!prev || prev.round !== s.round) { this.category = s.kind === 'ultimate' ? 'ultimate' : 'all'; this.page = 0; }
       this.selected = s.mine;
       this.sending = null;
       this.editing = false;
       this.automaticPreview = !!prev && prev.round === s.round && s.stage === 'reveal' && this.automaticPreview;
       this.lastTick = -1;
       this.windowEnds = 0;
-      const revealed = s.reveal.find((x) => x.index === me)?.a;
-      this.inspected = s.mine ?? revealed ?? s.pool.find((id) => isDraftChoiceAvailable(s, me, id)) ?? s.pool[0] ?? null;
+      if (!prev || prev.round !== s.round || s.stage === 'reveal') {
+        const revealed = s.reveal.find((x) => x.index === me)?.a;
+        const current = this.inspected && isAbilityId(this.inspected) && ABILITIES[this.inspected].slotType === s.kind ? this.inspected : null;
+        this.inspected = s.mine ?? revealed ?? current ?? s.pool.find((id) => isDraftChoiceAvailable(s, me, id)) ?? s.pool[0] ?? null;
+        this.detailKey = '';
+      }
     } else {
       if (s.mine === this.sending) {
         this.sending = null;
@@ -255,14 +235,100 @@ export class DraftScreen {
     }
     this.timerFill.style.width = s.stage === 'done' ? '0%' : `${Math.min(1, left / this.windowTotal) * 100}%`;
     this.timerText.textContent = s.stage === 'pick' ? `${Math.ceil(left)} s` : s.stage === 'reveal' ? 'Revelando' : 'Pronto!';
-    const choosing = s.stage === 'pick' && !!s.seats.find((x) => x.index === this.me)?.picking && (!s.mine || this.editing);
-    const urgent = choosing && left <= 5;
+    const urgent = this.choosing(s) && left <= 5;
     this.clock.classList.toggle('urgent', urgent);
     if (urgent) {
       const tick = Math.ceil(left);
       if (tick !== this.lastTick && tick > 0) this.actions.sound('draft.tick');
       this.lastTick = tick;
     } else this.lastTick = -1;
+  }
+
+  private choosing(s: DraftStateMsg): boolean {
+    return s.stage === 'pick' && !!s.seats.find((x) => x.index === this.me)?.picking && (!s.mine || this.editing);
+  }
+
+  /** The local preview shown in your build (null once confirmed and not being changed). */
+  private preview(s: DraftStateMsg): string | null {
+    return !s.mine || this.editing ? this.selected : null;
+  }
+
+  private card(id: AbilityId): HTMLButtonElement {
+    const def = ABILITIES[id];
+    const b = el('button', 'draft-card');
+    b.type = 'button';
+    b.dataset.id = id;
+    b.dataset.category = def.category;
+    b.dataset.kind = def.kind;
+    b.style.setProperty('--cat', CATEGORY_INFO[def.category].color);
+    b.style.setProperty('--ab-color', def.presentation.color);
+    b.style.setProperty('--ab-color2', def.presentation.color2);
+    const band = el('span', 'dc-band', b);
+    band.appendChild(categoryGlyph(def));
+    el('span', 'dc-category', band, def.kind === 'passive' ? 'PASSIVA' : CATEGORY_INFO[def.category].label.toUpperCase());
+    const art = el('span', 'dc-art', b);
+    art.appendChild(icon(def, 'dc-icon'));
+    el('span', 'dc-name', b, def.name);
+    b.dataset.headline = abilityHeadline(def);
+    el('span', 'dc-headline', b, b.dataset.headline);
+    el('span', 'dc-blurb', b, def.blurb);
+    const meta = el('span', 'dc-meta', b);
+    if (def.kind === 'passive') el('span', 'dc-auto', meta, 'AUTOMÁTICA');
+    else {
+      el('span', 'dc-mana', meta, `◆ ${def.manaCost}`);
+      el('span', 'dc-cd', meta, `⟳ ${String(def.cooldown).replace('.', ',')} s`);
+    }
+    const roles = el('span', 'dc-roles', b);
+    for (const role of abilityRoles(def)) el('span', 'dc-role', roles, ROLE_INFO[role].label);
+    el('span', 'dc-stamp', b);
+    el('span', 'dc-syn', b, '✦');
+    b.addEventListener('click', () => { this.inspect(id); this.choose(id); });
+    b.addEventListener('mouseenter', () => this.inspect(id));
+    b.addEventListener('focus', () => this.inspect(id));
+    this.cards.set(id, b);
+    return b;
+  }
+
+  private legend(): HTMLElement {
+    const legend = el('span', 'draft-legend');
+    for (const category of ['mobility', 'control', 'defense', 'exploration', 'passive'] as const) {
+      const item = el('span', '', legend);
+      item.style.setProperty('--cat', CATEGORY_INFO[category].color);
+      item.appendChild(svg('-8 -8 16 16', 'dc-glyph', CATEGORY_INFO[category].glyph));
+      item.append(CATEGORY_INFO[category].label);
+    }
+    return legend;
+  }
+
+  private onKey(e: KeyboardEvent): void {
+    if (this.el.hidden || !this.state || e.altKey || e.ctrlKey || e.metaKey) return;
+    const card = e.target instanceof HTMLElement ? e.target.closest<HTMLButtonElement>('.draft-card') : null;
+    if (card && e.key.startsWith('Arrow')) {
+      e.preventDefault();
+      this.moveFocus(card, e.key);
+      return;
+    }
+    if (e.repeat || e.key !== 'Enter') return;
+    // Enter on the selected card (or outside any button) is the explicit confirm step; on another card it selects.
+    if (card ? card.dataset.id === this.selected : !(e.target instanceof HTMLButtonElement)) {
+      e.preventDefault();
+      this.submitSelection();
+    }
+  }
+
+  private moveFocus(card: HTMLButtonElement, key: string): void {
+    const grid = card.parentElement!;
+    const items = [...grid.children] as HTMLButtonElement[];
+    const columns = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length);
+    const i = items.indexOf(card);
+    const step = key === 'ArrowLeft' ? -1 : key === 'ArrowRight' ? 1 : key === 'ArrowUp' ? -columns : key === 'ArrowDown' ? columns : 0;
+    let next = items[i + step];
+    // Down from the last basic row continues in the Ultimates and up from them returns to the basics.
+    if (!next && (key === 'ArrowDown' || key === 'ArrowUp')) {
+      const other = (grid === this.basicGrid ? this.ultimateGrid : this.basicGrid).children;
+      next = (key === 'ArrowDown' ? other[Math.min(i % columns, other.length - 1)] : other[other.length - 1]) as HTMLButtonElement | undefined;
+    }
+    next?.focus();
   }
 
   /** Reopens the current round's choice (the confirmed one stands until a new confirmation). */
@@ -293,7 +359,8 @@ export class DraftScreen {
     this.render();
   }
 
-  private inspect(id: string): void {
+  private inspect(id: string | null): void {
+    if (!id || id === this.inspected) return;
     this.inspected = id;
     this.renderDetails();
   }
@@ -301,166 +368,174 @@ export class DraftScreen {
   private render(): void {
     const s = this.state;
     if (!s) return;
-    const round = Math.min(s.round, s.rounds - 1);
     this.el.dataset.kind = s.kind;
     this.el.dataset.stage = s.stage;
-    this.roundEl.textContent = s.stage === 'done' ? 'COMBINAÇÃO COMPLETA' : `RODADA ${round + 1} DE ${s.rounds} · ${s.kind === 'ultimate' ? 'SUPREMO' : 'BÁSICA'}`;
-    this.catalogueTitle.textContent = s.stage === 'done' ? 'Tudo pronto para a partida' : s.kind === 'ultimate' ? 'Agora: escolha seu Supremo' : `Agora: escolha sua ${round + 1}ª habilidade básica`;
-    const top = s.priority[0];
-    this.priorityEl.hidden = !s.unique || s.stage === 'done' || top === undefined || s.seats.length < 2;
-    this.priorityEl.classList.toggle('mine', top === this.me);
-    this.priorityEl.textContent = top === this.me ? '★ Sua prioridade' : `★ Prioridade: ${this.names(top ?? 0)}`;
+    this.renderBar(s);
     this.renderBuild(s);
-    this.renderFilters(s);
     this.renderCards(s);
     this.renderDetails();
     this.renderActions(s);
     this.renderSeats(s);
   }
 
+  private renderBar(s: DraftStateMsg): void {
+    const round = Math.min(s.round, s.rounds - 1);
+    const seat = s.seats.find((x) => x.index === this.me);
+    this.roundEl.textContent = s.stage === 'done' ? 'COMBINAÇÃO COMPLETA' : `RODADA ${round + 1} DE ${s.rounds} · ${s.kind === 'ultimate' ? 'SUPREMO' : 'BÁSICA'}`;
+    const waiting = s.seats.filter((x) => x.picking && !x.locked);
+    const ready = s.seats.length - waiting.length;
+    const what = s.kind === 'ultimate' ? 'seu Supremo' : `sua ${ORDINAL[round] ?? `${round + 1}ª`} habilidade básica`;
+    let title: string;
+    let tone = 'quiet';
+    if (s.stage === 'done') title = 'Combinações prontas · preparando a partida';
+    else if (s.stage === 'reveal') { title = `Revelando as escolhas da rodada ${round + 1}`; tone = 'relevant'; }
+    else if (!seat) title = 'Você acompanha o draft e joga a próxima partida';
+    else if (this.choosing(s)) { title = `Sua vez · escolha ${what}`; tone = 'mine'; }
+    else title = waiting.length ? `Escolha garantida · aguardando ${waiting.length === 1 ? this.names(waiting[0]!.index) : `${waiting.length} jogadores`}` : 'Todos escolheram';
+    this.turnTitle.textContent = title;
+    this.turn.dataset.tone = tone;
+    const top = s.priority[0];
+    const priority = s.unique && s.stage === 'pick' && top !== undefined && s.seats.length > 1 ? ` · ★ prioridade: ${top === this.me ? 'sua' : this.names(top)}` : '';
+    this.turnSub.textContent = s.stage === 'pick' ? `${ready} de ${s.seats.length} confirmaram · todos escolhem ao mesmo tempo${priority}` : s.stage === 'reveal' ? 'As escolhas reveladas ficam visíveis para todos' : 'Boa partida!';
+    this.basicNote.textContent = s.kind === 'basic' && s.stage !== 'done' ? `agora · ${ORDINAL[round] ?? ''} escolha` : 'rodadas 1–3';
+    this.ultimateNote.textContent = s.kind === 'ultimate' && s.stage !== 'done' ? 'agora · rodada 4' : 'rodada 4';
+  }
+
   private renderBuild(s: DraftStateMsg): void {
     const seat = s.seats.find((x) => x.index === this.me);
-    const pending = this.selected ?? s.mine;
-    const complete = seat?.picks.length ?? 0;
-    const selectedCount = complete + (s.stage === 'pick' && seat?.picking && pending ? 1 : 0);
-    const passives = seat?.picks.filter((id) => isAbilityId(id) && ABILITIES[id].kind === 'passive').length ?? 0;
-    this.buildProgress.textContent = `${selectedCount}/${s.rounds} selecionadas · ${passives}/1 passiva`;
+    const slots = draftSlots(s, this.me, this.me, this.preview(s));
+    const passives = slots.filter((x) => x.id && isAbilityId(x.id) && ABILITIES[x.id].kind === 'passive' && x.state === 'confirmed').length;
+    this.buildProgress.textContent = `${slots.filter((x) => x.id).length}/${s.rounds} · ${passives}/1 passiva`;
     this.buildSlots.replaceChildren();
-    for (let k = 0; k < s.rounds; k++) {
-      const current = s.stage === 'pick' && k === s.round && !!seat?.picking;
-      const committed = seat?.picks[k];
-      const id = committed ?? (current ? pending : null);
-      const slot = el('div', `draft-build-slot${k === s.rounds - 1 ? ' ultimate' : ''}${current ? ' current' : ''}${committed ? ' filled' : ''}`, this.buildSlots);
-      const passive = !!id && isAbilityId(id) && ABILITIES[id].kind === 'passive';
+    slots.forEach((slot, k) => {
+      const id = slot.id && isAbilityId(slot.id) ? slot.id : null;
+      const def = id ? ABILITIES[id] : null;
+      const sent = !seat?.picks[k] && slot.state === 'confirmed';
+      const box = el('div', `db-slot ${slot.state}${k === s.rounds - 1 ? ' ultimate' : ''}${sent ? ' sent' : ''}`, this.buildSlots);
       const binding = keyLabel(this.keyBindings[(['ability1', 'ability2', 'ability3', 'ultimate'] as const)[k]!]);
-      el('span', 'db-key', slot, passive ? 'P' : binding);
-      const art = el('span', 'db-art', slot);
-      if (id && isAbilityId(id)) art.appendChild(icon(ABILITIES[id], 'db-icon'));
+      el('span', 'db-key', box, def?.kind === 'passive' ? 'P' : binding);
+      const art = el('span', 'db-art', box);
+      if (def) art.appendChild(icon(def, 'db-icon'));
       else art.textContent = k === s.rounds - 1 ? '✦' : '+';
-      const identity = el('div', 'db-identity', slot);
-      el('span', 'db-kind', identity, passive ? 'PASSIVA · AUTOMÁTICA' : `${k === s.rounds - 1 ? 'SUPREMO' : `BÁSICA ${k + 1}`} · ${binding}`);
-      el('strong', 'db-name', identity, id && isAbilityId(id) ? ABILITIES[id].name : current ? 'Escolha agora' : 'A escolher');
-      el('span', 'db-state', identity, committed ? '✓ Confirmada' : current && id ? s.mine && !this.editing ? '✓ Confirmada · aguardando' : 'Prévia · falta confirmar' : current ? 'Sua vez de escolher' : `Rodada ${k + 1}`);
+      const identity = el('span', 'db-identity', box);
+      el('strong', 'db-name', identity, def ? def.name : slot.state === 'current' ? 'Escolha agora' : k === s.rounds - 1 ? 'Supremo' : `Básica ${k + 1}`);
+      el('span', 'db-state', identity, slot.state === 'preview' ? 'Prévia · falta confirmar' : sent ? '✓ Confirmada · aguardando' : slot.state === 'confirmed' ? '✓ Confirmada' : slot.state === 'current' ? 'Sua vez' : `Rodada ${k + 1}`);
+      box.title = def ? `${def.name} · ${def.kind === 'passive' ? 'passiva' : `tecla ${binding}`}` : `Rodada ${k + 1}`;
       // A confirmed choice can still be swapped while its round is open.
-      if (current && s.mine && !this.editing && !this.sending) {
-        const swap = el('button', 'db-swap', slot, 'Trocar');
+      if (sent && !this.editing && !this.sending) {
+        const swap = el('button', 'db-swap', box, 'Trocar');
         swap.type = 'button';
         swap.addEventListener('click', () => this.startChange());
       }
-    }
+    });
   }
 
-  private renderFilters(s: DraftStateMsg): void {
-    this.filters.replaceChildren();
-    const categories: Category[] = s.kind === 'ultimate' ? ['ultimate'] : ['all', 'mobility', 'control', 'defense', 'exploration', 'passive'];
-    for (const category of categories) {
-      const button = el('button', '', this.filters, CATEGORIES[category]);
-      button.type = 'button';
-      button.setAttribute('aria-pressed', String(this.category === category));
-      button.addEventListener('click', () => { this.category = category; this.page = 0; this.render(); });
-    }
+  /** Your build for synergy: committed picks plus the choice of this round (preview or confirmed). */
+  private buildIds(s: DraftStateMsg): AbilityId[] {
+    return draftSlots(s, this.me, this.me, this.preview(s)).flatMap((x) => (x.id && isAbilityId(x.id) ? [x.id] : []));
   }
 
   private renderCards(s: DraftStateMsg): void {
-    const size = this.short.matches ? 2 : this.small.matches ? 4 : 6;
-    const page = draftCatalogPage(s.pool, this.category, this.page, size);
-    this.page = page.page;
-    this.visibleIds = page.ids;
-    this.pagination.replaceChildren();
-    const previous = el('button', '', this.pagination, '←');
-    previous.type = 'button'; previous.disabled = page.page === 0; previous.setAttribute('aria-label', 'Página anterior de magias');
-    previous.addEventListener('click', () => { this.page--; this.render(); });
-    el('span', '', this.pagination, `${page.page + 1} / ${page.pages} · ${page.total} magias`);
-    const next = el('button', '', this.pagination, '→');
-    next.type = 'button'; next.disabled = page.page + 1 >= page.pages; next.setAttribute('aria-label', 'Próxima página de magias');
-    next.addEventListener('click', () => { this.page++; this.render(); });
-    const key = `${s.round}|${this.category}|${this.page}|${page.ids.join(',')}`;
-    if (key !== this.cardKey) {
-      this.cardKey = key;
-      this.cardsEl.replaceChildren();
-      this.cards.clear();
-      page.ids.forEach((id, i) => {
-        if (!isAbilityId(id)) return;
-        const def = ABILITIES[id];
-        const b = el('button', 'draft-card', this.cardsEl);
-        b.type = 'button';
-        b.style.setProperty('--ab-color', def.presentation.color);
-        b.style.setProperty('--ab-color2', def.presentation.color2);
-        el('span', 'dc-key', b, String(i + 1));
-        const art = el('span', 'dc-art', b);
-        art.appendChild(icon(def, 'dc-icon'));
-        el('span', 'dc-category', b, CATEGORIES[def.category]);
-        el('span', 'dc-name', b, def.name);
-        el('span', 'dc-blurb', b, def.blurb);
-        const stats = el('span', 'dc-stats', b);
-        if (def.kind === 'passive') el('span', 'dc-mana', stats, 'PASSIVA · AUTOMÁTICA');
-        else {
-          el('span', 'dc-mana', stats, `◆ ${def.manaCost} mana`);
-          el('span', 'dc-cd', stats, `⟳ ${seconds(def.cooldown)}`);
-        }
-        el('span', 'dc-stamp', b);
-        b.addEventListener('click', () => this.choose(id));
-        b.addEventListener('mouseenter', () => this.inspect(id));
-        b.addEventListener('focus', () => this.inspect(id));
-        this.cards.set(id, b);
-      });
-    }
     const owners = new Map(s.owners);
     const mySeat = s.seats.find((x) => x.index === this.me);
-    const revealed = new Map(s.reveal.map((r) => [r.a, r]));
+    const revealed = new Map<string, string[]>();
+    for (const r of s.reveal) revealed.set(r.a, [...(revealed.get(r.a) ?? []), this.names(r.index)]);
+    const passiveTaken = !!mySeat?.picks.some((pick) => isAbilityId(pick) && ABILITIES[pick].kind === 'passive');
+    const build = this.buildIds(s);
+    const canPick = !this.sending && (!s.mine || this.editing);
     for (const [id, b] of this.cards) {
+      const def = ABILITIES[id];
+      const active = def.slotType === s.kind && s.stage !== 'done';
       const owner = owners.get(id);
       const mine = !!mySeat?.picks.includes(id);
-      const taken = mine || (s.unique && owner !== undefined);
+      const taken = s.unique && owner !== undefined && !mine;
       const selected = this.selected === id && s.stage === 'pick';
       const confirmed = (s.mine === id || this.sending === id) && s.stage === 'pick';
-      // aria-disabled keeps even unavailable cards focusable so their effects can still be inspected.
-      const canChoose = !this.sending && (!s.mine || this.editing) && isDraftChoiceAvailable(s, this.me, id);
-      b.setAttribute('aria-disabled', String(!canChoose));
+      // aria-disabled keeps every card focusable so its effects can always be inspected.
+      const available = isDraftChoiceAvailable(s, this.me, id);
+      b.setAttribute('aria-disabled', String(!(canPick && available)));
       b.setAttribute('aria-pressed', String(selected));
+      b.classList.toggle('inactive', !active);
       b.classList.toggle('chosen', selected);
       b.classList.toggle('confirmed', confirmed);
       b.classList.toggle('sending', this.sending === id && s.mine !== id);
-      b.classList.toggle('taken', taken && !mine);
+      b.classList.toggle('taken', taken);
       b.classList.toggle('mine', mine);
-      const rev = revealed.get(id);
-      b.classList.toggle('revealed', !!rev);
-      b.classList.toggle('contested', !!rev?.contested);
+      const who = revealed.get(id);
+      b.classList.toggle('revealed', !!who);
+      const passiveLimit = active && def.kind === 'passive' && passiveTaken && !mine;
+      b.classList.toggle('blocked', passiveLimit);
+      const matches = active && available && build.length ? synergyMatches(id, build) : [];
+      b.classList.toggle('synergy', matches.length > 0);
+      const syn = b.querySelector('.dc-syn') as HTMLElement;
+      syn.title = matches.length ? `Combina com ${[...new Set(matches.map((m) => ABILITIES[m.partner].name))].join(' e ')}` : '';
       const stamp = b.querySelector('.dc-stamp') as HTMLElement;
-      const passiveLimit = isAbilityId(id) && ABILITIES[id].kind === 'passive' && mySeat?.picks.some((pick) => isAbilityId(pick) && ABILITIES[pick].kind === 'passive');
-      stamp.textContent = mine ? 'JÁ ESCOLHIDA' : passiveLimit ? 'LIMITE: 1 PASSIVA' : taken ? this.names(owner!) : confirmed ? 'CONFIRMADA' : selected ? 'SELECIONADA' : '';
-      b.setAttribute('aria-label', `${ABILITIES[id as keyof typeof ABILITIES]?.name ?? id}${taken ? `, ${mine ? 'já está na sua combinação' : `já é de ${this.names(owner!)}`}` : ''}${selected ? ', selecionada' : ''}${confirmed ? ', confirmada' : ''}`);
+      stamp.textContent = mine ? 'NA SUA COMBINAÇÃO' : passiveLimit ? 'LIMITE: 1 PASSIVA' : who ? (who.length > 1 ? `${who.length} JOGADORES` : who[0]!.toUpperCase())
+        : taken ? this.names(owner!) : confirmed ? 'CONFIRMADA' : selected ? 'SELECIONADA' : '';
+      const state = mine ? ', já está na sua combinação' : passiveLimit ? ', indisponível: limite de uma passiva' : !active ? `, disponível na ${def.slotType === 'ultimate' ? 'rodada 4' : 'rodadas 1 a 3'}` : '';
+      b.setAttribute('aria-label', `${def.name}, ${kindLabel(def).toLowerCase()}, ${b.dataset.headline}${state}${selected ? ', selecionada' : ''}${confirmed ? ', confirmada' : ''}${matches.length ? `, ${syn.title.toLowerCase()}` : ''}`);
     }
   }
 
   private renderDetails(): void {
     const s = this.state;
-    if (!s) return;
     const id = this.inspected;
-    if (!id || !isAbilityId(id) || this.detailKey === id) return;
-    this.detailKey = id;
+    if (!s || !id || !isAbilityId(id)) return;
+    const build = this.buildIds(s).filter((x) => x !== id);
+    const key = `${id}|${build.join(',')}`;
+    if (this.detailKey === key) return;
+    this.detailKey = key;
     const def = ABILITIES[id];
-    this.detailArt.replaceChildren(icon(def, 'draft-detail-icon'));
-    this.detailArt.style.setProperty('--ab-color', def.presentation.color);
-    this.detailArt.style.setProperty('--ab-color2', def.presentation.color2);
-    this.detailCategory.textContent = `${CATEGORIES[def.category]} · ${def.kind === 'passive' ? 'PASSIVA' : def.slotType === 'ultimate' ? 'SUPREMO' : 'ATIVA'}`;
+    this.details.style.setProperty('--cat', CATEGORY_INFO[def.category].color);
+    this.details.style.setProperty('--ab-color', def.presentation.color);
+    this.details.style.setProperty('--ab-color2', def.presentation.color2);
+    this.detailArt.replaceChildren(icon(def, 'dd-icon'));
+    this.detailCategory.replaceChildren(categoryGlyph(def), `${CATEGORY_INFO[def.category].label} · ${kindLabel(def)}`);
     this.detailName.textContent = def.name;
     this.detailDescription.textContent = def.blurb;
     this.detailStats.replaceChildren();
-    for (const [label, value] of [
-      ['MANA', def.kind === 'passive' ? 'Sem custo' : String(def.manaCost)],
-      ['RECARGA', def.kind === 'passive' ? 'Automática' : seconds(def.cooldown)],
-      ['ALCANCE', def.targetType === 'self' ? 'Em você' : `${number(def.range)} m`],
-    ]) {
-      const stat = el('div', '', this.detailStats);
-      el('span', '', stat, label);
-      el('strong', '', stat, value);
+    for (const stat of abilityStats(def)) {
+      const box = el('div', `dd-stat ${stat.key}`, this.detailStats);
+      el('dt', '', box, stat.label);
+      el('dd', '', box, stat.value);
     }
+    const diagram = abilityDiagram(def);
+    this.detailPreview.innerHTML = diagram.svg;
+    this.detailPreview.style.color = def.presentation.color;
+    el('figcaption', '', this.detailPreview, diagram.caption);
     this.detailEffects.replaceChildren();
-    if (def.kind === 'passive') el('li', '', this.detailEffects, 'Automática · não exige tecla nem consome Mana');
-    for (const fact of [...new Set(effectFacts(def.effects))].slice(0, 3)) el('li', '', this.detailEffects, fact);
+    if (def.kind === 'passive') el('li', '', this.detailEffects, 'Automática: não usa tecla nem Mana');
+    for (const fact of abilityFacts(def)) el('li', '', this.detailEffects, fact.text);
     this.detailTags.replaceChildren();
-    for (const t of def.tags) if (TAGS[t]) el('span', 'dc-tag', this.detailTags, TAGS[t]);
+    for (const role of abilityRoles(def)) {
+      const chip = el('span', 'dd-role', this.detailTags, ROLE_INFO[role].label);
+      chip.title = ROLE_INFO[role].hint;
+    }
+    for (const label of abilityTagLabels(def)) el('span', 'dd-tag', this.detailTags, label);
+    this.renderSynergy(id, build);
+  }
+
+  private renderSynergy(id: AbilityId, build: AbilityId[]): void {
+    this.detailSynergy.replaceChildren();
+    const matches = synergyMatches(id, build);
+    const hints = synergyHints(id);
+    if (!matches.length && !hints.length) {
+      this.detailSynergy.hidden = true;
+      return;
+    }
+    this.detailSynergy.hidden = false;
+    el('strong', 'dd-syn-title', this.detailSynergy, matches.length ? '✦ COMBINA COM SUA COMBINAÇÃO' : 'SINERGIAS POSSÍVEIS');
+    const lines = el('ul', '', this.detailSynergy);
+    if (matches.length) {
+      for (const m of matches.slice(0, 3)) {
+        const li = el('li', '', lines);
+        el('b', '', li, ABILITIES[m.partner].name);
+        li.append(` · ${ROLE_INFO[m.candidateRole].label} + ${ROLE_INFO[m.partnerRole].label}: ${m.synergy.text}`);
+      }
+    } else {
+      for (const h of hints.slice(0, 2)) el('li', '', lines, `${ROLE_INFO[h.has].label} + ${ROLE_INFO[h.wants].label}: ${h.synergy.text}`);
+    }
+    el('span', 'dd-syn-note', this.detailSynergy, 'Sugestão opcional: nenhuma combinação dá bônus.');
   }
 
   private renderActions(s: DraftStateMsg): void {
@@ -488,7 +563,7 @@ export class DraftScreen {
       const what = isAbilityId(s.lostTo.a) ? ABILITIES[s.lostTo.a].name : s.lostTo.a;
       text = `${this.names(s.lostTo.index)} tinha prioridade e ficou com ${what}. Escolha outra habilidade.`;
       tone = 'urgent';
-    } else text = this.selected ? `${selectedName} selecionada. Confirme sua escolha para esta rodada.` : 'Clique em uma habilidade e confirme sua escolha.';
+    } else text = this.selected ? `${selectedName} selecionada. Confirme para esta rodada.` : `Toque ou clique numa ${s.kind === 'ultimate' ? 'carta de Supremo' : 'carta básica'} e confirme.`;
     this.statusEl.textContent = text;
     this.statusEl.dataset.tone = tone;
     this.confirm.hidden = !choosing || confirmed;
@@ -496,37 +571,51 @@ export class DraftScreen {
     this.confirm.textContent = this.sending ? 'CONFIRMANDO…' : 'CONFIRMAR ESCOLHA';
     this.change.hidden = !choosing || !confirmed;
     this.change.disabled = !!this.sending;
-    this.help.textContent = s.stage !== 'pick' ? 'As habilidades reveladas ficam visíveis para todos.' : confirmed ? 'Você pode alterar enquanto esta rodada estiver aberta.' : `Teclas 1–${this.visibleIds.length} selecionam nesta página. Máximo: 1 passiva. Sem confirmar, a seleção é automática.`;
+    this.help.textContent = s.stage !== 'pick' ? 'As habilidades reveladas ficam visíveis para todos.'
+      : confirmed ? 'Você pode alterar enquanto esta rodada estiver aberta.'
+        : 'Setas navegam, Enter confirma. Máximo: 1 passiva. Sem confirmar, a seleção vale ao fim do tempo.';
   }
 
   private renderSeats(s: DraftStateMsg): void {
-    this.seatsEl.replaceChildren();
-    const ready = s.seats.filter((x) => x.locked || !x.picking).length;
-    this.participantsProgress.textContent = s.stage === 'pick' ? `${ready} / ${s.seats.length} confirmaram` : `${s.seats.length} jogadores · ${s.stage === 'done' ? 'prontos' : 'escolhas reveladas'}`;
     const ordered = [...s.seats].sort((a, b) => (a.index === this.me ? -1 : b.index === this.me ? 1 : a.index - b.index));
-    for (const seat of ordered) {
-      const confirmed = seat.locked || !seat.picking;
-      const row = el('div', `draft-seat${seat.index === this.me ? ' me' : ''}${confirmed ? ' ready' : ''}`, this.seatsEl);
-      row.title = this.names(seat.index);
-      const look = this.looks(seat.index);
-      const avatar = el('div', 'ds-avatar', row);
-      if (look) avatar.innerHTML = avatarPortrait(look);
-      el('div', 'ds-name', row, seat.index === this.me ? `${this.names(seat.index)} · você` : this.names(seat.index));
-      el('div', 'ds-status', row, s.stage === 'pick' ? confirmed ? '✓ Confirmou' : '◌ Escolhendo' : s.stage === 'done' ? '✓ Pronto' : '✓ Revelado');
-      const slots = el('div', 'ds-slots', row);
-      for (let k = 0; k < s.rounds; k++) {
-        const slot = el('div', `ds-slot${k === s.rounds - 1 ? ' ult' : ''}`, slots);
-        const id = seat.picks[k];
-        if (id && isAbilityId(id)) {
-          slot.classList.add('filled');
-          slot.appendChild(icon(ABILITIES[id], 'ds-icon'));
-          slot.title = ABILITIES[id].name;
-        } else if (k === s.round && s.stage === 'pick' && seat.picking) {
-          slot.classList.add('current');
-          // Pending opponents' choices are represented only by their public lock state.
-          el('span', 'ds-lock', slot, seat.locked ? '✓' : '?');
-        } else slot.textContent = String(k + 1);
+    const half = Math.ceil(ordered.length / 2);
+    const fresh = new Map(s.reveal.map((r) => [r.index, r]));
+    const row = (target: HTMLElement, seats: typeof ordered) => {
+      target.replaceChildren();
+      for (const seat of seats) {
+        const confirmed = seat.locked || !seat.picking;
+        const me = seat.index === this.me;
+        const box = el('div', `draft-seat${me ? ' me' : ''}${confirmed ? ' ready' : ' picking'}`, target);
+        box.title = this.names(seat.index);
+        const avatar = el('div', 'ds-avatar', box);
+        const look = this.looks(seat.index);
+        if (look) avatar.innerHTML = avatarPortrait(look);
+        const id = el('div', 'ds-id', box);
+        el('strong', 'ds-name', id, me ? `${this.names(seat.index)} · você` : this.names(seat.index));
+        el('span', 'ds-status', id, s.stage === 'pick' ? seat.picking ? seat.locked ? '✓ Confirmou' : 'Escolhendo…' : '✓ Garantida' : s.stage === 'done' ? '✓ Pronto' : '✓ Revelado');
+        const slots = el('div', 'ds-slots', box);
+        const reveal = fresh.get(seat.index);
+        draftSlots(s, seat.index, this.me, me ? this.preview(s) : null).forEach((slot, k) => {
+          const def = slot.id && isAbilityId(slot.id) ? ABILITIES[slot.id] : null;
+          const cell = el('div', `ds-slot ${slot.state}${k === s.rounds - 1 ? ' ult' : ''}`, slots);
+          if (def) {
+            cell.appendChild(icon(def, 'ds-icon'));
+            cell.title = `${def.name}${slot.state === 'preview' ? ' (prévia)' : ''}`;
+            if (reveal && reveal.a === slot.id && k === s.round) {
+              cell.classList.add('fresh');
+              if (reveal.auto) { cell.classList.add('auto'); cell.title += ' · escolhida ao fim do tempo'; }
+            }
+          } else if (slot.state === 'hidden') {
+            el('span', 'ds-lock', cell, '?');
+            cell.title = 'Escolha confirmada e oculta até a revelação';
+          } else if (slot.state === 'current') {
+            el('span', 'ds-lock', cell, '…');
+            cell.title = 'Escolhendo';
+          } else cell.textContent = k === s.rounds - 1 ? '✦' : String(k + 1);
+        });
       }
-    }
+    };
+    row(this.seatsTop, ordered.slice(0, half));
+    row(this.seatsBottom, ordered.slice(half));
   }
 }
