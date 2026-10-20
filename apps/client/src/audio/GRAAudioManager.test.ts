@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ABILITIES } from '@graao/game-data';
-import { GRAAudioManager, type AudioCategory, type AudioLoop, type Cue } from './GRAAudioManager';
+import { GRAAudioManager, sfxFile, type AudioCategory, type AudioLoop, type Cue } from './GRAAudioManager';
+import { SFX_BANK } from './sfxBank';
 
 const ambienceInstances = vi.hoisted(() => [] as { destination: unknown; update: ReturnType<typeof vi.fn> }[]);
 vi.mock('./Ambience', () => ({
@@ -14,6 +15,7 @@ class Parameter {
   value = 0;
   readonly targets: number[] = [];
   setTargetAtTime(value: number): void { this.value = value; this.targets.push(value); }
+  cancelScheduledValues(): void { /* nothing scheduled in the fake */ }
   setValueAtTime(value: number): void { this.value = value; }
   exponentialRampToValueAtTime(value: number): void { this.value = value; }
 }
@@ -35,11 +37,22 @@ class Node {
   connect<T>(destination: T): T { this.connections.push(destination); return destination; }
 }
 
+class FakeBuffer {
+  readonly data: Float32Array[];
+  label = '';
+  constructor(readonly numberOfChannels: number, readonly length: number, readonly sampleRate: number) {
+    this.data = Array.from({ length: numberOfChannels }, () => new Float32Array(length));
+  }
+  get duration(): number { return this.length / this.sampleRate; }
+  getChannelData(c = 0): Float32Array { return this.data[c]!; }
+  copyToChannel(src: Float32Array, c: number): void { this.data[c]!.set(src); }
+}
+
 class Context {
   static latest: Context;
   readonly destination = new Node();
   readonly gains: Node[] = [];
-  readonly sources: Node[] = [];
+  readonly sources: (Node & { buffer?: FakeBuffer })[] = [];
   currentTime = 8;
   sampleRate = 32;
   state = 'running';
@@ -51,8 +64,13 @@ class Context {
   createStereoPanner(): Node { return new Node(); }
   createOscillator(): Node { const node = new Node(); this.sources.push(node); return node; }
   createBufferSource(): Node { const node = new Node(); this.sources.push(node); return node; }
-  createBuffer(_channels: number, length: number): { getChannelData(): Float32Array } {
-    return { getChannelData: () => new Float32Array(length) };
+  createBuffer(channels: number, length: number, rate = 32): FakeBuffer { return new FakeBuffer(channels, length, rate); }
+  /** "Decodes" a bank file into 2000 samples at 48 kHz labelled by its name; hit.body's start with an MP3's priming. */
+  async decodeAudioData(data: ArrayBuffer): Promise<FakeBuffer> {
+    const buf = new FakeBuffer(1, 2000, 48000);
+    buf.label = new TextDecoder().decode(data);
+    buf.getChannelData(0).fill(0.5, buf.label.startsWith('hit.body') ? 100 : 0);
+    return buf;
   }
 }
 
@@ -296,5 +314,100 @@ describe('separate audio volumes', () => {
     expect(Context.latest.sources).toHaveLength(audibleCount);
     audio.play('ab.orb');
     expect(Context.latest.sources.length).toBeGreaterThan(audibleCount);
+  });
+});
+
+describe('sound bank', () => {
+  const fetched: string[] = [];
+  beforeEach(() => {
+    fetched.length = 0;
+    vi.stubGlobal('AudioContext', Context);
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      fetched.push(url);
+      return { ok: true, arrayBuffer: async () => new TextEncoder().encode(url).buffer };
+    }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function loaded(): Promise<GRAAudioManager> {
+    const audio = new GRAAudioManager();
+    audio.unlock();
+    await audio.loadSamples((file) => file);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return audio;
+  }
+
+  function lastBuffers(from: number): FakeBuffer[] {
+    return Context.latest.sources.slice(from).flatMap((s) => (s.buffer ? [s.buffer] : []));
+  }
+
+  it('fetches every variation of the bank, the fight sounds first', async () => {
+    await loaded();
+    const files = Object.entries(SFX_BANK).flatMap(([name, { n }]) => Array.from({ length: n }, (_, k) => sfxFile(name as keyof typeof SFX_BANK, k)));
+    expect(fetched.sort()).toEqual(files.sort());
+    const order = (vi.mocked(fetch).mock.calls as unknown as [string][]).map(([url]) => url);
+    expect(order[0]!.startsWith('fire.')).toBe(true);
+    const at = (prefix: string) => order.flatMap((u, i) => (u.startsWith(prefix) ? [i] : []));
+    expect(Math.min(...at('ui.'))).toBeGreaterThan(Math.max(...at('step.')));
+  });
+
+  it('synthesizes a cue until its recordings decode, then plays them without repeating a variation back to back', async () => {
+    const early = new GRAAudioManager();
+    early.unlock();
+    const before = Context.latest.sources.length;
+    early.play('fire.pistol');
+    // Not loaded: the synthesized gunpowder crack (oscillators and noise, no file).
+    expect(Context.latest.sources.length).toBeGreaterThan(before + 1);
+    expect(lastBuffers(before).every((b) => !b.label)).toBe(true);
+
+    const audio = await loaded();
+    const heard: string[] = [];
+    for (let i = 0; i < 24; i++) {
+      const from = Context.latest.sources.length;
+      audio.play('fire.pistol');
+      const played = lastBuffers(from);
+      expect(played).toHaveLength(1);
+      heard.push(played[0]!.label);
+    }
+    expect(new Set(heard).size).toBe(SFX_BANK['fire.pistol'].n);
+    for (let i = 1; i < heard.length; i++) expect(heard[i]).not.toBe(heard[i - 1]);
+    expect(heard.every((f) => /^fire\.pistol-\d\.mp3$/.test(f))).toBe(true);
+  });
+
+  it('starts every recording on its first audible sample (no MP3 priming silence)', async () => {
+    const audio = await loaded();
+    const from = Context.latest.sources.length;
+    audio.play('hit.body');
+    const [buf] = lastBuffers(from);
+    // 100 silent samples in, 1 ms (48 samples) kept before the attack.
+    expect(buf!.length).toBe(2000 - 52);
+    expect(buf!.getChannelData(0)[48]).toBe(0.5);
+    expect(buf!.getChannelData(0)[47]).toBe(0);
+  });
+
+  it('lands on both feet from the bank and lends doors and crates their recordings', async () => {
+    const audio = await loaded();
+    const from = Context.latest.sources.length;
+    audio.play('step.wood', { step: 'land' });
+    const feet = lastBuffers(from);
+    expect(feet).toHaveLength(2);
+    expect(feet.every((b) => b.label.startsWith('step.wood-'))).toBe(true);
+    expect(audio.sampleBuffer('door.open')).not.toBeNull();
+    expect((audio.sampleBuffer('crate.break') as unknown as FakeBuffer).label).toMatch(/^crate\.break-\d\.mp3$/);
+  });
+
+  it('returns a handle that silences a delayed beat before it sounds', async () => {
+    const audio = await loaded();
+    const from = Context.latest.sources.length;
+    const stop = audio.play('reload.in', { delay: 1.2 });
+    expect(stop).toBeTypeOf('function');
+    const [source] = Context.latest.sources.slice(from);
+    expect(source!.start).toHaveBeenCalledWith(Context.latest.currentTime + 1.2);
+    stop!();
+    // Faded out and stopped before its start time: it never sounds.
+    expect(source!.stop).toHaveBeenCalledWith(Context.latest.currentTime + 0.03);
+    expect(Context.latest.gains[Context.latest.gains.length - 2]!.gain.value).toBe(0);
+    audio.setEffectsVolume(0);
+    expect(audio.play('reload.end', { delay: 1 })).toBeNull();
   });
 });

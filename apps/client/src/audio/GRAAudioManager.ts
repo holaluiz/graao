@@ -5,9 +5,10 @@
  * when a category is full the oldest voice is cut. Priority comes from routing: enemy threat sits on its own bus that
  * the LOW_HEALTH state never muffles, while the "world" buses (weapons, environment, music) get a low-pass.
  *
- * Most cues are synthesized (oscillators + filtered noise), so every one is tweakable in code. A few play a file instead
- * (SAMPLES: the game-feel sounds of tools/audio/gamefeel_sons.py, synthesized offline with more layers than a cue here
- * affords); until the file is decoded, or if it fails, the synthesized cue of the same name plays.
+ * Every cue plays from the sound bank (SFX_BANK, built by tools/audio/sound_design.py from CC0 recordings layered with
+ * synthesis: docs/audio/SOUND_DESIGN.md): a few variations per cue, never the same one twice in a row, on top of the
+ * caller's pitch jitter. The bank loads in the background; until a cue's files are decoded, or if they fail, the cue is
+ * synthesized here (oscillators + filtered noise), so the game never goes silent.
  *
  * Footsteps (`step.<surface>`, played with the step's action: walk, run, sprint, jump, land) are ours on the movement
  * path (foley); everybody else's go to their own clear bus, so a crowd of feet never steals a threat's voice and low
@@ -19,6 +20,7 @@
  * fully audible, and the Tormenta's own low paper drone rises with how deep the player is.
  */
 import { Ambience } from './Ambience';
+import { SFX_BANK, type SfxName } from './sfxBank';
 
 export type AudioCategory = 'threat' | 'weapons' | 'abilities' | 'match' | 'ui' | 'music' | 'environment' | 'loot' | 'footsteps';
 /** What a foot lands on (audio/Footsteps.ts reads it from the ground under the feet). */
@@ -99,6 +101,15 @@ export type Cue =
   // Firearms (pistol, SMG, rifle): a dry gunpowder crack. A shot far away: the low report and its echo (playShot).
   | 'fire.light'
   | 'fire.far'
+  // One voice per firearm of the pack (the bank's recordings; synthesized as fire.light / fire.heavy until loaded).
+  | 'fire.pistol'
+  | 'fire.smg'
+  | 'fire.rifle'
+  | 'fire.sniper'
+  | 'fire.rocket'
+  // A reload in three beats: the magazine out (`reload`), in, and the bolt or slide (timed by the weapon's reload).
+  | 'reload.in'
+  | 'reload.end'
   // A foot on each surface (PlayOptions.step says how).
   | `step.${StepSurface}`
   | 'loot.near'
@@ -127,19 +138,21 @@ export type AudioLoop = 'wind' | 'hum' | 'tormenta';
 const VOICE_LIMIT: Record<AudioCategory, number> = { threat: 8, weapons: 10, abilities: 8, match: 4, ui: 4, music: 2, environment: 6, loot: 5, footsteps: 6 };
 const CATEGORY_GAIN: Record<AudioCategory, number> = { threat: 0.9, weapons: 0.75, abilities: 0.8, match: 0.9, ui: 0.55, music: 0.5, environment: 0.5, loot: 0.7, footsteps: 0.85 };
 
-/**
- * Cues played from a file in /assets/v1/audio/sfx (tools/audio/gamefeel_sons.py), with its level against the
- * synthesized cues. Each replaced a thinner cue of the same role: the firearms had the energy weapon's zap, the swing an
- * abrupt noise burst, the switch a noise and a beep, the shield break four tones where the file bursts into shards.
- */
-const SAMPLES: Partial<Record<Cue, { file: string; gain: number }>> = {
-  'fire.light': { file: 'SFX_GF_Tiro_Leve.wav', gain: 0.55 },
-  'fire.heavy': { file: 'SFX_GF_Tiro_Pesado.wav', gain: 0.7 },
-  'fire.sunbeam': { file: 'SFX_GF_Tiro_Especial.wav', gain: 0.5 },
-  'melee.swing': { file: 'SFX_GF_Golpe.wav', gain: 0.45 },
-  switch: { file: 'SFX_GF_Troca.wav', gain: 0.5 },
-  'hit.shieldBreak': { file: 'SFX_GF_Escudo_Quebra.wav', gain: 0.6 },
-  'hurt.shieldBreak': { file: 'SFX_GF_Escudo_Quebra.wav', gain: 0.65 },
+/** The bank's file for variation `k` (0-based) of `name`, in /assets/v1/audio/sfx. */
+export function sfxFile(name: SfxName, k: number): string {
+  return `${name}-${k + 1}.mp3`;
+}
+
+/** Loaded first: what a fight needs (shots, hits, steps), then the rest. */
+const LOAD_FIRST = ['fire.', 'hit.', 'hurt.', 'step.', 'reload', 'melee.', 'ab.'];
+
+/** Cues the bank has and the synthesizer does not: until their files decode, the nearest synthesized voice plays. */
+const SYNTH_STAND_IN: Partial<Record<Cue, { cue: Cue; pitch: number }>> = {
+  'fire.pistol': { cue: 'fire.light', pitch: 1.08 },
+  'fire.smg': { cue: 'fire.light', pitch: 1.18 },
+  'fire.rifle': { cue: 'fire.light', pitch: 0.9 },
+  'fire.sniper': { cue: 'fire.heavy', pitch: 1 },
+  'fire.rocket': { cue: 'fire.heavy', pitch: 0.8 },
 };
 
 /** Loudness of a step per action: the same foot, lighter walking, heavier landing. */
@@ -211,6 +224,13 @@ const CUE_CATEGORY: Record<Cue, AudioCategory> = {
   'fire.heavy': 'weapons',
   'fire.light': 'weapons',
   'fire.far': 'weapons',
+  'fire.pistol': 'weapons',
+  'fire.smg': 'weapons',
+  'fire.rifle': 'weapons',
+  'fire.sniper': 'weapons',
+  'fire.rocket': 'weapons',
+  'reload.in': 'weapons',
+  'reload.end': 'weapons',
   'step.grass': 'environment',
   'step.dirt': 'environment',
   'step.sand': 'environment',
@@ -287,34 +307,81 @@ export class GRAAudioManager {
   private beachArrayBuffer: ArrayBuffer | null = null;
   private ambienceUrl = '/assets/v1/audio/wind.mp3';
   private beachUrl = '/assets/v1/audio/beach.mp3';
-  /** SAMPLES files: fetched before the context exists, decoded once it does. */
-  private readonly sampleData = new Map<string, ArrayBuffer>();
-  private readonly sampleBuffers = new Map<string, AudioBuffer>();
+  /** Bank files: fetched before the context exists (by file name), decoded once it does. */
+  private readonly sampleData = new Map<string, { name: SfxName; k: number; data: ArrayBuffer }>();
+  /** Decoded variations of each bank name (a hole until that variation decodes). */
+  private readonly bank = new Map<SfxName, (AudioBuffer | undefined)[]>();
+  /** The variation each name played last (never twice in a row). */
+  private readonly lastVariation = new Map<SfxName, number>();
+  /** false: every cue synthesized, as before the bank (the sound board's before/after). */
+  useBank = true;
 
-  /** Fetches every SAMPLES file (`url` maps a file name to its address); a file that fails keeps its synthesized cue. */
+  /**
+   * Fetches the whole sound bank (`url` maps a file name to its address), fight sounds first. Resolves when every file
+   * has arrived or failed; a cue whose files fail keeps its synthesized voice. Meant to run in the background.
+   */
   async loadSamples(url: (file: string) => string): Promise<void> {
-    const files = [...new Set(Object.values(SAMPLES).map((s) => s!.file))];
+    const rank = (name: string) => {
+      const i = LOAD_FIRST.findIndex((prefix) => name.startsWith(prefix));
+      return i < 0 ? LOAD_FIRST.length : i;
+    };
+    const names = (Object.keys(SFX_BANK) as SfxName[]).sort((a, b) => rank(a) - rank(b));
     await Promise.all(
-      files.map(async (file) => {
-        try {
-          const res = await fetch(url(file));
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          this.sampleData.set(file, await res.arrayBuffer());
-          if (this.ctx) this.decodeSample(file);
-        } catch (e) {
-          console.warn(`[audio] Failed to load ${file}:`, e);
-        }
-      }),
+      names.flatMap((name) =>
+        Array.from({ length: SFX_BANK[name].n }, async (_, k) => {
+          const file = sfxFile(name, k);
+          try {
+            const res = await fetch(url(file));
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            this.sampleData.set(file, { name, k, data: await res.arrayBuffer() });
+            if (this.ctx) this.decodeSample(file);
+          } catch (e) {
+            console.warn(`[audio] Failed to load ${file}:`, e);
+          }
+        }),
+      ),
     );
   }
 
   private decodeSample(file: string): void {
-    const data = this.sampleData.get(file);
-    if (!this.ctx || !data || this.sampleBuffers.has(file)) return;
-    this.ctx
-      .decodeAudioData(data.slice(0))
-      .then((buf) => this.sampleBuffers.set(file, buf))
+    const entry = this.sampleData.get(file);
+    if (!this.ctx || !entry) return;
+    this.sampleData.delete(file);
+    const ctx = this.ctx;
+    ctx
+      .decodeAudioData(entry.data)
+      .then((buf) => {
+        let list = this.bank.get(entry.name);
+        if (!list) this.bank.set(entry.name, (list = []));
+        list[entry.k] = trimLeadingSilence(ctx, buf);
+      })
       .catch((e) => console.warn(`[audio] Failed to decode ${file}:`, e));
+  }
+
+  /** How much of the sound bank has decoded (the sound board shows it). */
+  bankStatus(): { decoded: number; total: number } {
+    let decoded = 0;
+    for (const list of this.bank.values()) for (const b of list) if (b) decoded++;
+    return { decoded, total: Object.values(SFX_BANK).reduce((sum, e) => sum + e.n, 0) };
+  }
+
+  /** A decoded variation of `name` other than the last one played (null while none has decoded). */
+  private pickSample(name: SfxName): AudioBuffer | null {
+    const list = this.useBank ? this.bank.get(name) : undefined;
+    if (!list) return null;
+    const ready: number[] = [];
+    for (let i = 0; i < list.length; i++) if (list[i]) ready.push(i);
+    if (!ready.length) return null;
+    const last = this.lastVariation.get(name);
+    const pool = ready.length > 1 ? ready.filter((i) => i !== last) : ready;
+    const k = pool[Math.floor(Math.random() * pool.length)]!;
+    this.lastVariation.set(name, k);
+    return list[k]!;
+  }
+
+  /** For sounds played outside this file (WorldAudio's doors and crates): a variation of a bank sound, if decoded. */
+  sampleBuffer(name: SfxName): AudioBuffer | null {
+    return this.pickSample(name);
   }
 
   /** Loads or preloads the ambient wind audio bed from a URL. */
@@ -485,14 +552,15 @@ export class GRAAudioManager {
     this.ambientDuck.gain.setTargetAtTime(storm ? 0.3 : 1, this.ctx.currentTime, storm ? 0.25 : 0.5);
   }
 
-  play(cue: Cue, o: PlayOptions = {}): void {
+  /** Plays a cue; returns a function that silences it (also before a `delay` has elapsed), or null if nothing sounded. */
+  play(cue: Cue, o: PlayOptions = {}): (() => void) | null {
     const ctx = this.ctx;
-    if (!ctx || ctx.state !== 'running') return;
+    if (!ctx || ctx.state !== 'running') return null;
     // Someone else's steps keep to their own bus: a crowd of feet never cuts a threat's voice.
     const cat = o.threat ? (cue.startsWith('step.') ? 'footsteps' : 'threat') : CUE_CATEGORY[cue];
     // Muted combat can still receive a full room's casts. Do not build sources for inaudible cues or let them
     // evict an audible voice that is already fading out. Environmental action cues use foley, so follow effects.
-    if (this.volume <= 0 || (cat === 'music' ? this.ambienceVolume : this.effectsVolume) <= 0 || (o.volume ?? 1) <= 0) return;
+    if (this.volume <= 0 || (cat === 'music' ? this.ambienceVolume : this.effectsVolume) <= 0 || (o.volume ?? 1) <= 0) return null;
     const list = this.voices.get(cat)!;
     const now = ctx.currentTime;
     for (let i = list.length - 1; i >= 0; i--) if (list[i]!.endsAt < now) list.splice(i, 1);
@@ -520,18 +588,21 @@ export class GRAAudioManager {
     const at = now + Math.max(0, o.delay ?? 0);
     const dur = this.synth(cue, out, at, pitch, o) + (at - now);
     const nodes: AudioScheduledSourceNode[] = (out as unknown as { __src?: AudioScheduledSourceNode[] }).__src ?? [];
-    list.push({
-      endsAt: now + dur,
-      stop: () => {
-        for (const n of nodes) {
-          try {
-            n.stop();
-          } catch {
-            /* already stopped */
-          }
+    // Cut with a 15 ms fade: a recording stolen mid-tail (voice limit, a reload cut short) must not click.
+    const stop = () => {
+      const at = ctx.currentTime;
+      out.gain.cancelScheduledValues(at);
+      out.gain.setTargetAtTime(0, at, 0.005);
+      for (const n of nodes) {
+        try {
+          n.stop(at + 0.03);
+        } catch {
+          /* already stopped */
         }
-      },
-    });
+      }
+    };
+    list.push({ endsAt: now + dur, stop });
+    return stop;
   }
 
   /**
@@ -766,28 +837,40 @@ export class GRAAudioManager {
     }
   }
 
-  /** Builds one cue; returns its duration (s). */
-  private synth(cue: Cue, out: GainNode, t: number, p: number, o: PlayOptions = {}): number {
-    const file = SAMPLES[cue];
-    const buf = file && this.sampleBuffers.get(file.file);
+  /**
+   * A foot on a surface (`k` loudness by action): the bank's recording, with the cloth of a sprint now and then, and on
+   * a landing the second foot and the body's weight; the synthesized step until the bank has decoded.
+   */
+  private footfall(cue: `step.${StepSurface}`, out: GainNode, t: number, p: number, a: StepAction): number {
+    const k = STEP_INTENSITY[a];
+    const buf = this.pickSample(cue);
     if (buf) {
-      if (cue !== 'hurt.shieldBreak') return this.sample(out, buf, t, p, file.gain);
-      // Our own shield breaking: the same crystal, lower, with a weight under it (the shooter hears it bright).
-      const d = this.sample(out, buf, t, p * 0.86, file.gain);
-      this.osc(out, 'sine', t, 130, 45, 0.3, 0.5);
-      return d;
-    }
-    if (cue.startsWith('step.')) {
-      const a = o.step ?? 'run';
-      const k = STEP_INTENSITY[a];
-      const surface = cue.slice(5) as StepSurface;
-      this.step(surface, out, t, p, k, a);
-      if (a !== 'land') return 0.2;
-      // Both feet come down, then the body's weight.
-      this.step(surface, out, t + 0.035, p * 0.96, k * 0.7, a);
+      let d = this.sample(out, buf, t, p, k * SFX_BANK[cue].gain);
+      const cloth = a === 'sprint' && Math.random() < 0.5 ? this.pickSample('foley.cloth') : null;
+      if (cloth) d = Math.max(d, 0.01 + this.sample(out, cloth, t + 0.01, p, k * SFX_BANK['foley.cloth'].gain));
+      if (a !== 'land') return d;
+      const other = this.pickSample(cue);
+      if (other) d = Math.max(d, 0.035 + this.sample(out, other, t + 0.035, p * 0.96, k * 0.7 * SFX_BANK[cue].gain));
       this.osc(out, 'sine', t, 120 * p, 45 * p, 0.16, 0.5);
-      return 0.26;
+      return Math.max(d, 0.26);
     }
+    const surface = cue.slice(5) as StepSurface;
+    this.step(surface, out, t, p, k, a);
+    if (a !== 'land') return 0.2;
+    // Both feet come down, then the body's weight.
+    this.step(surface, out, t + 0.035, p * 0.96, k * 0.7, a);
+    this.osc(out, 'sine', t, 120 * p, 45 * p, 0.16, 0.5);
+    return 0.26;
+  }
+
+  /** Builds one cue (the bank's recording, else synthesized); returns its duration (s). */
+  private synth(cue: Cue, out: GainNode, t: number, p: number, o: PlayOptions = {}): number {
+    if (cue.startsWith('step.')) return this.footfall(cue as `step.${StepSurface}`, out, t, p, o.step ?? 'run');
+    const name = cue in SFX_BANK ? (cue as SfxName) : null;
+    const buf = name && this.pickSample(name);
+    if (buf) return this.sample(out, buf, t, p, SFX_BANK[name].gain);
+    const standIn = SYNTH_STAND_IN[cue];
+    if (standIn) return this.synth(standIn.cue, out, t, p * standIn.pitch, o);
     switch (cue) {
       case 'fire.light':
         // Gunpowder: a dry bright crack, a short body and a dull tail (the file's recipe, until it loads).
@@ -850,10 +933,17 @@ export class GRAAudioManager {
         this.osc(out, 'sine', t, 900, 300, 0.35, 0.3);
         return 0.42;
       case 'reload':
+        // The magazine out: a click (reload.in and reload.end follow, timed by the weapon).
         this.noiseBurst(out, t, 0.035, 0.35, 'bandpass', 2600, 2600, 4);
-        this.noiseBurst(out, t + 0.22, 0.04, 0.4, 'bandpass', 1800, 1800, 4);
-        this.osc(out, 'square', t + 0.22, 420, 380, 0.03, 0.06);
-        return 0.28;
+        return 0.04;
+      case 'reload.in':
+        this.noiseBurst(out, t, 0.04, 0.4, 'bandpass', 1800, 1800, 4);
+        this.osc(out, 'square', t, 420, 380, 0.03, 0.06);
+        return 0.05;
+      case 'reload.end':
+        this.noiseBurst(out, t, 0.03, 0.35, 'bandpass', 2200, 2200, 4);
+        this.noiseBurst(out, t + 0.07, 0.03, 0.35, 'bandpass', 2900, 2900, 4);
+        return 0.1;
       case 'empty':
         this.noiseBurst(out, t, 0.025, 0.3, 'bandpass', 3200, 3200, 6);
         return 0.03;
@@ -1172,6 +1262,31 @@ export class GRAAudioManager {
     // Step template-literal cues return above; TypeScript cannot narrow startsWith to that union.
     return 0;
   }
+}
+
+/**
+ * The buffer from its first audible sample (1 ms before it): an MP3 decoder may prepend its priming silence, and a shot
+ * must start on the frame it is played.
+ */
+function trimLeadingSilence(ctx: BaseAudioContext, buf: AudioBuffer): AudioBuffer {
+  const channels = Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c));
+  let peak = 0;
+  for (const d of channels) for (let i = 0; i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]!));
+  const threshold = Math.max(1e-4, peak * 0.003);
+  let first = buf.length;
+  for (const d of channels) {
+    for (let i = 0; i < first; i++) {
+      if (Math.abs(d[i]!) > threshold) {
+        first = i;
+        break;
+      }
+    }
+  }
+  const start = Math.max(0, first - Math.round(buf.sampleRate * 0.001));
+  if (start < 16 || start >= buf.length) return buf;
+  const trimmed = ctx.createBuffer(buf.numberOfChannels, buf.length - start, buf.sampleRate);
+  channels.forEach((d, c) => trimmed.copyToChannel(d.subarray(start), c));
+  return trimmed;
 }
 
 function smooth(a: number, b: number, x: number): number {

@@ -350,7 +350,7 @@ technical docs are English, while the redesign specifications in `docs/UX` are P
 | Lobby, planned bots and loading preparation | DONE | Host controls 0–9 bots and explicit start; all humans Ready; no combat bots or periodic snapshots in the lobby. Two-client browser validation plus occupancy, concurrent joins, preparation ACK/failure/timeout and host-exit integration tests. |
 | Combat HUD (vitals, weapons, reticles, hitmarkers by kind, damage numbers and direction, kill feed, banners, death, results) | TESTING | DOM/CSS/SVG; seen in the browser |
 | GRAVFXSystem (beams + particles, 2 draw calls) | TESTING | Tracers, flashes, impacts, shield shards/ring, elimination burst |
-| GRAAudioManager (synthesized cues, buses, voice limits, LOW_HEALTH / POST_MATCH states) | TESTING | Audible check by a person still pending |
+| GRAAudioManager (sound bank of CC0 recordings layered with synthesis, 248 variations, synthesized fallback, buses, voice limits, LOW_HEALTH / POST_MATCH states; `?sons` board; docs/audio/SOUND_DESIGN.md) | TESTING | All 248 files load and decode in the browser (20/10); audible check by a person still pending |
 | GRAAbilitySystem + Ultimate Marks | TESTING | See `docs/architecture/ABILITY_SYSTEM.md` |
 | Ability Draft (rules, server, screen) | TESTING | [UX](UX/ABILITY_DRAFT.md), [server rules/protocol](gameplay/ABILITY_DRAFT.md); preview/confirmation, 3+1 build from 30+10, max one passive and individual exclusivity. Categories/pagination adapt to short screens. Server bots draft and cast their own builds. [Validation](qa/ABILITY_V2_VALIDATION_2026-10-19.md). |
 | Camera obstruction near the camera | DONE | Props within 1.1 m of the camera fade (Rapier ball query), measured: 0.9 m → fades, 3 m → not |

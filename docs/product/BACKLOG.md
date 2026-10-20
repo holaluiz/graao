@@ -45,6 +45,10 @@ Ver [HOST_VALIDATION.md](../networking/HOST_VALIDATION.md). Bloqueado por máqui
 
 ## M4 — Game feel e áudio
 
+- [x] Banco de sons (20/10): todos os efeitos refeitos de gravações CC0 em camadas com síntese, 248 variações,
+      voz própria por arma, recarga em três tempos, passos gravados por superfície, painel `?sons`
+      (`docs/audio/SOUND_DESIGN.md`). Falta ouvir em partida real com pessoas e ajustar a mixagem pelo que ouvirem.
+
 - [ ] `AudioDirector` sobre o `GRAAudioManager` existente (não reescrever): `PannerNode` com o ouvinte orientado pela
       câmera **e pela gravidade local**, distância sobre a esfera, oclusão por raio em frequência limitada + low-pass.
 - [ ] Buses do plano mapeados nas 9 categorias atuais; sliders por bus relevante.

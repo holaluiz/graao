@@ -252,11 +252,12 @@ export class GraaoApp {
     }
     mark('heroParts', t);
     t = performance.now();
+    // The sound bank (≈250 short files) comes in the background: until a cue arrives it is synthesized.
+    void this.assets.track(this.audio.loadSamples((file) => this.assets.url(`audio/sfx/${file}`)), 'sfx');
     try {
       await Promise.all([
         this.assets.track(this.audio.loadAmbience(this.assets.url('audio/wind.mp3')), 'ambienceWind'),
         this.assets.track(this.audio.loadBeach(this.assets.url('audio/beach.mp3')), 'ambienceBeach'),
-        this.assets.track(this.audio.loadSamples((file) => this.assets.url(`audio/sfx/${file}`)), 'sfx'),
       ]);
     } catch (e) {
       console.warn('[graao] áudio ambiente indisponível', e);

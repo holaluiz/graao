@@ -18,3 +18,5 @@ apps/host/release/
 apps/host/resources/bin/
 # Supabase CLI cache.
 supabase/.temp/
+assets/audio/fontes/
+__pycache__/
