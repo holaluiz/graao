@@ -367,3 +367,68 @@ describe('desktop keyboard input', () => {
     expect(input.isDown('fire')).toBe(false);
   });
 });
+
+describe('a page that cannot lock the pointer (free mouse)', () => {
+  let win: EventTarget;
+  let doc: DocumentStub;
+  let canvas: ElementStub & { requestPointerLock?: () => Promise<void>; setPointerCapture?: (id: number) => void };
+  let input: Input;
+  const mouse = (type: string, init: Record<string, number>) => {
+    const e = new Event(type);
+    for (const [k, v] of Object.entries(init)) Object.defineProperty(e, k, { value: v });
+    return e;
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  beforeEach(() => {
+    win = new EventTarget();
+    doc = new DocumentStub();
+    canvas = new ElementStub('canvas');
+    vi.stubGlobal('window', win);
+    vi.stubGlobal('document', doc);
+    vi.stubGlobal('HTMLElement', ElementStub);
+    input = new Input(canvas as unknown as HTMLElement);
+  });
+
+  afterEach(() => {
+    input.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it('a web view refusing the lock for good: a click still takes the controls, the camera turns by dragging', async () => {
+    const err = Object.assign(new Error('The root document of this element is not valid for pointer lock.'), { name: 'WrongDocumentError' });
+    canvas.requestPointerLock = () => Promise.reject(err);
+    let changes = 0;
+    input.onEngageChange = () => changes++;
+    input.requestLock();
+    await settle();
+    expect(input.locked).toBe(true);
+    expect(input.freeMouse).toBe(true);
+    expect(changes).toBe(1);
+    // Moving the free cursor does not turn the camera; dragging with a button held does.
+    win.dispatchEvent(mouse('mousemove', { movementX: 30, movementY: 5, buttons: 0 }));
+    expect(input.mouseDX).toBe(0);
+    win.dispatchEvent(mouse('mousemove', { movementX: 30, movementY: 5, buttons: 2 }));
+    expect(input.mouseDX).toBe(30);
+    expect(input.mouseDY).toBe(5);
+    // The buttons fire and aim like with the lock.
+    canvas.dispatchEvent(mouse('mousedown', { button: 0 }));
+    expect(input.isDown('fire')).toBe(true);
+    win.dispatchEvent(mouse('mouseup', { button: 0 }));
+    // The pause menu gives the controls back; the next click takes them again without asking the browser.
+    input.exitLock();
+    expect(input.locked).toBe(false);
+    canvas.requestPointerLock = () => { throw new Error('não deveria pedir de novo'); };
+    input.requestLock();
+    expect(input.locked).toBe(true);
+    expect(changes).toBe(3);
+  });
+
+  it('an ordinary refusal (no gesture, right after leaving the lock) keeps waiting for the lock', async () => {
+    canvas.requestPointerLock = () => Promise.reject(Object.assign(new Error('exited the lock'), { name: 'SecurityError' }));
+    input.requestLock();
+    await settle();
+    expect(input.locked).toBe(false);
+    expect(input.freeMouse).toBe(false);
+  });
+});
