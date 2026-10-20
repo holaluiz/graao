@@ -1,5 +1,32 @@
 # graao MVP status
 
+## 2026-10-20 — Ability Draft visual (Master Plan 3.0, fase B / M3): tabuleiro único, Gate C cumprido
+
+O Draft deixou as abas e páginas: um tabuleiro só ([Draft](UX/ABILITY_DRAFT.md)).
+
+- **Dez participantes:** cinco em cima e cinco embaixo, com avatar, nome, estado e quatro slots — vazio, atual,
+  prévia (só a sua), confirmado e oculto (a escolha secreta dos outros nunca aparece antes da revelação).
+- **Centro:** tempo, rodada, de quem é a vez (“Sua vez · escolha sua 2ª habilidade básica”, “7 de 10 confirmaram”) e
+  sua combinação com teclas; **30 básicas** numa grade de 10×3 por categoria e os **10 Supremos** numa linha à parte —
+  as 40 visíveis em 1366×768 e 1920×1080.
+- **Cartas** com ícone autoral, faixa e glifo de categoria, silhueta por tipo (ativa, passiva tracejada, Supremo em
+  borda dupla), Mana, recarga, linha de efeito, papéis táticos e carimbos de estado.
+- **Detalhe gerado só do catálogo:** estatísticas (Mana, recarga, alcance, duração, conjuração), uma frase por efeito
+  real e uma prévia esquemática em SVG com os números do catálogo (sem simular nada). Um teste confronta cada texto e
+  número exibido com os `effects` e com o código autoritativo que os executa. Ele achou duas promessas falsas: o raio
+  da revelação do Orbe Solar (não limita nada) e a redução de queda do Fôlego de Pipa (`fallDamage` sem consumidor);
+  a descrição do Fôlego foi corrigida no catálogo.
+- **Sinergias sugeridas**, sem bônus: Empurrão + Controle de área, Revelação + Precisão, Mobilidade + Curta
+  distância, Cobertura + Longa distância, lidas dos efeitos; ✦ nas cartas que fecham um par com a sua combinação.
+- **Celular em paisagem:** participantes compactos, barra e combinação fixas, grade rolável (Supremos primeiro na
+  rodada 4), toque abre o detalhe, confirmar fixo — medido em 844×390 e 740×360 com emulação de toque.
+- **Evidência:** `tools/ux/draft-captures.ts` (capturas `docs/UX/screenshots/draft-v3-*`, medições em
+  [draft-visual-checks.json](UX/draft-visual-checks.json)) e `tools/ux/draft-live.ts` — draft real pela tela contra o
+  servidor com 9 bots, uma rodada fechada pelo tempo, 10 combinações válidas ([draft-live-check.json](UX/draft-live-check.json)).
+- Regras, protocolo e servidor intocados. **M3: TESTING** — falta celular físico e pessoas em redes diferentes.
+- Achado de CSS: a classe global `.blocked` (retícula de mira) posiciona em absoluto qualquer elemento com esse nome;
+  o Draft usa `passive-limit`.
+
 ## 2026-10-20 — Mundo vertical, 5ª rodada: magias como rotas, parede não é chão, loot nas alturas
 
 Continuação da frente vertical ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)):

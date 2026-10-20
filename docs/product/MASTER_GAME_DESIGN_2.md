@@ -83,7 +83,7 @@ se as regras eram as padrão.
 | M0 Diagnóstico | Auditoria, matriz, baseline, riscos | Estado real conhecido | DONE — [auditoria](../qa/AUDIT_M0_2026-10-19.md) |
 | M1 Estabilidade | Falhas classificadas e corrigidas, hardening de rede, F3, regressão | Gate A | DONE (Gate A cumprido; 2 itens menores no backlog) |
 | M2 Alfa externa | Sala hospedada na aba entre redes reais, três hosts, relatório | Gate B | BLOCKED — máquinas/rede ([HOST_VALIDATION](../networking/HOST_VALIDATION.md)) |
-| M3 Draft visual | Grade única com 40 magias, 10 participantes, tooltips do catálogo real, mobile | Gate C | PARTIAL (tela atual com abas) |
+| M3 Draft visual | Grade única com 40 magias, 10 participantes, tooltips do catálogo real, mobile | Gate C | TESTING (20/10) — tabuleiro único 5+5 participantes, 30+10 magias sem abas, detalhe/diagrama/sinergias gerados do catálogo; Gate C cumprido ([Draft](../UX/ABILITY_DRAFT.md)); falta celular físico e pessoas em redes diferentes (Gate B) |
 | M4 Game feel + áudio | Feedback de armas/magias, AudioDirector, espacial com gravidade local, oclusão barata | Gate E | PARTIAL |
 | M5 Weapon Framework | Revólver, Arco, Lança-teia sobre contratos data-driven | 3 armas realmente diferentes | NOT_STARTED |
 | M6 Oficina | Acessórios com trade-offs, builds salvas e validadas no backend | Criar, salvar, carregar, usar | NOT_STARTED |

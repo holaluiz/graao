@@ -28,12 +28,13 @@ Ver [HOST_VALIDATION.md](../networking/HOST_VALIDATION.md). Bloqueado por máqui
 
 ## M3 — Ability Draft visual
 
-- [ ] Grade única com as 30 básicas + grade dos 10 Supremos, sem abas obrigatórias (`apps/client/src/ui/DraftScreen.ts`
+- [x] Grade única com as 30 básicas + grade dos 10 Supremos, sem abas obrigatórias (`apps/client/src/ui/DraftScreen.ts`
       substitui `draftCatalogPage`). Participantes 5 em cima / 5 embaixo com 4 slots e estado.
-- [ ] Tooltip gerado do catálogo real (`game-data/abilities.ts`: mana, recarga, alcance, duração, efeitos, tags).
+- [x] Tooltip gerado do catálogo real (`game-data/abilities.ts`: mana, recarga, alcance, duração, efeitos, tags).
       Proibido texto que não corresponda a um efeito implementado (teste que compara tooltip × `effects`).
-- [ ] Sugestões de sinergia por tags, sem bônus escondido.
-- [ ] Layout mobile: grade rolável, painel de build fixo, toque para detalhe, botão confirmar.
+- [x] Sugestões de sinergia por tags, sem bônus escondido.
+- [x] Layout mobile: grade rolável, painel de build fixo, toque para detalhe, botão confirmar (20/10, emulação de toque).
+- [ ] Draft visual num celular físico e com pessoas em redes diferentes (depende do Gate B).
 - Contrato: `docs/gameplay/ABILITY_DRAFT_UX.md` (atualizar `docs/UX/ABILITY_DRAFT.md`, não duplicar).
 
 ## M4 — Game feel e áudio
