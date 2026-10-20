@@ -6,6 +6,8 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_ANON_KEY?: string;
   /** Supabase publishable key (safe in the browser; RLS protects the data). */
   readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string;
+  /** `on` shows Graao Host on the site (Criar e hospedar, its rooms in the list); off by default: rooms are hosted in the tab. */
+  readonly VITE_GRAAO_HOST?: string;
   /** Graao Host central service (defaults to VITE_SUPABASE_URL; a development central for local tests). */
   readonly VITE_GRAAO_HOST_API?: string;
   /** Where "Baixar Graao Host" points (else the central service's download_url). */

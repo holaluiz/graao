@@ -28,7 +28,7 @@ import {
   type Vec3,
 } from '@graao/shared';
 import type { CharacterState } from './character';
-import { applyDamage, HITBOX, rayPlayers, type DamageResult, type PlayerHitTarget, type Vitals } from './combat';
+import { applyDamage, castAimRay, HITBOX, rayPlayers, type DamageResult, type PlayerHitTarget, type Vitals } from './combat';
 import { GROUPS_WORLD_QUERY, type GamePhysics } from './physics';
 import { releaseTraversal } from './traversal';
 
@@ -181,7 +181,8 @@ export function validateTargetPoint(physics: RayCaster, feet: Vec3, point: Vec3,
  */
 export function resolveTargetPoint(physics: RayCaster, terrain: { surfaceAt(dir: Vec3, out?: Vec3): Vec3 }, feet: Vec3, camOrigin: Vec3, camDir: Vec3, range: number): Vec3 {
   const reach = range + 12;
-  const hit = physics.castRay(camOrigin, camDir, reach, GROUPS_WORLD_QUERY);
+  // From level with the caster's head on: the shoulder camera may sit inside or behind a wall.
+  const hit = castAimRay(physics, camOrigin, camDir, reach, headOf(feet), GROUPS_WORLD_QUERY);
   const dist = (q: Vec3) => Math.hypot(q.x - feet.x, q.y - feet.y, q.z - feet.z);
   // Where the camera looks, backed off the surface a little and dropped onto whatever is below (walls → their foot).
   let p = hit ? groundBelow(physics, terrain, v3addScaled(camOrigin, camDir, Math.max(0, hit.toi - 0.4)), 0.4) : null;

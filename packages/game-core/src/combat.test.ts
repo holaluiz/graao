@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { WEAPONS } from '@graao/game-data';
 import { HitKind, v3angle, v3normalize } from '@graao/shared';
-import { applyDamage, falloff, HITBOX, newVitals, rayCapsule, rayPlayers, raySphere, spreadDirections } from './combat';
+import { aimRayStart, applyDamage, falloff, HITBOX, muzzlePoint, newVitals, rayCapsule, rayPlayers, raySphere, resolvePellet, spreadDirections } from './combat';
+import type { GamePhysics } from './physics';
 
 describe('damage', () => {
   it('hits the shield first, then health', () => {
@@ -69,6 +70,46 @@ describe('hitboxes', () => {
     expect(rayPlayers({ x: -10, y: 102.5, z: 0 }, { x: 1, y: 0, z: 0 }, 50, players, 0)).toBeNull();
     expect(rayPlayers({ x: -10, y: 100.8, z: 0 }, { x: 1, y: 0, z: 0 }, 5, players, 0)).toBeNull();
     expect(rayPlayers({ x: -10, y: 100.8, z: 0 }, { x: 1, y: 0, z: 0 }, 50, players, 1)).toBeNull();
+  });
+});
+
+describe('aim ray from the shoulder camera', () => {
+  // Shooter at (0, 100, 0) facing +z, the target 5 m ahead; spherical "walls" stand in for colliders (a ray that
+  // starts inside one hits it at 0, like Rapier's solid casts).
+  const shooter = { x: 0, y: 100, z: 0 };
+  const facing = { x: 0, y: 0, z: 1 };
+  const muzzle = muzzlePoint(shooter, facing);
+  const targets = [{ index: 0, feet: shooter, alive: true }, { index: 1, feet: { x: 0, y: 100, z: 5 }, alive: true }];
+  const camera = { x: -0.42, y: 101.62, z: -4.4 };
+  const dir = v3normalize({ x: 0 - camera.x, y: 101.1 - camera.y, z: 5 - camera.z });
+  const world = (walls: { c: { x: number; y: number; z: number }; r: number; handle: number }[]) =>
+    ({
+      castRay(o: { x: number; y: number; z: number }, d: { x: number; y: number; z: number }, max: number) {
+        let best: { toi: number; handle: number } | null = null;
+        for (const w of walls) {
+          const t = raySphere(o, d, w.c, w.r);
+          if (t >= 0 && t <= max && (!best || t < best.toi)) best = { toi: t, handle: w.handle };
+        }
+        return best;
+      },
+    }) as unknown as GamePhysics;
+
+  it('starts level with the shooter', () => {
+    expect(aimRayStart(camera, dir, muzzle)).toBeGreaterThan(4);
+    expect(aimRayStart(camera, dir, { x: 0, y: 101.6, z: -6 })).toBe(0);
+  });
+
+  it('a camera inside a wall (or behind one) does not eat the shot', () => {
+    const inside = resolvePellet(world([{ c: camera, r: 0.6, handle: 7 }]), camera, dir, muzzle, 60, targets, 0);
+    expect(inside.target).toBe(1);
+    const behind = resolvePellet(world([{ c: { x: -0.4, y: 101.5, z: -2.2 }, r: 0.5, handle: 7 }]), camera, dir, muzzle, 60, targets, 0);
+    expect(behind.target).toBe(1);
+  });
+
+  it('a wall between the shooter and the target still blocks it', () => {
+    const r = resolvePellet(world([{ c: camera, r: 0.6, handle: 7 }, { c: { x: 0, y: 101, z: 2.5 }, r: 0.6, handle: 8 }]), camera, dir, muzzle, 60, targets, 0);
+    expect(r.target).toBe(-1);
+    expect(r.handle).toBe(8);
   });
 });
 

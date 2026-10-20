@@ -4,7 +4,9 @@
 friends connect to them directly (see `docs/architecture/BROWSER_HOSTED_ROOMS.md`). Deploying = the client on Vercel
 with `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` set (players find each other through Supabase Realtime);
 optionally `VITE_ICE_SERVERS` with a TURN relay for networks that block direct connections. Do **not** set
-`VITE_SERVER_URL` unless a dedicated server should run every room again.
+`VITE_SERVER_URL` unless a dedicated server should run every room again. Leave `VITE_GRAAO_HOST` unset: since
+2026-10-19 the site offers only rooms hosted in the tab; `VITE_GRAAO_HOST=on` brings Graao Host back
+(`docs/hosting/GRAAO_HOST_ARCHITECTURE.md`).
 
 The dedicated server below stays supported (tests, the network bot, a future official server that saves history):
 

@@ -111,3 +111,8 @@ Documentos: [estados](TRAVERSAL_STATES.md), [escalada](CLIMBING.md), [planagem](
 
 Comparação com o baseline: suíte 554/555 → 607/607 (63 arquivos); colisores 2.182 → 2.339; construção do mundo
 757 → 748 ms; travessia +8 µs/passo no pior caso medido (A/B); quadro sintético no pé da Serra 5,4 ms (vila 4,6 ms).
+
+**Rodadas seguintes (19/10):** links de travessia dos bots, toque, rede com latência e combate vertical com magias
+(2ª e 3ª); na 4ª, arte de rocha (facetas e estratos de itabirito nos patamares, cascos convexos sob as ilhas e nos
+matacões, crista atrás do maciço — `KitPart.relief`/`bands`/`hull`) e a validação na sala hospedada na aba com
+convidado por WebRTC. Números e evidências no [relatório de testes](../qa/VERTICAL_TRAVERSAL_TEST_REPORT.md).

@@ -12,8 +12,12 @@ construção com `lift` (altura da superfície caminhável sobre o terreno), edi
 ## Ilha
 
 `ilha-flutuante-g/m/p`: laje caminhável de terra (topo na base da peça, bordas agarráveis — quem cai perto ainda
-pega a beirada), base de rocha em três camadas afunilando até uma ponta, cristais e raízes por baixo. Colisores de
-caixa e cone (projéteis e corpos batem na rocha; ninguém agarra a parte de baixo).
+pega a beirada; lados desenhados com facetas leves), e por baixo **uma rocha só** afunilando até uma ponta 7,4 m
+abaixo da laje: anéis de pontos em retângulo arredondado, puxados para dentro ao acaso, em estratos de itabirito,
+canga e ferrugem; cristais saindo da rocha no meio da descida e raízes pendendo do beiral. A rocha é um casco convexo
+desenhado e colidido com os mesmos pontos (projéteis e corpos batem no que se vê; ninguém agarra a parte de baixo) e
+nunca passa de 0,8 da laje — quem pendura na borda fica livre dela (teste em `world.vertical`). As pedras flutuantes
+(`plataforma-pedra`) têm a mesma ponta, em miniatura. Captura: `docs/world/screenshots/vertical-ilhas-rocha.jpg`.
 
 ## Acesso e saída
 
@@ -44,8 +48,9 @@ raridade é a do sorteio normal; não há loot "melhor" por altura — se o desi
 
 Armas e magias funcionam normalmente nas ilhas (os colisores são do mundo estático: projéteis batem, explosões e
 Muro de Papel se apoiam neles). Empurrões tiram da beirada/planagem com espera de 0,35 s antes de reagarrar; a queda
-dá tempo de abrir a pipa. Não verificado em partida real: explosão no limite da ilha e Muro de Papel na borda (lista
-no relatório de QA).
+dá tempo de abrir a pipa. Verificado em partida real (`tests/vertical.abilities.multiplayer.test.ts`): o Meteoro
+Solar no chão sob a ilha não atinge quem está nela (área 3D) e o da borda atinge o chão; projéteis mágicos param na
+rocha vindo de baixo; o Anel de Vento joga pela borda e um Muro de Papel na borda segura o mesmo empurrão.
 
 ## Câmera
 

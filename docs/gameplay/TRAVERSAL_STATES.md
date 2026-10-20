@@ -56,6 +56,31 @@ após exaustão 0,8 s. Sem altura infinita: soltar e pular na mesma beirada nunc
 Nada fica preso: cada modo de parede reavalia a geometria a cada passo e solta quando a parede some (canto, fim da
 rocha), quando o mantle trava (teto imprevisto) ou passa de 1,1 s.
 
+## Controles: teclado e toque
+
+Os dois emitem as mesmas intenções (`Input` → `InputCmd`); nenhum caminho de física próprio.
+
+| Intenção | Teclado | Toque (`apps/client/src/game/TouchControls.ts`) |
+|---|---|---|
+| Andar / correr | WASD / Shift | joystick flutuante à esquerda (analógico); empurrado até a borda corre |
+| Pular / planar | Espaço; segurar em queda abre a pipa | PULAR; o rótulo vira PLANAR quando segurar abriria a pipa, PLANANDO enquanto plana |
+| Agarrar / escalar | pular empurrando para a parede | o mesmo, ou o botão contextual ESCALAR/AGARRAR (pula e empurra para a frente) |
+| Subir da beirada | pular ou empurrar para a parede | contextual SUBIR |
+| Soltar da parede | Shift (borda) ou para trás | contextual SOLTAR |
+| Interagir (baú, porta, sino) | F | contextual com o verbo do aviso (ABRIR, TOCAR, PEGAR…) |
+| Câmera | mouse com o ponteiro preso | arrastar fora dos botões |
+| Combate | mouse, R, E/Q (armas), 1/2/3/4 (magias), Z/X/C (itens) | ATIRAR (segurar), MIRAR (alterna), RECARREGAR; os próprios ícones do HUD (magias, cartões de arma, cinto de itens) são os botões |
+
+Um único botão contextual cobre a travessia e o mundo, pela prioridade: mãos na beirada ou na parede → aviso de
+interação → parede ou beirada ao alcance de um pulo (sondas do próprio motor). O modo toque liga no primeiro toque na
+tela (ou com `?touch`) e substitui a trava do ponteiro por "tocar no mundo para jogar"; ☰ abre as opções.
+
+**No celular o jogo é horizontal.** O primeiro toque pede tela cheia e trava a orientação em paisagem onde o navegador
+permite (Android/Chrome); em retrato numa tela de toque (`pointer: coarse` ou modo toque) um cartão "Gire o celular"
+cobre tudo até o aparelho virar, com um botão que tenta a trava de novo (iPhone/Safari não trava: pede para girar). Em
+paisagem o HUD se reorganiza para o polegar (`body.touch-ui`): magias no topo à direita, itens no topo à esquerda,
+armas embaixo no centro, pad à direita, joystick flutuante à esquerda.
+
 ## Rede
 
 `moveState` carrega o modo; `PlayerSnap[20..22]` traz stamina, temporizadores empacotados e o raio da beirada. A

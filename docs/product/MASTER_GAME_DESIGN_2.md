@@ -10,8 +10,8 @@ aprovação explícita de um nome comercial.
 ## Definição
 
 Um Battle Royale 3D de partidas rápidas, num pequeno planeta brasileiro, com a profundidade estratégica de um MOBA e a
-progressão tática de um RPG. Até dez participantes (pessoas + bots), navegador primeiro, hospedagem comunitária pelo
-Graao Host.
+progressão tática de um RPG. Até dez participantes (pessoas + bots), navegador primeiro, hospedagem comunitária na aba
+de quem cria a sala (ADR-006).
 
 ## Pilares
 
@@ -58,8 +58,8 @@ armas personalizadas, ele viraria escolha obrigatória.
 
 ## Integridade competitiva
 
-O Graao Host roda no PC de outro jogador: quem hospeda controla o processo e pode, em princípio, alterar regras ou
-resultados. Portanto:
+A sala comunitária roda no navegador de outro jogador (ou, com o Graao Host religado, no PC dele): quem hospeda
+controla o processo e pode, em princípio, alterar regras ou resultados. Portanto:
 
 1. **Salas comunitárias** (Graao Host, salas no navegador): casuais, bots permitidos, regras configuráveis, ranking
    desligado, **nenhuma emissão de Créditos valiosos**. Podem guardar estatísticas marcadas como não verificadas.
@@ -82,7 +82,7 @@ se as regras eram as padrão.
 |---|---|---|---|
 | M0 Diagnóstico | Auditoria, matriz, baseline, riscos | Estado real conhecido | DONE — [auditoria](../qa/AUDIT_M0_2026-10-19.md) |
 | M1 Estabilidade | Falhas classificadas e corrigidas, hardening de rede, F3, regressão | Gate A | DONE (Gate A cumprido; 2 itens menores no backlog) |
-| M2 Alfa externa | Graao Host entre redes reais, três hosts, relatório | Gate B | BLOCKED — máquinas/rede ([HOST_VALIDATION](../networking/HOST_VALIDATION.md)) |
+| M2 Alfa externa | Sala hospedada na aba entre redes reais, três hosts, relatório | Gate B | BLOCKED — máquinas/rede ([HOST_VALIDATION](../networking/HOST_VALIDATION.md)) |
 | M3 Draft visual | Grade única com 40 magias, 10 participantes, tooltips do catálogo real, mobile | Gate C | PARTIAL (tela atual com abas) |
 | M4 Game feel + áudio | Feedback de armas/magias, AudioDirector, espacial com gravidade local, oclusão barata | Gate E | PARTIAL |
 | M5 Weapon Framework | Revólver, Arco, Lança-teia sobre contratos data-driven | 3 armas realmente diferentes | NOT_STARTED |
@@ -110,3 +110,10 @@ M3 e M4 podem andar em paralelo a M2 porque não tocam os mesmos contratos.
   Integridade competitiva).
 - **ADR-005 (19/10/2026) — Lentidões: vence a mais forte, expirações independentes, piso ×0,3.** É o comportamento
   atual (`statusEffects.ts`) e coincide com a recomendação do plano; mudar exige teste e decisão registrada.
+- **ADR-006 (19/10/2026) — O site só oferece hospedagem na aba do navegador.** Criar sala roda o `GraaoMatchRoom` num
+  Web Worker de quem cria; convidados conectam por WebRTC ([BROWSER_HOSTED_ROOMS.md](../architecture/BROWSER_HOSTED_ROOMS.md)).
+  O Graao Host (app, central, túnel) continua no código e nos testes, desligado no site: `VITE_GRAAO_HOST=on` no
+  build traz de volta "Criar e hospedar" e as salas dele na lista. Motivo: um caminho só, ninguém instala nada.
+  Custos aceitos: sem TURN, redes com NAT restrito (4G, empresa, escola) não conectam direto; o host sair fecha a
+  sala; a física da sala divide o navegador com o jogo do host. Se o M2 mostrar falhas de conexão: primeiro TURN
+  (serviço externo, aprovação), depois religar o Graao Host ([HOST_VALIDATION](../networking/HOST_VALIDATION.md)).

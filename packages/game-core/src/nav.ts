@@ -13,18 +13,22 @@
  * - Edges: two nodes close enough, joined by a walk the controller can do (slope under the climb limit, ground all
  *   along, nothing solid at knee, chest and head height, room for the capsule's width); a ledge a bot may step off is a
  *   one-way edge down.
+ * - Traversal links (the map's `traversalLinks`, docs/world/VERTICAL_BOT_NAVIGATION.md): one-way edges between two
+ *   waypoints that are not walks — a climbable face, an updraft, a glide down, a jump over a gap — with what a bot needs
+ *   to take them. Plain queries never use them; a planner passes `allow` with the links its bot can do right now.
  * - Queries: nearest node to a point (same level first), A* between two points; the server's bot navigator follows
  *   the path with the real character motor, which still owns every collision.
  *
  * Deterministic: same world in, same graph out (no randomness, fixed iteration order).
  */
-import { GRAAO_MAP, KIT, KIT_BUILDINGS, KIT_PREFABS, MOVEMENT, PLANET, REGIONS, type GraaoMap } from '@graao/game-data';
+import { BOT_TRAVERSAL, BOT_TRAVERSAL_RULES, GRAAO_MAP, KIT, KIT_BUILDINGS, KIT_PREFABS, MOVEMENT, PLANET, REGIONS, type GraaoMap, type TraversalLinkKind } from '@graao/game-data';
 import { v3cross, v3dot, v3normalize, type Vec3 } from '@graao/shared';
 import { buildingSite, placementToWorld, quatFromEulerDeg, quatRotate, type WorldLayout } from './layout';
 import { addCrateColliders, removeColliders } from './interactives';
 import { Group, groups, refreshQueries, type GamePhysics } from './physics';
 import { headingTangent, latLonToDir } from './sphere';
 import type { Terrain } from './terrain';
+import { TraversalCap } from './traversal';
 
 const SOLID = groups(0xffff, Group.TERRAIN | Group.PROP | Group.RAIL);
 const PROPS = groups(0xffff, Group.PROP | Group.RAIL);
@@ -47,22 +51,80 @@ export interface NavNode {
   door: boolean;
 }
 
+/**
+ * A bot traversal link (the BotTraversalLink of docs/world/VERTICAL_BOT_NAVIGATION.md): a one-way edge from the map's
+ * `traversalLinks`, with what taking it needs.
+ */
+export interface NavLink {
+  /** Map link id. */
+  id: string;
+  kind: TraversalLinkKind;
+  /** Node ids of its start and its end. */
+  from: number;
+  to: number;
+  /** The wind it rides (index in physics.winds, −1: none) and whether that wind only blows while its bell rings. */
+  wind: number;
+  event: boolean;
+  /** TraversalCap bits the motor must allow while a bot takes it. */
+  caps: number;
+  /** Stamina needed at its start. */
+  stamina: number;
+  /** Planner cost (m of walking) and risk (0..1). */
+  cost: number;
+  risk: number;
+}
+
+/** A planned way: the points to go through and, for each, the traversal link that reaches it from the one before. */
+export interface NavPlan {
+  points: Vec3[];
+  /** links[k]: the link from points[k − 1] to points[k] (null: a walk; links[0] is always null). */
+  links: (NavLink | null)[];
+  /** nodes[k]: the graph node of points[k] (−1 for the last point, the goal itself). */
+  nodes: number[];
+}
+
+/** Planner options: the traversal links a bot may take, and an extra cost (m) per edge a ↦ b (ways it failed on). */
+export interface NavQuery {
+  allow?: (link: NavLink) => boolean;
+  extra?: (a: number, b: number) => number;
+}
+
 export interface NavGraph {
   nodes: NavNode[];
   /** CSR adjacency: the edges of node i are adj[start[i] .. start[i + 1]). */
   start: Int32Array;
   adj: Int32Array;
   cost: Float32Array;
+  /** Per edge, aligned with `adj`: the traversal link it is (index in `links`), or −1 for a walk. */
+  edgeLink: Int32Array;
+  /** The map's traversal links that landed on two nodes. */
+  links: NavLink[];
   /** Node closest to `p` that a character standing at `p` reaches in a straight line (−1: none within `maxDist`). */
   nearest(p: Vec3, maxDist?: number): number;
-  /** Node ids of the cheapest walk between two nodes (both included), or null. */
-  route(a: number, b: number, maxExpand?: number): number[] | null;
+  /**
+   * Node ids of the cheapest way between two nodes (both included), or null. Only walks, unless `allow` is given: then
+   * also the traversal links it accepts.
+   */
+  route(a: number, b: number, maxExpand?: number, allow?: (link: NavLink) => boolean, extra?: NavQuery['extra']): number[] | null;
   /** Points to walk through from `from` to `to` (the last is `to` itself), or null when no walk joins them. */
   path(from: Vec3, to: Vec3): Vec3[] | null;
-  /** Component id of every node (nodes that reach each other share it). */
+  /** Like `path`, with the traversal links the query allows (and its extra costs), and which link reaches each point. */
+  plan(from: Vec3, to: Vec3, query?: NavQuery): NavPlan | null;
+  /** Component id of every node over the walks (nodes that reach each other on foot share it). */
   component: Int32Array;
-  stats: { nodes: number; raised: number; doors: number; edges: number; drops: number; largest: number; components: number; ms: number };
+  /** Component id of every node over the walks and the traversal links. */
+  linkedComponent: Int32Array;
+  stats: { nodes: number; raised: number; doors: number; edges: number; drops: number; links: number; largest: number; components: number; ms: number };
 }
+
+/** What the motor must allow for each kind of link. */
+const LINK_CAPS: Record<TraversalLinkKind, number> = {
+  escalada: TraversalCap.LEDGE | TraversalCap.CLIMB,
+  corrente: TraversalCap.GLIDE,
+  // A glide that reaches an island's edge short of its top grabs the edge and pulls up, like a person.
+  planagem: TraversalCap.GLIDE | TraversalCap.LEDGE,
+  salto: TraversalCap.LEDGE,
+};
 
 interface Hit {
   toi: number;
@@ -295,36 +357,53 @@ export function buildNavGraph(world: { terrain: Terrain; physics: GamePhysics; l
     }
     return true;
   };
-  /** Ground all along a walk from a to b: footing near the straight line at a quarter, half and three quarters. */
-  const grounded = (a: NavNode, b: NavNode): boolean => {
-    for (const t of [0.25, 0.5, 0.75]) {
+  /**
+   * Ground all along a walk from a to b: footing near the straight line at a quarter, half and three quarters (every
+   * 0.3 m on a walk that rises), and no step between two of them (or the ends) higher than the controller climbs over
+   * that run — a terrace beside a ramp's slab is not a walk up onto its side, however close the two nodes are.
+   */
+  const grounded = (a: NavNode, b: NavNode, horizontal: number): boolean => {
+    const n = Math.abs(a.h - b.h) > 0.5 ? Math.max(3, Math.ceil(horizontal / 0.3) - 1) : 3;
+    // Over 0.3 m a walkable slope rises well under the autostep; a side face (a slab, a terrace edge) rises more.
+    const stepMax = MOVEMENT.autostepHeight + (horizontal / (n + 1)) * 0.35;
+    let prev = a.h;
+    for (let k = 1; k <= n; k++) {
+      const t = k / (n + 1);
       const m = { x: a.pos.x + (b.pos.x - a.pos.x) * t, y: a.pos.y + (b.pos.y - a.pos.y) * t, z: a.pos.z + (b.pos.z - a.pos.z) * t };
       const up = v3normalize(m);
       const want = len(m) - R;
       const tol = 0.45 + Math.abs(a.h - b.h) * 0.3;
       const hits = hitsAlong(physics, atRadius(up, R + want + tol + 0.6), { x: -up.x, y: -up.y, z: -up.z }, (tol + 0.6) * 2);
-      const ok = hits.some((h) => {
-        if (v3dot(h.normal, up) < WALK_COS - 0.1) return false;
+      // The footing closest to the straight line there, with room over it (not a fill inside a slab, nor the ground
+      // under a ramp: the hits come top down).
+      let best = Infinity;
+      let above = -Infinity;
+      for (const h of hits) {
+        const headroom = h.toi - above;
+        above = h.toi;
+        if (headroom < 1.0) continue;
+        if (v3dot(h.normal, up) < WALK_COS - 0.1) continue;
         const hh = R + want + tol + 0.6 - h.toi - R;
-        if (h.handle === physics.terrainHandle && hh < PLANET.seaLevel - WADE) return false;
-        return Math.abs(hh - want) <= tol;
-      });
-      if (!ok) return false;
+        if (h.handle === physics.terrainHandle && hh < PLANET.seaLevel - WADE) continue;
+        if (Math.abs(hh - want) <= tol && Math.abs(hh - want) < Math.abs(best - want)) best = hh;
+      }
+      if (best === Infinity || Math.abs(best - prev) > stepMax) return false;
+      prev = best;
     }
-    return true;
+    return Math.abs(b.h - prev) <= stepMax;
   };
 
-  const edges: { a: number; b: number; c: number }[] = [];
+  const edges: { a: number; b: number; c: number; l: number }[] = [];
   let drops = 0;
   const seen = new Set<string>();
-  const link = (i: number, j: number, c: number, oneWay = false) => {
+  const link = (i: number, j: number, c: number, oneWay = false, l = -1) => {
     const k = `${i}>${j}`;
     if (seen.has(k)) return;
     seen.add(k);
-    edges.push({ a: i, b: j, c });
+    edges.push({ a: i, b: j, c, l });
     if (!oneWay) {
       seen.add(`${j}>${i}`);
-      edges.push({ a: j, b: i, c });
+      edges.push({ a: j, b: i, c, l });
     }
   };
   const costOf = (a: NavNode, b: NavNode) => len(sub(b.pos, a.pos)) * (a.water || b.water ? 2.5 : 1);
@@ -340,8 +419,12 @@ export function buildNavGraph(world: { terrain: Terrain; physics: GamePhysics; l
       const horizontal = len(add(flat, A.up, -v3dot(flat, A.up)));
       if (horizontal > reach || horizontal < 0.05) return;
       if (Math.abs(vertical) <= 0.4 + horizontal * 1.1) {
-        if (clear(A.pos, A.up, B.pos, B.up) && grounded(A, B)) link(i, j, costOf(A, B));
-        return;
+        if (clear(A.pos, A.up, B.pos, B.up) && grounded(A, B, horizontal)) {
+          link(i, j, costOf(A, B));
+          return;
+        }
+        // Not a walk: a ledge too high to step up may still be one to step down from (below).
+        if (Math.abs(vertical) < 0.8) return;
       }
       // A ledge one may step off (a balcony, a terrace, a roof edge): down only, short and clear at the top.
       if (horizontal > 2.6 || Math.abs(vertical) > 3.4) return;
@@ -361,43 +444,79 @@ export function buildNavGraph(world: { terrain: Terrain; physics: GamePhysics; l
     const b = authored.get(l);
     if (a !== undefined && b !== undefined) link(a, b, costOf(nodes[a]!, nodes[b]!));
   }
+  // Traversal links (after every walk: two waypoints a walk already joins need no link).
+  const links: NavLink[] = [];
+  const windIndex = new Map(physics.winds.map((w) => [w.id, w.index]));
+  for (const l of map.traversalLinks ?? []) {
+    const a = authored.get(l.from);
+    const b = authored.get(l.to);
+    if (a === undefined || b === undefined || seen.has(`${a}>${b}`)) continue;
+    const rule = BOT_TRAVERSAL[l.kind];
+    const wind = l.wind ? windIndex.get(l.wind) ?? -1 : -1;
+    const length = len(sub(nodes[b]!.pos, nodes[a]!.pos));
+    const nl: NavLink = {
+      id: l.id,
+      kind: l.kind,
+      from: a,
+      to: b,
+      wind,
+      event: wind >= 0 && !!physics.winds[wind]!.trigger,
+      caps: LINK_CAPS[l.kind],
+      stamina: rule.stamina,
+      cost: length * (BOT_TRAVERSAL_RULES.walkPace / rule.pace) + (l.cost ?? 0) + (l.risk ?? 0) * BOT_TRAVERSAL_RULES.riskCost,
+      risk: l.risk ?? 0,
+    };
+    links.push(nl);
+    link(a, b, nl.cost, true, links.length - 1);
+  }
 
   // ---------------------------------------------------------------------------------------------- CSR + components
   edges.sort((x, y) => x.a - y.a || x.b - y.b);
   const start = new Int32Array(nodes.length + 1);
   const adj = new Int32Array(edges.length);
   const cost = new Float32Array(edges.length);
+  const edgeLink = new Int32Array(edges.length);
   for (const e of edges) start[e.a + 1]!++;
   for (let i = 0; i < nodes.length; i++) start[i + 1]! += start[i]!;
   edges.forEach((e, k) => {
     adj[k] = e.b;
     cost[k] = e.c;
+    edgeLink[k] = e.l;
   });
-  // Components over the undirected graph (a drop still joins two places).
-  const component = new Int32Array(nodes.length).fill(-1);
-  const undirected: number[][] = nodes.map(() => []);
-  for (const e of edges) {
-    undirected[e.a]!.push(e.b);
-    undirected[e.b]!.push(e.a);
-  }
-  let components = 0;
-  const sizes: number[] = [];
-  for (let s = 0; s < nodes.length; s++) {
-    if (component[s] !== -1) continue;
-    const stack = [s];
-    component[s] = components;
-    let size = 0;
-    while (stack.length) {
-      const v = stack.pop()!;
-      size++;
-      for (const w of undirected[v]!) if (component[w] === -1) {
-        component[w] = components;
-        stack.push(w);
-      }
+  // Components over the undirected graph (a drop still joins two places): on foot, and with the traversal links.
+  const componentsOf = (withLinks: boolean) => {
+    const component = new Int32Array(nodes.length).fill(-1);
+    const undirected: number[][] = nodes.map(() => []);
+    for (const e of edges) {
+      if (e.l >= 0 && !withLinks) continue;
+      undirected[e.a]!.push(e.b);
+      undirected[e.b]!.push(e.a);
     }
-    sizes.push(size);
-    components++;
-  }
+    let count = 0;
+    const sizes: number[] = [];
+    for (let s = 0; s < nodes.length; s++) {
+      if (component[s] !== -1) continue;
+      const stack = [s];
+      component[s] = count;
+      let size = 0;
+      while (stack.length) {
+        const v = stack.pop()!;
+        size++;
+        for (const w of undirected[v]!) if (component[w] === -1) {
+          component[w] = count;
+          stack.push(w);
+        }
+      }
+      sizes.push(size);
+      count++;
+    }
+    return { component, count, sizes };
+  };
+  const walking = componentsOf(false);
+  const component = walking.component;
+  const components = walking.count;
+  const sizes = walking.sizes;
+  const linkedComponent = links.length ? componentsOf(true).component : component;
 
   // ---------------------------------------------------------------------------------------------- queries
   const g = new Float64Array(nodes.length);
@@ -425,9 +544,10 @@ export function buildNavGraph(world: { terrain: Terrain; physics: GamePhysics; l
     return best;
   };
 
-  const route = (a: number, b: number, maxExpand = 60000): number[] | null => {
+  const route = (a: number, b: number, maxExpand = 60000, allow?: (link: NavLink) => boolean, extra?: NavQuery['extra']): number[] | null => {
     if (a < 0 || b < 0) return null;
-    if (component[a] !== component[b]) return null;
+    const comp = allow ? linkedComponent : component;
+    if (comp[a] !== comp[b]) return null;
     gen++;
     const target = nodes[b]!.pos;
     // Binary heap of (f, node).
@@ -485,7 +605,9 @@ export function buildNavGraph(world: { terrain: Terrain; physics: GamePhysics; l
       for (let k = start[v]!; k < start[v + 1]!; k++) {
         const w = adj[k]!;
         if (closedStamp[w] === gen) continue;
-        const ng = g[v]! + cost[k]!;
+        const lk = edgeLink[k]!;
+        if (lk >= 0 && !(allow && allow(links[lk]!))) continue;
+        const ng = g[v]! + cost[k]! + (extra ? extra(v, w) : 0);
         if (stamp[w] === gen && ng >= g[w]!) continue;
         stamp[w] = gen;
         g[w] = ng;
@@ -496,13 +618,26 @@ export function buildNavGraph(world: { terrain: Terrain; physics: GamePhysics; l
     return null;
   };
 
-  const path = (p: Vec3, q: Vec3): Vec3[] | null => {
+  /** The traversal link edge from node a to node b (−1: a walk, or no edge). */
+  const linkBetween = (a: number, b: number): number => {
+    for (let k = start[a]!; k < start[a + 1]!; k++) if (adj[k] === b && edgeLink[k]! >= 0) return edgeLink[k]!;
+    return -1;
+  };
+  const plan = (p: Vec3, q: Vec3, query: NavQuery = {}): NavPlan | null => {
+    const { allow, extra } = query;
     const a = nearest(p);
     const b = nearest(q, 12);
-    const ids = route(a, b);
+    const ids = route(a, b, undefined, allow, extra);
     if (!ids) return null;
-    return [...ids.map((i) => nodes[i]!.pos), q];
+    const out: NavPlan = { points: [...ids.map((i) => nodes[i]!.pos), q], links: [null], nodes: [...ids, -1] };
+    for (let k = 1; k < ids.length; k++) {
+      const l = allow ? linkBetween(ids[k - 1]!, ids[k]!) : -1;
+      out.links.push(l >= 0 ? links[l]! : null);
+    }
+    out.links.push(null);
+    return out;
   };
+  const path = (p: Vec3, q: Vec3): Vec3[] | null => plan(p, q)?.points ?? null;
 
   if (crateColliders.length) {
     removeColliders(physics, crateColliders);
@@ -514,16 +649,21 @@ export function buildNavGraph(world: { terrain: Terrain; physics: GamePhysics; l
     start,
     adj,
     cost,
+    edgeLink,
+    links,
     component,
+    linkedComponent,
     nearest,
     route,
     path,
+    plan,
     stats: {
       nodes: nodes.length,
       raised: nodes.filter((n) => n.raised).length,
       doors: doorPairs.length,
       edges: edges.length,
       drops,
+      links: links.length,
       largest: Math.max(0, ...sizes),
       components,
       ms: Math.round(t1 - t0),

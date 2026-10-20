@@ -93,7 +93,8 @@ Passo a passo:
    | `VITE_SUPABASE_PUBLISHABLE_KEY` | a chave `sb_publishable_…` de `apps/client/.env.local` (publicável; nunca uma `sb_secret_…`) |
 
    Não definir `VITE_SERVER_URL` (mandaria as salas de volta para um servidor dedicado). `VITE_GRAAO_HOST_DOWNLOAD_URL`
-   não é necessária: o botão "Baixar Graao Host" usa o `download_url` da central.
+   não é necessária: o botão "Baixar Graao Host" usa o `download_url` da central. Desde 19/10/2026 o Graao Host fica
+   desligado no site: para mostrá-lo de novo, adicionar também `VITE_GRAAO_HOST` = `on` (ADR-006).
 2. As `VITE_*` entram no bundle **na hora do build**: depois de salvar, fazer **Redeploy** da prévia mais recente de
    `mvp-online-1v1` (Deployments → ⋯ → Redeploy). Um deploy anterior às variáveis continua sem elas.
 3. Testar na prévia (logado na Vercel): Jogar → a lista de salas carrega; Criar sala → **Criar e hospedar** → sem o app,

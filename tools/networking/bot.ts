@@ -98,12 +98,19 @@ room.onMessage(S2C.ROOM_STATE, (m: RoomStateMsg) => {
     }, Math.max(0, m.ufo.open + jumpAfter * 1000 - Date.now()));
   }
   ready = !!me?.ready;
-  if (autoReady && !ready && m.phase === MatchPhase.FREE_ROAM && m.players.some((p) => p.index !== index && p.ready)) {
+  if (autoReady && !ready && (m.phase === MatchPhase.FREE_ROAM || m.phase === MatchPhase.LOBBY) && m.players.some((p) => p.index !== index && p.ready)) {
     room.send(C2S.READY, { r: 1 });
     console.log('[bot] ready');
   }
   if (me?.loadout?.length && m.phase === MatchPhase.MATCH) console.log(`[bot] match loadout: ${me.loadout.join(', ')}`);
+  // Loading after the draft: a test bot has nothing to load; it confirms at once (as a client does when it is ready).
+  if (m.phase === MatchPhase.PREPARATION && m.preparation && m.preparation.id !== preparedId) {
+    preparedId = m.preparation.id;
+    room.send(C2S.PREPARED, { id: m.preparation.id, ok: true });
+    console.log('[bot] prepared');
+  }
 });
+let preparedId = -1;
 let draftTimer: ReturnType<typeof setTimeout> | null = null;
 room.onMessage(S2C.DRAFT_STATE, (m: DraftStateMsg) => {
   const seat = m.seats.find((x) => x.index === index);

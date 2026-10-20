@@ -49,8 +49,35 @@ export interface MapWaypoint {
   links: string[];
   region?: string;
   /** What is there: the bots' choice of destinations and the editor's colour. */
-  kind?: 'rua' | 'porta' | 'escada' | 'telhado' | 'ponte' | 'mirante' | 'interior' | 'trilha';
+  kind?: 'rua' | 'porta' | 'escada' | 'telhado' | 'ponte' | 'mirante' | 'interior' | 'trilha' | 'ilha' | 'paredao' | 'corrente';
 }
+
+/**
+ * A traversal link for the bots (docs/world/VERTICAL_BOT_NAVIGATION.md, "BotTraversalLink"): a one-way connection
+ * between two waypoints that is not a walk (a climbable face, an updraft, a glide down, a jump over a gap), with how a
+ * bot takes it. A bot only plans the links it can do now (its traversal, its stamina, the wind blowing); a link that
+ * fails twice is left alone for a while, so no bot loops up and down a route it cannot finish.
+ */
+export interface MapTraversalLink {
+  id: string;
+  /** Waypoint ids: where the link starts (the foot of the face, the base of the column, the edge) and where it lands. */
+  from: string;
+  to: string;
+  kind: TraversalLinkKind;
+  /**
+   * The wind it rides (a `winds` id): required for `corrente` (an updraft), optional for `planagem` (a directional wind
+   * across). An event wind (with a `trigger`) makes the link usable only while it blows — or once a bot rings its bell.
+   */
+  wind?: string;
+  /** Extra planning cost (m of walking the link is worth on top of its length) and risk (0..1: exposure, a fall if it fails). */
+  cost?: number;
+  risk?: number;
+  region?: string;
+}
+
+/** escalada: climb a tagged face (and pull up); corrente: ride an updraft; planagem: glide down; salto: jump a gap. */
+export type TraversalLinkKind = 'escalada' | 'corrente' | 'planagem' | 'salto';
+export const TRAVERSAL_LINK_KINDS: readonly TraversalLinkKind[] = ['escalada', 'corrente', 'planagem', 'salto'];
 
 /**
  * A dirt trail painted on the terrain (docs/world/PLANET_LAYOUT.md, "Caminhos"): a polyline of [lat, lon] points
@@ -112,6 +139,8 @@ export interface GraaoMap {
   trails?: MapTrail[];
   /** Wind volumes (updrafts, directional winds); absent in maps older than mapVersion 5 (= none). */
   winds?: MapWind[];
+  /** Bot traversal links between waypoints; absent in maps older than mapVersion 6 (= none: bots only walk). */
+  traversalLinks?: MapTraversalLink[];
 }
 
 /**
@@ -185,6 +214,18 @@ export function validateMap(m: GraaoMap): string[] {
     if (w.kind === 'directional' && !Number.isFinite(w.yaw)) out.push(`${w.id}: vento direcional sem direção (yaw)`);
     if (w.trigger && !ids.has(w.trigger)) out.push(`${w.id}: gatilho ${w.trigger} não é uma peça do mapa`);
   }
+  const links = new Set<string>();
+  for (const l of m.traversalLinks ?? []) {
+    if (links.has(l.id)) out.push(`ligação de travessia repetida: ${l.id}`);
+    links.add(l.id);
+    if (!TRAVERSAL_LINK_KINDS.includes(l.kind)) out.push(`${l.id}: tipo de travessia ${String(l.kind)}`);
+    if (!wps.has(l.from) || !wps.has(l.to) || l.from === l.to) out.push(`${l.id}: waypoints ${l.from} → ${l.to} inválidos`);
+    if (l.kind === 'corrente' && (!l.wind || !winds.has(l.wind))) out.push(`${l.id}: corrente sem vento conhecido (${l.wind ?? '—'})`);
+    else if (l.wind && !winds.has(l.wind)) out.push(`${l.id}: vento desconhecido (${l.wind})`);
+    if (l.wind && l.kind !== 'corrente' && l.kind !== 'planagem') out.push(`${l.id}: ${l.kind} não usa vento`);
+    if (l.risk !== undefined && !(l.risk >= 0 && l.risk <= 1)) out.push(`${l.id}: risco ${l.risk} fora de 0–1`);
+    if (l.cost !== undefined && !(l.cost >= 0 && l.cost <= 500)) out.push(`${l.id}: custo ${l.cost} fora de 0–500`);
+  }
   return out;
 }
 
@@ -194,11 +235,12 @@ export const GRAAO_MAP: GraaoMap = MAP_FILE as unknown as GraaoMap;
   if (problems.length) throw new Error(`planeta-graao.map.json: ${problems.join('; ')}`);
 }
 
-/** The map file's text: one placement or chest spot per line, so diffs and reviews stay readable. */
+/** The map file's text: one placement or chest spot per line, so diffs and reviews stay readable (no links: no key). */
 export function serializeMap(m: GraaoMap): string {
   const head = JSON.stringify({ mapId: m.mapId, mapVersion: m.mapVersion, ...(m.editedAt ? { editedAt: m.editedAt } : {}), geometryVersion: m.geometryVersion, collisionVersion: m.collisionVersion }, null, 2).slice(0, -2);
   const list = (items: unknown[]) => (items.length ? `[\n    ${items.map((i) => JSON.stringify(i)).join(',\n    ')}\n  ]` : '[]');
-  return `${head},\n  "placements": ${list(m.placements)},\n  "chestSpots": ${list(m.chestSpots)},\n  "waypoints": ${list(m.waypoints ?? [])},\n  "trails": ${list(m.trails ?? [])},\n  "winds": ${list(m.winds ?? [])}\n}\n`;
+  const links = m.traversalLinks?.length ? `,\n  "traversalLinks": ${list(m.traversalLinks)}` : '';
+  return `${head},\n  "placements": ${list(m.placements)},\n  "chestSpots": ${list(m.chestSpots)},\n  "waypoints": ${list(m.waypoints ?? [])},\n  "trails": ${list(m.trails ?? [])},\n  "winds": ${list(m.winds ?? [])}${links}\n}\n`;
 }
 
 /** FNV-1a (32 bit) of a string, as 8 hex digits. */

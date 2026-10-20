@@ -145,9 +145,9 @@ export interface KitPart {
    * box: half extents hx, hy, hz · cyl: radius hx, half height hy · cone: base radius hx, half height hy (apex up)
    * · ball: radius hx · gable: triangular prism, base on y = 0 from z = −hz to +hz, apex at y = hy, thickness 2·hx
    * · hip: hipped roof, base rectangle 2·hx × 2·hz on y = 0, ridge along X at y = hy, hips at 45° in plan (a square
-   * base makes a pyramid).
+   * base makes a pyramid) · hull: the convex hull of `pts` (rocks), hx, hy, hz bounding them.
    */
-  shape: 'box' | 'cyl' | 'cone' | 'ball' | 'gable' | 'hip';
+  shape: 'box' | 'cyl' | 'cone' | 'ball' | 'gable' | 'hip' | 'hull';
   /** Centre (box, cyl, cone, ball) or base midpoint (gable, hip) in the prefab frame. */
   x: number;
   y: number;
@@ -166,6 +166,15 @@ export interface KitPart {
   visible?: boolean;
   /** Radial segments of cylinders and cones (visual; default 10). */
   seg?: number;
+  /** hull: its points (x, y, z triples) around the centre, in the part frame; the collider and the drawing share them. */
+  pts?: number[];
+  /**
+   * Boxes drawn as broken rock (visual; the collider stays the box): the faces break into facets up to `relief` m out
+   * of the collider and twice that into it; the top stays flat to walk on.
+   */
+  relief?: number;
+  /** Strata (visual): the sides are banded in the part's colour and these; the top keeps the part's colour. */
+  bands?: KitColor[];
   /**
    * Level of detail: 'near' parts are drawn only up close (frames, sills, small props); 'far' keeps a small
    * decoration drawn from far away (a lantern on a tower). Default: small decoration (≤ 0.3 m) is 'near'.
@@ -354,6 +363,18 @@ export const box = (x: number, y: number, z: number, hx: number, hy: number, hz:
 export const cyl = (x: number, y: number, z: number, r: number, hh: number, color: KitColor, o: Partial<KitPart> = {}): KitPart => ({ shape: 'cyl', x, y, z, hx: r, hy: hh, hz: r, color, ...o });
 export const cone = (x: number, y: number, z: number, r: number, hh: number, color: KitColor, o: Partial<KitPart> = {}): KitPart => ({ shape: 'cone', x, y, z, hx: r, hy: hh, hz: r, color, ...o });
 export const ball = (x: number, y: number, z: number, r: number, color: KitColor, o: Partial<KitPart> = {}): KitPart => ({ shape: 'ball', x, y, z, hx: r, hy: r, hz: r, color, ...o });
+
+/** A convex rock: the hull of `pts` (x, y, z triples in the prefab frame), recentred on their bounding box. */
+export function hull(pts: number[], color: KitColor, o: Partial<KitPart> = {}): KitPart {
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < pts.length; i++) {
+    lo[i % 3] = Math.min(lo[i % 3]!, pts[i]!);
+    hi[i % 3] = Math.max(hi[i % 3]!, pts[i]!);
+  }
+  const c = [0, 1, 2].map((k) => (lo[k]! + hi[k]!) / 2);
+  return { shape: 'hull', x: c[0]!, y: c[1]!, z: c[2]!, hx: (hi[0]! - lo[0]!) / 2, hy: (hi[1]! - lo[1]!) / 2, hz: (hi[2]! - lo[2]!) / 2, pts: pts.map((v, i) => v - c[i % 3]!), color, ...o };
+}
 export const deco = { solid: 'none' as const };
 export const ghost = { visible: false };
 export const near = { solid: 'none' as const, lod: 'near' as const };

@@ -9,7 +9,7 @@
  */
 import * as THREE from 'three';
 import { GLIDE_STEPS, createGameWorld, latLonToDir, mulberry32, waterDepth, type GameWorld } from '@graao/game-core';
-import { ABILITIES, DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, TRAVERSAL, TRAVERSAL_ACTIONS, TraversalMode, migrateAppearance, randomAppearance, validateAppearance, type AbilityId } from '@graao/game-data';
+import { ABILITIES, DEFAULT_APPEARANCE, PLANET, REGIONS, SPAWNS, SurfaceFlag, TRAVERSAL, TRAVERSAL_ACTIONS, TraversalMode, migrateAppearance, randomAppearance, validateAppearance, type AbilityId } from '@graao/game-data';
 import { ActionState, MatchPhase, MovementState, isRoomCode, sanitizeHostSettings, v3angle, type CharacterAppearance, type DraftStateMsg, type NoticeMsg, type RoomListing, type RoomStateMsg, type Vec3 } from '@graao/shared';
 import { GRAAssetManager } from '../assets/GRAAssetManager';
 import { GRAAudioManager } from '../audio/GRAAudioManager';
@@ -26,6 +26,7 @@ import { LootDirector } from '../game/LootDirector';
 import { InteractiveDirector } from '../game/InteractiveDirector';
 import { GraaoThirdPersonCamera } from '../game/GraaoThirdPersonCamera';
 import { Input } from '../game/Input';
+import { TouchControls, glideAvailable, type TouchContext } from '../game/TouchControls';
 import { keyLabel } from '../game/KeyBindings';
 import { LocalPlayer } from '../game/LocalPlayer';
 import { Obstruction } from '../game/Obstruction';
@@ -91,6 +92,8 @@ export class GraaoApp {
   readonly anims = new GRAAnimationLibrary(this.assets);
   readonly parts = new CharacterPartLibrary();
   readonly input: Input;
+  /** On-screen controls for touch screens (shown once the screen is touched, or with `?touch`). */
+  readonly touch: TouchControls;
   readonly camera: GraaoThirdPersonCamera;
   readonly audio = new GRAAudioManager();
   readonly hud = new Hud();
@@ -184,6 +187,7 @@ export class GraaoApp {
     const quality = (['LOW', 'MEDIUM', 'HIGH'].includes(q ?? '') ? q : savedSettings.quality) as Quality;
     this.r = new GRARenderer(canvas, quality);
     this.input = new Input(canvas);
+    this.touch = new TouchControls(this.input, this.ui, { pause: () => this.openPause() });
     this.camera = new GraaoThirdPersonCamera(this.r.camera);
     this.audio.setVolume(savedSettings.volume);
     this.audio.setEffectsVolume(savedSettings.effectsVolume);
@@ -427,6 +431,16 @@ export class GraaoApp {
     document.addEventListener('pointerlockchange', () => {
       if (this.phase === 'MATCH') this.updateHint();
     });
+    // The first touch of the screen switches to the touch controls (a mouse never does); `?touch` forces them.
+    window.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' && !this.touch.active) {
+        this.touch.enable();
+        // Phones play in landscape: fullscreen and lock it now, inside the gesture.
+        void this.touch.lockLandscape();
+        this.updateHint();
+      }
+    }, true);
+    if (new URLSearchParams(location.search).has('touch')) this.touch.enable();
   }
 
   /**
@@ -452,11 +466,35 @@ export class GraaoApp {
     this.pause.show();
   }
 
+  /** What the touch layer's contextual and jump buttons read from the local state (TouchControls.ts). */
+  private touchContext(): TouchContext {
+    const s = this.local.state;
+    let wallAhead: TouchContext['wallAhead'] = null;
+    if (s.grounded && s.traversal === TraversalMode.NONE && !this.deploy.riding) {
+      // A face or an edge within a jump's reach right in front of the camera's heading (the motor's own probes).
+      const r = TRAVERSAL.reach;
+      const up = this.tmpUp.set(s.pos.x, s.pos.y, s.pos.z).normalize();
+      const probe = this.local.motor.probe;
+      const wall = probe.wall(s.pos, up, this.camera.frame.forward, r.probeHeights, r.wallReach + 0.35, TRAVERSAL.climb.wallMaxUp);
+      if (wall?.flags && wall.flags & SurfaceFlag.CLIMB) wallAhead = 'climb';
+      else if (wall?.flags && wall.flags & SurfaceFlag.LEDGE && probe.ledgeTop(s.pos, up, wall, r.mantleMin + 0.2, r.ledgeMax + 1.0)) wallAhead = 'ledge';
+    }
+    return {
+      traversal: s.traversal,
+      grounded: s.grounded,
+      canGlide: glideAvailable(s, GLIDE_STEPS),
+      prompt: this.loot.hud.currentPrompt,
+      wallAhead,
+      alive: this.combat.alive,
+    };
+  }
+
   /** Only the "click to play" prompt while the pointer is free; nothing over the game while playing. */
   private updateHint(): void {
     if (this.phase !== 'MATCH') return;
     const quiet = this.input.locked || this.results.visible || this.spectator.following;
-    this.hud.setHint(quiet ? '' : this.net ? 'Clique no mundo para jogar · ESC abre opções' : 'Clique para jogar · ESC abre opções');
+    const tap = this.touch.active ? 'Toque' : 'Clique';
+    this.hud.setHint(quiet ? '' : this.touch.active ? `${tap} no mundo para jogar · ☰ abre opções` : this.net ? `${tap} no mundo para jogar · ESC abre opções` : `${tap} para jogar · ESC abre opções`);
   }
 
   private applyAppearance(a: CharacterAppearance): void {
@@ -880,6 +918,7 @@ export class GraaoApp {
     this.lastT = t;
     this.time += dt;
     this.input.enabled = this.phase === 'MATCH' && !this.pause.visible && !this.settings.visible;
+    this.touch.show(this.input.enabled && !this.results.visible);
     if (this.input.consume('debug')) this.dev.toggle();
 
 
@@ -917,6 +956,7 @@ export class GraaoApp {
       }
       // Loot first: its weapon replacement card may own E and Q this frame.
       this.loot.update(dt, this.time);
+      if (this.touch.active) this.touch.update(dt, this.touchContext());
       this.combat.update(dt);
       this.deploy.update(dt);
       this.spectator.update(dt, look);

@@ -9,15 +9,69 @@
  * camera dissolve still works piece by piece. Small decoration (frames, sills, shutters, little props: see isNearPart)
  * carries `aLod` = 1 and the kit material folds it away beyond ~45 m — detail up close, simple masses far away,
  * without extra draw calls. Water pieces (fountains, falls, streams) go to their own meshes with the water material.
+ *
+ * Rock (the vertical kit): a box with `relief` is drawn broken into facets a few centimetres off its collider, a `hull`
+ * part is drawn from the same points the collider is built from, and either may be banded in strata (`bands`).
  */
 import * as THREE from 'three';
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { KIT_PALETTE, KIT_PREFABS, type KitPart } from '@graao/game-data';
 import { quatFromEulerDeg, type Placement } from '@graao/game-core';
 
 type Geo = THREE.BufferGeometry;
 
+/** A stable hash of a point (mm) and a salt, in [0, 1). */
+function hash(x: number, y: number, z: number, salt: number): number {
+  let h = Math.imul(Math.round(x * 1000) ^ 0x9e3779b9, 0x85ebca6b);
+  h ^= Math.imul(Math.round(y * 1000) + salt, 0xc2b2ae35);
+  h ^= Math.imul(Math.round(z * 1000) - salt * 7, 0x27d4eb2f);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+}
+
+/**
+ * A box drawn as broken rock (KitPart `relief`): its faces cut into ≈ 1.6 × 1.1 m cells whose corners move out of the
+ * face by up to `relief`, into it by up to twice that, and along it by up to a third of a cell (so the cells stop
+ * reading as a grid); the top stays flat to walk on. A corner shared by two faces moves the same way on both (the
+ * offset hashes its position), so the skin stays closed.
+ */
+function reliefBox(p: KitPart): Geo {
+  const a = p.relief!;
+  const { hx, hy, hz } = p;
+  const seg = (half: number, cell: number) => Math.max(1, Math.round((half * 2) / cell));
+  const [nx, ny, nz] = [seg(hx, 1.6), seg(hy, 1.1), seg(hz, 1.6)];
+  const g = new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2, nx, ny, nz).toNonIndexed();
+  const pos = g.getAttribute('position') as THREE.BufferAttribute;
+  const salt = Math.round(hx * 131 + hy * 71 + hz * 37 + p.x * 17 + p.y * 13 + p.z * 7);
+  const on = (v: number, half: number) => Math.abs(Math.abs(v) - half) < 1e-3;
+  // Across a face: out ≤ a, in ≤ 2a. Along it: up to a third of the cell either way (in the face's plane).
+  const normal = (v: number, h: number) => Math.sign(v) * (h * 3 - 2) * a;
+  const cells = { x: (hx * 2) / nx, y: (hy * 2) / ny, z: (hz * 2) / nz };
+  const along = (h: number, cell: number) => (h - 0.5) * 0.66 * cell;
+  for (let i = 0; i < pos.count; i++) {
+    const x = Math.round(pos.getX(i) * 1000) / 1000;
+    const y = Math.round(pos.getY(i) * 1000) / 1000;
+    const z = Math.round(pos.getZ(i) * 1000) / 1000;
+    const ox = on(x, hx), oy = on(y, hy), oz = on(z, hz);
+    const top = oy && y > 0;
+    if (top && !ox && !oz) {
+      pos.setXYZ(i, x, y, z);
+      continue;
+    }
+    const dx = ox ? normal(x, hash(x, y, z, salt)) : along(hash(x, y, z, salt), cells.x);
+    const dy = top ? 0 : oy ? normal(y, hash(x, y, z, salt + 1)) : along(hash(x, y, z, salt + 1), cells.y);
+    const dz = oz ? normal(z, hash(x, y, z, salt + 2)) : along(hash(x, y, z, salt + 2), cells.z);
+    pos.setXYZ(i, x + dx, y + dy, z + dz);
+  }
+  g.deleteAttribute('normal');
+  g.computeVertexNormals();
+  return g;
+}
+
 function partGeometry(p: KitPart): Geo {
+  if (p.shape === 'box' && p.relief) return reliefBox(p);
   switch (p.shape) {
     case 'box':
       return new THREE.BoxGeometry(p.hx * 2, p.hy * 2, p.hz * 2);
@@ -46,7 +100,42 @@ function partGeometry(p: KitPart): Geo {
       g.computeVertexNormals();
       return g;
     }
+    case 'hull': {
+      // The same points game-core builds the collider from (around the part's centre): what you see stops you.
+      const q = p.pts ?? [];
+      const pts: THREE.Vector3[] = [];
+      for (let i = 0; i + 2 < q.length; i += 3) pts.push(new THREE.Vector3(q[i], q[i + 1], q[i + 2]));
+      return new ConvexGeometry(pts);
+    }
   }
+}
+
+/**
+ * Per-vertex colours of a part already in the prefab frame: flat, or banded in strata (`bands`) — sides only, the tops
+ * keep the part's colour. The bands dip a little and vary in thickness, the same in every part of one prefab frame, so
+ * the tiers of a massif read as one rock.
+ */
+function partColors(p: KitPart, g: Geo): THREE.BufferAttribute {
+  const pos = g.getAttribute('position');
+  const n = pos.count;
+  const col = new Float32Array(n * 3);
+  const main = new THREE.Color(KIT_PALETTE[p.color]);
+  const bands = (p.bands ?? []).map((c) => new THREE.Color(KIT_PALETTE[c]));
+  const nrm = g.getAttribute('normal');
+  for (let t = 0; t + 2 < n; t += 3) {
+    let c = main;
+    if (bands.length && nrm.getY(t) + nrm.getY(t + 1) + nrm.getY(t + 2) < 2.2) {
+      const cx = (pos.getX(t) + pos.getX(t + 1) + pos.getX(t + 2)) / 3;
+      const cy = (pos.getY(t) + pos.getY(t + 1) + pos.getY(t + 2)) / 3;
+      const cz = (pos.getZ(t) + pos.getZ(t + 1) + pos.getZ(t + 2)) / 3;
+      const h = cy + 0.21 * cx + 0.07 * cz;
+      const k = Math.floor(h / 1.05 + 0.4 * Math.sin(h * 0.9));
+      const r = hash(k, 0, 0, 11);
+      if (r >= 0.5) c = bands[Math.min(bands.length - 1, Math.floor((r - 0.5) * 2 * bands.length))]!;
+    }
+    for (let v = 0; v < 3; v++) col.set([c.r, c.g, c.b], (t + v) * 3);
+  }
+  return new THREE.BufferAttribute(col, 3);
 }
 
 /** Small decoration only drawn up close (see KitPart `lod`). */
@@ -79,11 +168,8 @@ export function kitPrefabGeometry(id: string): Geo {
     const g = clean(partGeometry(p));
     const r = quatFromEulerDeg(p.rx, p.ry, p.rz);
     g.applyMatrix4(m.compose(new THREE.Vector3(p.x, p.y, p.z), q.set(r.x, r.y, r.z, r.w), one));
-    const c = new THREE.Color(KIT_PALETTE[p.color]);
     const n = g.getAttribute('position').count;
-    const col = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('color', partColors(p, g));
     g.setAttribute('aLod', new THREE.BufferAttribute(new Float32Array(n).fill(isNearPart(p) ? 1 : 0), 1));
     parts.push(g);
   }

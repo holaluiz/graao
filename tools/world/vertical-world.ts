@@ -14,7 +14,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirToLatLon, headingTangent, latLonToDir, transportTangent } from '@graao/game-core';
-import { serializeMap, validateMap, type ChestSpotDef, type GraaoMap, type MapPlacement, type MapWaypoint, type MapWind } from '@graao/game-data';
+import { serializeMap, validateMap, type ChestSpotDef, type GraaoMap, type MapPlacement, type MapTraversalLink, type MapWaypoint, type MapWind } from '@graao/game-data';
 import { v3dot, v3normalize, type Vec3 } from '@graao/shared';
 import { R, frameOf, round, terrain } from './author';
 
@@ -64,6 +64,7 @@ const placements: MapPlacement[] = [MASSIF];
 const chests: ChestSpotDef[] = [];
 const winds: MapWind[] = [];
 const waypoints: MapWaypoint[] = [];
+const links: MapTraversalLink[] = [];
 
 /** An island (building) whose walking surface is `top` m over the radius, centred on massif-frame (x, z). */
 function islandAt(id: string, prefab: string, x: number, z: number, top: number, turn = 0): MapPlacement {
@@ -201,7 +202,81 @@ wp('vert-wp-rampa2-topo', -7.0, 4.0, T2, ['vert-wp-t1-fundo-oeste', 'vert-wp-t2-
 wp('vert-wp-t2-frente', 2.0, 2.9, T2, ['vert-wp-rampa2-topo', 'vert-wp-rampa3-pe'], 'trilha');
 wp('vert-wp-rampa3-pe', 3.6, 3.45, T2 + 0.03, ['vert-wp-t2-frente', 'vert-wp-rampa3-topo'], 'trilha');
 wp('vert-wp-rampa3-topo', 3.6, -3.6, T3, ['vert-wp-rampa3-pe', 'vert-wp-cume'], 'trilha');
-wp('vert-wp-cume', 0.2, 0.2, T3, ['vert-wp-rampa3-topo'], 'mirante');
+wp('vert-wp-cume', 0.2, 0.2, T3, ['vert-wp-rampa3-topo', 'vert-wp-cume-leste'], 'mirante');
+// The summit's east edge, where a glide on the summit bell's corrente makes the Ilha do Sino (from the middle it falls
+// short: tools/world probe, 19/10).
+wp('vert-wp-cume-leste', 2.3, 0.9, T3, ['vert-wp-cume'], 'mirante');
+
+// Bot traversal links (docs/world/VERTICAL_BOT_NAVIGATION.md): the climbing faces of route B, the updrafts of route C
+// and of the islands, the floating stones, and glides down from the summit and the islands. Every spot below was probed
+// standable (tools/world probe, 19/10); the island waypoints are linked by hand (the automatic graph leaves the
+// islands, the bridge and the front terrace of tier 1 as separate pieces).
+/** A waypoint whose feet stand at world point `p` (an island, a stone, a terrace) — or on the terrain under it. */
+function wpOn(id: string, p: Vec3, wpLinks: string[], kind: MapWaypoint['kind'], onGround = false): void {
+  const dir = v3normalize(p);
+  const h = onGround ? 0 : radial(p) - terrain.heightAt(dir);
+  waypoints.push({ id, ...llOf(dir), ...(h > 0.25 ? { height: round(h, 2) } : {}), links: wpLinks, region: 'serra', kind });
+}
+function link(id: string, from: string, to: string, kind: MapTraversalLink['kind'], o: Partial<MapTraversalLink> = {}): void {
+  links.push({ id, from, to, kind, region: 'serra', ...o });
+}
+// Route B: the three faces, the terraces between them, and a way on foot from the front terrace of tier 1 round its
+// east side to the trail (a bot that falls off face 2 walks back).
+wp('vert-wp-paredao1-pe', 0.4, 7.6, null, [], 'paredao');
+wp('vert-wp-t1-paredao2', 0.4, 4.6, T1, ['vert-wp-t1-frente-leste'], 'paredao');
+wp('vert-wp-t1-frente-leste', 3.0, 4.4, T1, ['vert-wp-t1-paredao2', 'vert-wp-t1-leste'], 'trilha');
+wp('vert-wp-t1-leste', 6.6, 4.4, T1, ['vert-wp-t1-frente-leste', 'vert-wp-t1-leste-meio'], 'trilha');
+wp('vert-wp-t1-leste-meio', 6.6, 0, T1, ['vert-wp-t1-leste', 'vert-wp-t1-leste-fundo'], 'trilha');
+wp('vert-wp-t1-leste-fundo', 6.6, -5.3, T1, ['vert-wp-t1-leste-meio', 'vert-wp-rampa1-topo'], 'trilha');
+wp('vert-wp-t2-paredao3', 0.4, 2.75, T2, ['vert-wp-t2-frente'], 'paredao');
+link('vert-lk-paredao-1', 'vert-wp-paredao1-pe', 'vert-wp-t1-paredao2', 'escalada', { risk: 0.2 });
+link('vert-lk-paredao-2', 'vert-wp-t1-paredao2', 'vert-wp-t2-paredao3', 'escalada', { risk: 0.2 });
+link('vert-lk-paredao-3', 'vert-wp-t2-paredao3', 'vert-wp-cume', 'escalada', { risk: 0.2 });
+// Route C: the west updraft (with the corrente across) onto the summit; a glide down the front.
+wp('vert-wp-corrente-mirante', -10.9, -0.8, null, [], 'corrente');
+link('vert-lk-corrente-mirante', 'vert-wp-corrente-mirante', 'vert-wp-cume', 'corrente', { wind: 'vert-corrente-mirante-subida', risk: 0.4 });
+wp('vert-wp-pouso-cume', 0.5, 12.0, null, [], 'trilha');
+link('vert-lk-planagem-cume', 'vert-wp-cume', 'vert-wp-pouso-cume', 'planagem', { risk: 0.3 });
+// The Arquipélago dos Sinos: the Corrente do Sino up, a walk across the island and the rope bridge, the stones to the
+// Ilha da Torre (or its bell's updraft), and a glide down from each island.
+const groundAt = (p: Vec3): Vec3 => terrain.surfaceAt(v3normalize(p));
+wpOn('vert-wp-corrente-sino', groundAt(SF.at(-7.9, 0, 0.6)), [], 'corrente', true);
+wpOn('vert-wp-sino-oeste', SF.at(-3.8, 0, 2.4), ['vert-wp-sino-sul', 'vert-wp-sino-fundos-sul'], 'ilha');
+// The strip between the capelinha's back wall and the west edge (where the summit's corrente lands a glider), open to
+// the south: no lattice node sees into it past the chapel (tools/world probe, 19/10).
+wpOn('vert-wp-sino-fundos', SF.at(-5.1, 0, 0.2), ['vert-wp-sino-fundos-sul'], 'ilha');
+wpOn('vert-wp-sino-fundos-sul', SF.at(-5.0, 0, 2.3), ['vert-wp-sino-fundos', 'vert-wp-sino-oeste'], 'ilha');
+wpOn('vert-wp-sino-sul', SF.at(-1.0, 0, 2.6), ['vert-wp-sino-oeste', 'vert-wp-sino-centro'], 'ilha');
+wpOn('vert-wp-sino-centro', SF.at(1.5, 0, 1.5), ['vert-wp-sino-sul', 'vert-wp-sino-leste', 'vert-wp-sino-nordeste'], 'ilha');
+wpOn('vert-wp-sino-nordeste', SF.at(4.2, 0, -1.8), ['vert-wp-sino-centro', 'vert-wp-sino-norte'], 'ilha');
+wpOn('vert-wp-sino-norte', SF.at(2.6, 0, -3.6), ['vert-wp-sino-nordeste'], 'ilha');
+wpOn('vert-wp-sino-leste', SF.at(4.6, 0, 0), ['vert-wp-sino-centro', 'vert-wp-oratorio-oeste'], 'ponte');
+wpOn('vert-wp-oratorio-oeste', OF.at(-2.4, 0, 0), ['vert-wp-sino-leste', 'vert-wp-oratorio-norte', 'vert-wp-oratorio-leste'], 'ilha');
+wpOn('vert-wp-oratorio-norte', OF.at(-0.6, 0, -3.0), ['vert-wp-oratorio-oeste'], 'ilha');
+wpOn('vert-wp-oratorio-leste', OF.at(2.8, 0, 1.2), ['vert-wp-oratorio-oeste'], 'ilha');
+wpOn('vert-wp-torre', TF.at(0.6, 0, 0.9), [], 'ilha');
+link('vert-lk-corrente-sino', 'vert-wp-corrente-sino', 'vert-wp-sino-oeste', 'corrente', { wind: 'vert-corrente-do-sino', risk: 0.3 });
+link('vert-lk-corrente-torre', 'vert-wp-sino-norte', 'vert-wp-torre', 'corrente', { wind: 'vert-corrente-torre', risk: 0.5 });
+{
+  const stones = placements.filter((p) => /^vert-pedra-\d$/.test(p.id));
+  let prev = 'vert-wp-oratorio-norte';
+  stones.forEach((st, i) => {
+    const id = `vert-wp-pedra-${i}`;
+    wpOn(id, frameOf(st).base, [], 'ilha');
+    link(`vert-lk-salto-${i}`, prev, id, 'salto', { risk: 0.5 });
+    prev = id;
+  });
+  link('vert-lk-salto-torre', prev, 'vert-wp-torre', 'salto', { risk: 0.5 });
+}
+wpOn('vert-wp-pouso-sino', groundAt(SF.at(3.0, 0, 12.0)), [], 'trilha', true);
+wpOn('vert-wp-pouso-oratorio', groundAt(OF.at(10.0, 0, 3.0)), [], 'trilha', true);
+wpOn('vert-wp-pouso-torre', groundAt(TF.at(0, 0, -8.0)), [], 'trilha', true);
+link('vert-lk-planagem-sino', 'vert-wp-sino-sul', 'vert-wp-pouso-sino', 'planagem', { risk: 0.2 });
+link('vert-lk-planagem-oratorio', 'vert-wp-oratorio-leste', 'vert-wp-pouso-oratorio', 'planagem', { risk: 0.2 });
+link('vert-lk-planagem-torre', 'vert-wp-torre', 'vert-wp-pouso-torre', 'planagem', { risk: 0.3 });
+// The summit bell's corrente: a glide from the summit's east edge across to the Ilha do Sino, only while that bell rings
+// (a bot at the summit rings it first).
+link('vert-lk-corrente-cume-ilha', 'vert-wp-cume-leste', 'vert-wp-sino-fundos', 'planagem', { wind: 'vert-corrente-cume-ilha', risk: 0.4 });
 
 // ------------------------------------------------------------------------------------------------ report and write
 
@@ -216,6 +291,7 @@ for (const z of [-8, -6, -3, 0, 3, 6, 8]) {
 for (const p of placements) console.log(`${p.id.padEnd(34)} ${p.prefab.padEnd(22)} ${p.lat.toFixed(3)} ${p.lon.toFixed(3)} yaw ${p.yaw}${p.lift !== undefined ? ` lift ${p.lift}` : ''}`);
 for (const w of winds) console.log(`${w.id.padEnd(34)} ${w.kind.padEnd(12)} base ${w.base} altura ${w.height} r ${w.radius}${w.yaw !== undefined ? ` yaw ${w.yaw}` : ''}${w.trigger ? ` gatilho ${w.trigger}` : ''}`);
 for (const c of chests) console.log(`${c.id.padEnd(34)} baú h ${c.height}`);
+for (const l of links) console.log(`${l.id.padEnd(34)} ${l.kind.padEnd(12)} ${l.from} → ${l.to}${l.wind ? ` (${l.wind})` : ''}`);
 
 // Older serra pieces the massif would bury move out of its footprint (once: afterwards they are outside it).
 const RELOCATE: Record<string, [number, number]> = { 'serra-crista-1': [14.5, -7.0] };
@@ -239,6 +315,7 @@ const next: GraaoMap = {
   waypoints: [...(map.waypoints ?? []).filter((w) => !OWN(w.id)), ...waypoints],
   trails: map.trails ?? [],
   winds: [...(map.winds ?? []).filter((w) => !OWN(w.id)), ...winds],
+  traversalLinks: [...(map.traversalLinks ?? []).filter((l) => !OWN(l.id)), ...links],
 };
 const problems = validateMap(next);
 if (problems.length) throw new Error(problems.join('\n'));

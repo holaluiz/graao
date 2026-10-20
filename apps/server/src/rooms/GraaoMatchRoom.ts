@@ -37,6 +37,7 @@ import { recordMatchPayload, type ParticipantInfo } from '@graao/database';
 import {
   AbilityDraft,
   CharacterMotor,
+  TraversalCap,
   packTraversal,
   traversalAllowsCast,
   GRAAbilitySystem,
@@ -119,7 +120,7 @@ import {
   type PlayerHitTarget,
   type TormentaConfig,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MAP_HASH, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, TRAVERSAL_ACTIONS, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MAP_HASH, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, TRAVERSAL_ACTIONS, TraversalMode, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
 import {
   AbilityReject,
   AIM_SCALE,
@@ -209,10 +210,10 @@ import { hostPolicy } from '../hostPolicy';
 import { serverConfig } from '../config';
 import { matchStore } from '../persistence/MatchStore';
 import { ServerPlayer, type PlayerConnection } from '../sim/ServerPlayer';
-import { botIntent } from '../sim/BotBrain';
+import { botDropAhead, botIntent, botLinkIntent } from '../sim/BotBrain';
 import { chooseBotAbility } from '../sim/BotAbilityController';
 import { getChestSpots, getCreepAreas, getNav, getWorld } from '../world';
-import { BotNavigator } from '../sim/BotNav';
+import { BotNavigator, type NavBell, type NavContext, type NavStep } from '../sim/BotNav';
 import { log } from '../log';
 
 /** What `onAuth` hands to `onJoin` (as `client.auth`). */
@@ -459,6 +460,8 @@ export class GraaoMatchRoom extends Room {
   private loot!: GRALootSystem;
   /** Doors and breakable crates (authoritative; reset with every loot generation). */
   private interactives!: InteractiveSystem;
+  /** The bells bots may ring, with the event winds each wakes (built on first use). */
+  private navBells: NavBell[] | null = null;
   private lootSeed: number | null = null;
   private lootSpots: string[] = [];
   private chestCount: number = LOOT_RULES.chestsPerMatch;
@@ -1142,7 +1145,6 @@ export class GraaoMatchRoom extends Room {
   private freshKit(p: ServerPlayer): void {
     p.inv = p.freshInventory(this.battleRoyaleKit());
     p.weapon = 0;
-    p.fists = false;
     p.reloading = -1;
     p.useUntil = 0;
     p.useItem = -1;
@@ -1379,20 +1381,14 @@ export class GraaoMatchRoom extends Room {
     return true;
   }
 
-  /** E / Q take that weapon in hand; FISTS_SLOT puts the weapons away (they stay in the inventory) to punch. */
+  /** E / Q take that weapon in hand. There is no putting weapons away: only empty hands punch. */
   private onSwitch(c: Client, m: unknown): void {
     if (!this.legacyWarmup && this.phase !== MatchPhase.MATCH) return;
     const p = this.players.get(c.sessionId);
     const v = validateSwitch(m);
     if (!p || !v || !p.vitals.alive) return;
     if (!TRAVERSAL_ACTIONS[p.state.traversal].switchWeapon) return;
-    if (v.w === FISTS_SLOT) {
-      if (p.fists) return;
-      p.fists = true;
-      p.reloading = -1;
-      return;
-    }
-    if (!p.inv.slots[v.w] || (v.w === p.weapon && !p.fists)) return;
+    if (!p.inv.slots[v.w] || v.w === p.weapon) return;
     this.equip(p, v.w, Date.now());
   }
 
@@ -1401,7 +1397,6 @@ export class GraaoMatchRoom extends Room {
     const s = p.inv.slots[slot];
     if (!s) return;
     p.weapon = slot;
-    p.fists = false;
     p.reloading = -1;
     const w = WEAPONS[s.id];
     // Equip delay: treat the switch as a recent shot.
@@ -1432,8 +1427,8 @@ export class GraaoMatchRoom extends Room {
     if (p.lastFireSeen < 0 || seqGreater(f.s, p.lastFireSeen)) p.lastFireSeen = f.s;
     if (!p.vitals.alive) return;
     if (f.w !== p.weapon || p.reloading >= 0) return;
-    // Weapons put away (or none at all): the attack is a punch (MELEE), never a shot.
-    if (p.fists) return;
+    // No weapon in hand: the attack is a punch (MELEE), never a shot.
+    if (p.unarmed) return;
     if (!this.canFight(p, Date.now())) return;
     // Hands are busy while swimming, hanging, climbing, gliding, while an ability winds up and while a consumable is
     // being used (docs/gameplay/TRAVERSAL_STATES.md: what each traversal mode allows).
@@ -2051,8 +2046,16 @@ export class GraaoMatchRoom extends Room {
       const huntClose = !!hunt && Math.hypot(hunt.pos.x - p.state.pos.x, hunt.pos.y - p.state.pos.y, hunt.pos.z - p.state.pos.z) < 18 && this.botSeesPoint(p, hunt.pos, hunt.def.hitbox.top * 0.5);
       const direct = !zone && !chest && (!!flee || huntClose || (!hunt && sees && targetDistance < BOT_FIGHT_RANGE));
       const seek = zone ?? flee ?? hunt?.pos ?? chest ?? target?.state.pos;
+      const nav = getNav(this.world);
       let intent: ReturnType<typeof botIntent>;
-      if (direct || !seek) {
+      let brainRing = -1;
+      if (brain.nav.linking && seek) {
+        // Taking a traversal link (a face, an updraft, a glide down): it is finished, or fails, before anything else.
+        const step = brain.nav.next(nav, p.state.pos, seek, now, this.botNavContext(p));
+        brainRing = step.ring ?? -1;
+        intent = botIntent(p.state, sees ? target!.state.pos : undefined, index, now, false, step.point ?? seek, sees);
+        Object.assign(intent, botLinkIntent(p.state, step, this.roomPhysics().winds));
+      } else if (direct || !seek) {
         brain.nav.reset();
         // Unarmed, it closes in to punching distance; armed, it keeps a few metres of room (a little less from a creep).
         const keep = flee ? 0 : hunt ? (p.unarmed ? 0.7 : 5) : p.unarmed ? 0.9 : 6;
@@ -2064,10 +2067,20 @@ export class GraaoMatchRoom extends Room {
         }
       } else {
         const walking = p.state.grounded || p.state.swimming;
-        const step = walking ? brain.nav.next(getNav(this.world), p.state.pos, seek, now) : { point: null, stuck: false, left: 0 };
+        const step: NavStep = walking ? brain.nav.next(nav, p.state.pos, seek, now, this.botNavContext(p)) : { point: null, stuck: false, left: 0 };
+        brainRing = step.ring ?? -1;
         intent = botIntent(p.state, sees ? target!.state.pos : undefined, index, now, step.stuck, step.point ?? seek, sees);
+        // Setting out on a link, or left on a wall by one that failed (it lets go).
+        if (step.link || p.state.traversal === TraversalMode.CLIMB || p.state.traversal === TraversalMode.HANG) Object.assign(intent, botLinkIntent(p.state, step, this.roomPhysics().winds));
+      }
+      // At a high edge, not on a link: it stops there (the walk it was on costs more, so the next plan goes round).
+      if (p.state.grounded && !brain.nav.linking && botDropAhead(this.roomPhysics(), p.state.pos, intent.wish)) {
+        intent.wish = { x: 0, y: 0, z: 0 };
+        brain.nav.edge(now);
       }
       if (chest) this.botLoot(p, brain, now);
+      // The bell that wakes the wind of the link it is about to take, once in reach (validated like a person's ring).
+      if (brainRing >= 0 && this.interactives.bellNear(p.state.pos) === brainRing) this.interactives.ring(p, brainRing, now);
       // A closed door in the way: the bot opens it.
       if (p.state.grounded) this.interactives.assist(p, intent.wish, now);
       brain.acc = Math.min(brain.acc + dt * SIM_HZ, MAX_INPUT_BACKLOG);
@@ -2076,9 +2089,22 @@ export class GraaoMatchRoom extends Room {
         p.queue.push([brain.seq, Math.round(intent.wish.x * WISH_SCALE), Math.round(intent.wish.y * WISH_SCALE), Math.round(intent.wish.z * WISH_SCALE), Math.round(intent.aim.x * AIM_SCALE), Math.round(intent.aim.y * AIM_SCALE), Math.round(intent.aim.z * AIM_SCALE), intent.buttons]);
         brain.acc -= 1;
       }
-      this.botAbility(p, brain, target, intent, seekZone, now);
-      this.botAttack(p, brain, target, intent, seekZone, now);
+      // Hands on a face or on the kite: no magic, no shots (the room refuses them anyway).
+      if (!brain.nav.linking) {
+        this.botAbility(p, brain, target, intent, seekZone, now);
+        this.botAttack(p, brain, target, intent, seekZone, now);
+      }
     }
+  }
+
+  /**
+   * What a bot can do on traversal links and how it stands now (BotNav.ts). Every bot may climb, hang and glide, and
+   * ring the islands' bells to wake the event winds of its way.
+   */
+  private botNavContext(p: ServerPlayer): NavContext {
+    const windsOn = this.interactives.windsOn;
+    this.navBells ??= this.interactives.bells.map((b) => ({ id: b.id, pos: b.position, winds: this.roomPhysics().winds.filter((w) => w.trigger === b.mapId).map((w) => w.index) }));
+    return { caps: TraversalCap.ALL, stamina: p.state.stamina, grounded: p.state.grounded, traversal: p.state.traversal, windOn: (w) => windsOn.has(w), bells: this.navBells };
   }
 
   /** Line of sight from a bot's eyes to another player's chest (the same world query shots use). */
@@ -2302,8 +2328,9 @@ export class GraaoMatchRoom extends Room {
       p.state.noSprint = statuses.noSprint;
       p.state.airControl = passive.airControl;
       p.state.sprintSpeed = passive.speed;
-      // Bots start no traversal until their navigation plans ledges, walls and glides (docs/world/VERTICAL_BOT_NAVIGATION.md).
-      if (p.bot) p.state.traversalCaps = 0;
+      // Bots start a traversal only while taking a link their navigation planned (docs/world/VERTICAL_BOT_NAVIGATION.md):
+      // pressed against a wall or jumping when stuck, they would grab ledges no plan knows about.
+      if (p.bot) p.state.traversalCaps = this.bots.get(p.index)?.nav.caps ?? 0;
       let stepped = 0;
       // Keep a small jitter buffer once the stream is flowing: steady consumption = smooth remote motion.
       const keep = p.queue.length > INPUT_JITTER_BUFFER + 6 ? 0 : INPUT_JITTER_BUFFER;

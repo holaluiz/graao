@@ -132,7 +132,7 @@ export function validatePrepared(m: unknown): import('./protocol').PreparedMsg |
 export function validateSwitch(m: unknown): import('./protocol').SwitchWeaponMsg | null {
   if (!m || typeof m !== 'object') return null;
   const w = (m as { w?: unknown }).w;
-  return w === 0 || w === 1 || w === 2 ? { w } : null;
+  return w === 0 || w === 1 ? { w } : null;
 }
 
 /** MELEE shape check (reach, direction, walls, interval and empty hands are the room's job). */
