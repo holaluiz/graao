@@ -129,6 +129,13 @@ export type Grab =
 
 const sub = (a: Vec3, b: Vec3): Vec3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
 const along = (p: Vec3, d: Vec3, k: number): Vec3 => ({ x: p.x + d.x * k, y: p.y + d.y * k, z: p.z + d.z * k });
+/**
+ * Standing check (`standsOn`): ground within this far under the feet (the round bottom on a 52° slope sits 0.19 m over
+ * the ground straight under its axis), probed under the axis and at this far out toward the rim, front, back and sides.
+ */
+const STAND_PROBE = 0.3;
+const STAND_RIM = RADIUS * 0.75;
+const RIM_PROBES = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 
 /**
  * Geometry queries for traversal, bound to one physics world and the motor's collider filter (the server's world is
@@ -286,6 +293,21 @@ export class TraversalProbe {
     v3set(this.down, -up.x, -up.y, -up.z);
     const hit = this.ray(along(feet, up, 0.1), this.down, dist + 0.1);
     return !!hit && v3dot(hit.normal, up) >= WALK_COS;
+  }
+
+  /**
+   * Is the capsule on walkable ground, under its axis or (at an edge, on a step) under its rim? The character
+   * controller counts any contact that is not exactly vertical as ground, and on the sphere a wall facing away from
+   * its building's centre leans back by a degree or two: pressed against one in the air, the controller would stand on
+   * the wall, and a jump from there would climb any wall.
+   */
+  standsOn(feet: Vec3, up: Vec3, facing: Vec3): boolean {
+    if (this.groundBelow(feet, up, STAND_PROBE)) return true;
+    const side = v3normalize(v3cross(up, facing));
+    for (const [a, b] of RIM_PROBES) {
+      if (this.groundBelow({ x: feet.x + (facing.x * a + side.x * b) * STAND_RIM, y: feet.y + (facing.y * a + side.y * b) * STAND_RIM, z: feet.z + (facing.z * a + side.z * b) * STAND_RIM }, up, STAND_PROBE)) return true;
+    }
+    return false;
   }
 
   /** Nothing under the feet for `dist` m (the glider needs some air under it). */

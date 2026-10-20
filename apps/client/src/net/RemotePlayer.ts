@@ -129,6 +129,7 @@ export class RemotePlayer {
     this.facing.addScaledVector(up, -this.facing.dot(up)).normalize();
     this.character.setPose(this.pos, up, this.facing);
     const v = b.vel.clone();
+    const lateral = v.dot(this.facing.clone().cross(up).normalize());
     const vertical = v.dot(up);
     const speed = v.addScaledVector(up, -vertical).length();
     this.alive = (b.flags & SnapFlag.ALIVE) !== 0;
@@ -153,6 +154,7 @@ export class RemotePlayer {
       groundDist,
       waterDepth: waterDepth(this.pos),
       vertical,
+      lateral,
     });
     this.placeLabel(up, camera, viewport, physics);
   }

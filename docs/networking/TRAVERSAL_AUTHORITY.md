@@ -76,5 +76,16 @@ aprovação).**
   anfitriã, em segundo plano, ficou 340 ms sem repassar mensagens (17 comandos pendentes em B): passados 0,3 s sem
   comandos de alguém no ar, a sala o faz cair sem entrada (`starvedFor`, a proteção contra quem para de mandar comandos
   para ficar suspenso) e a correção seguinte foi de 0,68 m em plena planagem. É o custo de a aba anfitriã travar, não
-  da travessia; com a anfitriã jogando (aba na frente) não apareceu.
+  da travessia; com a anfitriã jogando (aba na frente) não apareceu. **Corrigido em 20/10** (abaixo).
+- **Travamento do repasse (20/10).** Numa sala hospedada todo comando passa pela thread principal da aba anfitriã;
+  quando ela trava, todas as conexões silenciam juntas. A sala agora distingue isso do silêncio de um cliente: se
+  ninguém manda comandos por mais de `RELAY_QUIET_MS` (150 ms; um cliente ativo manda a cada 33 ms), ninguém "passa
+  fome" (cai sem entrada), e na volta a fila e o orçamento aceitam até `RELAY_BACKLOG` (90 passos, 1,5 s) enquanto dura
+  o silêncio e um instante depois — antes, além da queda, a fila de 12 comandos descartava os excedentes da rajada e a
+  predição corrigia o que eles teriam feito. O ritmo continua limitado pelo tempo real (o orçamento só cresce com o
+  relógio), e passado `RELAY_GRACE_MS` (1,5 s) o silêncio volta a contar (todos ausentes). Um cliente calado sozinho,
+  com os outros mandando, continua caindo. Teste (`tests/vertical.multiplayer.test.ts`, "a stall of the relay"): A
+  plana na corrente oeste com o `LocalPlayer` real e B manda comandos parados; um repasse de teste segura os comandos
+  dos dois por 350 ms e solta tudo em ordem: A nunca sai da pipa no servidor e a pior correção é 1 mm (sem a correção:
+  A cai da pipa e corrige 1,19 m); calando só A, A cai.
 - Não medido: redes externas (dependem das máquinas do M2).

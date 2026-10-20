@@ -120,6 +120,17 @@ export const TRAVERSAL = {
     /** Leaves the top at this speed along the facing. */
     exitSpeed: 1.5,
   },
+  /**
+   * Linha de Varal onto a ledge: a rope striking a face whose top is within `probe` m over the hit (or the underside
+   * of an overhang up to `overhang` m in from its edge) ends `out` m in front of the edge and `under` m under its top
+   * (the pull stops up to 0.8 m short: the top stays within the hands' reach of 2.25 m, and the head clears the slab).
+   */
+  grapple: {
+    probe: 1.3,
+    overhang: 1.5,
+    out: 0.45,
+    under: 1.2,
+  },
   climb: {
     /** Climbable faces: |normal · up| below this (rock slabs lean up to ≈ 50°) — a walkable slope is walked. */
     wallMaxUp: 0.65,
@@ -203,10 +214,11 @@ export interface TraversalActions {
 
 export const TRAVERSAL_ACTIONS: Record<TraversalMode, TraversalActions> = {
   [TraversalMode.NONE]: { fire: true, cast: 'all', reload: true, interact: true, switchWeapon: true },
-  // Both hands on the edge or the wall: nothing but changing what is slung on the back.
-  [TraversalMode.HANG]: { fire: false, cast: 'none', reload: false, interact: false, switchWeapon: true },
+  // Both hands on the edge or the wall: no weapons; only mobility magic, which lets go of it (a way out under fire:
+  // the Ricochete kicks off the wall, the Pulo de Pipa jumps up it once, the Linha de Varal ropes away).
+  [TraversalMode.HANG]: { fire: false, cast: 'mobility', reload: false, interact: false, switchWeapon: true },
   [TraversalMode.MANTLE]: { fire: false, cast: 'none', reload: false, interact: false, switchWeapon: false },
-  [TraversalMode.CLIMB]: { fire: false, cast: 'none', reload: false, interact: false, switchWeapon: true },
+  [TraversalMode.CLIMB]: { fire: false, cast: 'mobility', reload: false, interact: false, switchWeapon: true },
   // Hands on the glider: no weapons, only mobility magic (which takes over the glide).
   [TraversalMode.GLIDE]: { fire: false, cast: 'mobility', reload: true, interact: false, switchWeapon: true },
 };

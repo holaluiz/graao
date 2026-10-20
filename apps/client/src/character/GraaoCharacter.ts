@@ -175,7 +175,9 @@ export class GraaoCharacter {
     // Skydive: belly-down, flaring back to feet-first over the last metres so the landing reads.
     const flare = s.groundDist === undefined ? 1 : THREE.MathUtils.smoothstep(s.groundDist, 2.5, 10);
     const gliding = s.moveState === MovementState.GLIDE;
-    const target = s.diving ? THREE.MathUtils.lerp(0.15, GraaoCharacter.TILT_DIVE, flare) : gliding ? GraaoCharacter.TILT_GLIDE : 0;
+    // Under the kite the body leans into the flight; rising on an updraft it hangs more upright (the `updraft` pose).
+    const rise = gliding ? THREE.MathUtils.smoothstep(s.vertical ?? 0, 0.4, 2.0) : 0;
+    const target = s.diving ? THREE.MathUtils.lerp(0.15, GraaoCharacter.TILT_DIVE, flare) : gliding ? GraaoCharacter.TILT_GLIDE * (1 - 0.6 * rise) : 0;
     this.tilt += (target - this.tilt) * (1 - Math.exp(-dt * (s.diving || gliding ? 5 : 9)));
     if (Math.abs(this.tilt) < 1e-4 && target === 0) this.tilt = 0;
     // Double jump (rising edge of the spent flag while airborne): a tucked forward flip, fast out and easing in.

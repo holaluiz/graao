@@ -12,13 +12,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, type Room } from '@colyseus/sdk';
 import { matchMaker } from '@colyseus/core';
-import { DEFAULT_APPEARANCE, GRAAO_MAP, PLANET, TRAVERSAL, randomAppearance } from '@graao/game-data';
+import { CHEST_REGIONS, DEFAULT_APPEARANCE, GRAAO_MAP, PLANET, TRAVERSAL, randomAppearance } from '@graao/game-data';
 import { buildNavGraph, createGameWorld, dirToLatLon, frameOfPlacement, type PlacementFrame } from '@graao/game-core';
 import { C2S, CLIENT_VERSION, ChestState, MatchPhase, MovementState, PROTOCOL_VERSION, ROOM_NAME, S2C, SnapFlag, v3dot, v3len, v3normalize, type EventsMsg, type GameEvent, type RoomStateMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
 import { createGraaoServer } from '../apps/server/src/app';
 import { setAuthVerifier } from '../apps/server/src/auth/SupabaseAuth';
 import { setMatchStore } from '../apps/server/src/persistence/MatchStore';
-import { getWorld } from '../apps/server/src/world';
+import { getChestSpots, getWorld } from '../apps/server/src/world';
 
 const PORT = 3170 + Math.floor(Math.random() * 40);
 const server = createGraaoServer();
@@ -42,6 +42,7 @@ afterAll(async () => {
 const opts = (name: string) => ({ protocol: PROTOCOL_VERSION, client: CLIENT_VERSION, name, appearance: name === 'A' ? DEFAULT_APPEARANCE : randomAppearance(() => 0.42) });
 const radial = (p: Vec3) => v3len(p) - R;
 const add = (a: Vec3, b: Vec3, s: number): Vec3 => ({ x: a.x + b.x * s, y: a.y + b.y * s, z: a.z + b.z * s });
+const neg = (v: Vec3): Vec3 => ({ x: -v.x, y: -v.y, z: -v.z });
 const frame = (id: string): PlacementFrame => frameOfPlacement(world.terrain, GRAAO_MAP.placements.find((p) => p.id === id)!);
 const ll = (p: Vec3) => dirToLatLon(v3normalize(p));
 /** What a character stands on under (or just over) `p`. */
@@ -204,6 +205,68 @@ describe('a bot up on an island when the Tormenta closes elsewhere', () => {
       }
     } finally {
       await a.leave();
+    }
+  }, 90000);
+});
+
+describe('a chest up high (Alturas: better loot)', () => {
+  it('a bot at the foot of the Serra prefers the summit chest to a nearer one on the ground, climbs up and opens it', async () => {
+    const massif = frame('vert-serra-macico');
+    const foot = footing(massif.at(0.6, 0.5, 9.5));
+    const spots = getChestSpots(await getWorld());
+    const summit = spots.find((c) => c.def.id === 'vert-cume-mirante')!;
+    expect(summit?.ok, 'o baú do cume é válido').toBe(true);
+    const dSummit = v3len({ x: summit.pos.x - foot.x, y: summit.pos.y - foot.y, z: summit.pos.z - foot.z });
+    // A plain chest nearer than the summit in a straight line, but within the high chest's pull.
+    const plain = spots
+      .filter((c) => c.ok && !CHEST_REGIONS[c.region]?.vantage)
+      .map((c) => ({ c, d: v3len({ x: c.pos.x - foot.x, y: c.pos.y - foot.y, z: c.pos.z - foot.z }) }))
+      .filter(({ d }) => d < dSummit - 1 && d > dSummit - 15)
+      .sort((x, y) => x.d - y.d)[0];
+    // The person far away (beyond the calm range: the bot explores instead of hunting it).
+    const far = footing(groundAt(neg(massif.base)));
+    const a = await new Client(url).create(ROOM_NAME, {
+      ...opts('A'), legacyWarmup: true, maxPlayers: 2, bots: 1, countdownMs: 300, skipDraft: true, skipUfo: true, creepCount: 0,
+      lootSpots: ['vert-cume-mirante', ...(plain ? [plain.c.def.id] : [])], chestCount: plain ? 2 : 1,
+      matchSpawns: [ll(far), ll(foot)],
+      // The safe region stays round the Serra the whole time (a random one would send the bot off to it instead).
+      tormentaFinal: ll(foot),
+      tormentaPhases: [{ waitMs: 120000, shrinkMs: 3000, radiusDeg: 60, damage: 1 }],
+    });
+    const A = watch(a);
+    await new Promise<WelcomeMsg>((r) => a.onMessage(S2C.WELCOME, r));
+    const room = matchMaker.getLocalRoomById(a.roomId) as unknown as RoomObject & { loot: { chests: { id: number; state: number; by: number; spot: { def: { id: string } } }[] } };
+    try {
+      const bot = await until(() => A.rooms.at(-1)?.players.find((p) => p.bot), 3000);
+      expect(bot, 'um bot na sala').toBeTruthy();
+      const ib = bot!.index;
+      a.send(C2S.READY, { r: 1 });
+      expect(await until(() => phaseOf(A) === MatchPhase.MATCH, 8000), 'a partida começa').toBe(true);
+      const top = room.loot.chests.find((c) => c.spot.def.id === 'vert-cume-mirante')!;
+      const sb = [...room.players.values()].find((p) => p.index === ib)!;
+      // Seats are not handed out in a fixed order: put the bot at the foot of the Serra and the person far away.
+      const sa = [...room.players.values()].find((p) => !p.bot)!;
+      const rest = (st: ServerSide['state'], p: Vec3, f: Vec3) => Object.assign(st, { pos: add(p, v3normalize(p), 0.05), vel: { x: 0, y: 0, z: 0 }, facing: f, grounded: false, traversal: 0, stamina: TRAVERSAL.stamina.max, glideSteps: 0 });
+      rest(sa.state, far, massif.forward);
+      rest(sb.state, foot, neg(massif.forward));
+      room.bots.get(ib)!.nav.reset();
+      const links = new Set<string>();
+      let chosen = -2;
+      const tracker = setInterval(() => {
+        const l = linkOf(room.bots.get(ib)!);
+        if (l) links.add(l);
+        if (chosen === -2 && room.bots.get(ib)!.chest >= 0) chosen = room.bots.get(ib)!.chest;
+      }, 50);
+      try {
+        const opened = await until(() => top.state !== ChestState.CLOSED && top.by === ib, 60000);
+        if (process.env.GRAAO_DEBUG) console.log(`baú do cume: ${dSummit.toFixed(1)} m; baú comum ${plain ? `${plain.c.def.id} a ${plain.d.toFixed(1)} m` : '—'}; ligações ${[...links].join(', ')}; bot a ${radial(sb.state.pos).toFixed(1)} m`);
+        expect(opened, `o bot abre o baú do cume (ligações: ${[...links].join(', ') || '—'}; bot a ${radial(sb.state.pos).toFixed(1)} m)`).toBe(true);
+        if (plain) expect(chosen, 'o primeiro baú escolhido foi o do cume').toBe(top.id);
+      } finally {
+        clearInterval(tracker);
+      }
+    } finally {
+      await a.leave().catch(() => {});
     }
   }, 90000);
 });

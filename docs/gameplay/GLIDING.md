@@ -33,6 +33,16 @@ corrente ascendente a pipa abre após 0,12 s no ar, subindo ou não (o vento a p
 
 As magias de mobilidade podem ser lançadas planando (assumem o movimento); as outras não.
 
+Medido em partida real (20/10, `tests/vertical.mobility.multiplayer.test.ts`): em ar parado, de 14 m de altura, a
+pipa universal leva 18,1 m e a Asa de Papel 32,1 m. Do cume da Serra, a Asa pousa na Ilha do Sino com o sino calado; a
+pipa universal também chega lá, mas só porque a rota cruza a corrente ascendente permanente do lado oeste da ilha.
+
+## Animação
+
+`glide` (mãos na barra da pipa, corpo inclinado para a frente) e, subindo numa corrente (mais de 1,2 m/s para cima,
+com histerese), `updraft`: a pegada mais alta, o corpo ereto (a inclinação cai 60%) e as pernas soltas, balançando.
+Captura: `docs/world/screenshots/vertical-corrente-pose.jpg`.
+
 ## Armas
 
 Mãos na barra da pipa: sem tiro, sem soco, sem interação; recarregar e trocar de arma são permitidos.

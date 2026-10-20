@@ -97,16 +97,25 @@ export function rollChest(rand: () => number): LootDrop[] {
 }
 
 const hasWeapon = (c: LootDrop[]) => c.some((d) => ITEMS[d.item].kind === 'weapon');
+const RARITY_RANK: Record<string, number> = { common: 0, uncommon: 1, rare: 2, epic: 3 };
+/** The rank of a chest's rarest item (common 0 … epic 3). */
+const bestRarity = (c: LootDrop[]) => Math.max(...c.map((d) => RARITY_RANK[ITEMS[d.item].rarity] ?? 0));
 
 /**
  * The whole match's chests from one seed, with the fairness rules: every starter chest (`starters[i]`) holds a weapon
  * (a basic one when it rolled none), at least `minWeaponShare` of the chests hold a weapon (spread through the chest
- * order, which the spawner already spreads over the planet) and at most `maxEpicPerMatch` epic items. Deterministic
- * for (seed, count, starters).
+ * order, which the spawner already spreads over the planet) and at most `maxEpicPerMatch` epic items. A chest with
+ * `advantage[i]` (a high spot: CHEST_REGIONS `vantage`) is rolled twice and keeps the roll whose best item is rarer.
+ * Deterministic for (seed, count, starters, advantage).
  */
-export function rollMatchLoot(seed: number, count: number, starters: readonly boolean[] = []): LootDrop[][] {
+export function rollMatchLoot(seed: number, count: number, starters: readonly boolean[] = [], advantage: readonly boolean[] = []): LootDrop[][] {
   const rand = mulberry32(seed ^ 0x51ed270b);
-  const chests = Array.from({ length: count }, () => rollChest(rand));
+  const chests = Array.from({ length: count }, (_, i) => {
+    const a = rollChest(rand);
+    if (!advantage[i]) return a;
+    const b = rollChest(rand);
+    return bestRarity(b) > bestRarity(a) ? b : a;
+  });
   // Starter chests: a basic weapon (and its ammunition) when the roll gave none.
   chests.forEach((c, i) => {
     if (!starters[i] || hasWeapon(c)) return;

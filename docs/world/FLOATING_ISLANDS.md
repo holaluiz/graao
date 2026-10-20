@@ -23,12 +23,28 @@ nunca passa de 0,8 da laje — quem pendura na borda fica livre dela (teste em `
 
 | Para | Rota universal (sem magia) | Alternativas |
 |---|---|---|
-| Ilha do Sino | corrente ascendente `vert-corrente-do-sino` (lado oeste) + pipa | Voo de Papagaio, Linha de Varal (âncoras), vento do sino do cume |
+| Ilha do Sino | corrente ascendente `vert-corrente-do-sino` (lado oeste) + pipa; do cume, a pipa também chega cruzando essa corrente | Voo de Papagaio; Linha de Varal do chão (corda no beiral, beirada, mantle); Asa de Papel do cume; Atalho de Giz do cume; vento do sino do cume |
 | Ilha do Oratório | ponte suspensa de 7 m (`ponte-tabuas`) | as mesmas |
 | Ilha da Torre | escada de 6 pedras flutuantes (≈ 1 m de subida e ≈ 0,4 m de vão cada) a partir do Oratório, e a borda sul da ilha como beirada | sino da Ilha do Sino: acorda por 24 s a corrente `vert-corrente-torre` |
 
 Saída de qualquer ilha: saltar e planar (ou só cair: não há dano de queda), a corrente de volta, a ponte. Ninguém
 fica preso: cada ilha tem borda agarrável e pelo menos duas saídas.
+
+**Rotas por magia verificadas em partida real (20/10, `tests/vertical.mobility.multiplayer.test.ts`):**
+
+- **Linha de Varal do chão:** de 3 m fora da borda sul, a corda (14 m de alcance) acerta a parte de baixo da laje
+  junto ao beiral. Até 19/10 ela terminava 2,7 m sob o topo, debaixo do beiral — fora do alcance das mãos (2,25 m): o
+  jogador batia a cabeça na laje e caía 14 m. Agora uma corda que pega a face ou o beiral de uma beirada termina
+  diante da borda, 1,2 m sob o topo (`TRAVERSAL.grapple`); empurrando para a ilha, PENDURADO → MANTLE → de pé na laje.
+  As âncoras das ilhas não alcançam do chão (o topo fica a ~16 m; a corda pega qualquer superfície).
+- **Asa de Papel do cume** (sino calado): pousa na Ilha do Sino. Em ar parado, 14 m acima do chão, a Asa leva 32,1 m
+  contra 18,1 m da pipa universal.
+- **Atalho de Giz:** um portal precisa de linha de visão até a ponta: debaixo de uma ilha o topo nunca está à vista
+  (recusado, `BLOCKED`); do cume (2 m mais alto, 20 m longe) está. O portal do cume leva à ilha e, enquanto dura,
+  traz de volta; outro jogador que entra nele não vai a lugar nenhum, e ninguém é mandado para cima de quem está
+  parado na outra ponta. Observação: quem chega e fica parado sobre a saída volta pelo portal depois de 1,5 s (regra da
+  magia, não da ilha).
+- **Passo de Vento pela borda:** o impulso passa do beiral; segurando pular a pipa abre e o jogador pousa no chão.
 
 ## Sino interativo (evento)
 
@@ -41,8 +57,15 @@ não move plataformas e não dá loot: só vento (sistema pequeno, como pedido).
 ## Loot
 
 Pontos de baú do sistema existente (`chestSpots` com `surface: 'prop'` e `height`), validados pelo servidor:
-`vert-ilha-sino-capelinha` (coberto) e `vert-ilha-torre` (exposto); mais o do cume. A região de loot é "Trilhas" (a
-raridade é a do sorteio normal; não há loot "melhor" por altura — se o design quiser, é uma regra nova de loot).
+`vert-ilha-sino-capelinha` (coberto) e `vert-ilha-torre` (exposto); mais o do cume.
+
+**Loot nas alturas (20/10).** Os três formam a região de baús **Alturas** (`CHEST_REGIONS`, `vantage`): toda partida
+tem pelo menos um baú lá em cima; sendo o primeiro da região, é inicial (sempre traz arma); e é sorteado com vantagem —
+duas rolagens, fica a de item mais raro (em 600 partidas simuladas a raridade do melhor item sobe ~0,15 degrau em
+média, e as regras da partida — armas suficientes, no máximo 2 épicos — continuam valendo). É a recompensa pelo risco
+de subir exposto. Os bots pesam esses baús como 20 m mais perto e sobem pelas rotas que conhecem: um bot no pé da
+Serra trocou um baú comum a 8,2 m pelo do cume a 15,1 m, subiu os três paredões e o abriu
+(`tests/vertical.bots.multiplayer.test.ts`). No editor, a região é a do campo "região" do baú.
 
 ## Combate
 

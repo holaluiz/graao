@@ -84,6 +84,18 @@ Depois da arte de rocha (mesmo método, 19/10 à noite, sem outra sessão rodand
 
 A diferença para a vila continua ~1 ms; a arte nova não mudou a ordem de grandeza.
 
+## Quinta rodada (20/10)
+
+- **Chão é apoio caminhável:** cada passo em que o controlador relata chão faz agora um raio curto (0,4 m) sob o eixo
+  da cápsula; só na borda de um degrau ou de um penhasco, até mais quatro sob a borda. Andando no chão, quase sempre
+  um raio por passo (a travessia já fazia de 1 a 7 consultas por passo no ar perto de algo marcado). Os testes de
+  motor e de mapa (118) e as rotas medidas não mudaram de tempo de forma perceptível; não houve medição A/B isolada.
+- **Repasse travado:** depois de um silêncio de todos, a sala pode simular até 90 passos de um jogador num tick (a
+  rajada que ficou para trás). Num travamento de 350 ms são ~21 passos por jogador num tick — o mesmo custo que um
+  tick normal tem em 6 ou 7 ticks, uma vez.
+- **Animação:** três clipes procedurais novos (`climb`, `shimmy`, `updraft`) feitos na carga, 9 quadros-chave cada;
+  nenhuma malha, textura ou draw call nova.
+
 ## Não medido nesta rodada
 
 GPU isolada (timer query), memória da GPU, 1080p/DPR 2 e celular. Medir antes do V10.

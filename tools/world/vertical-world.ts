@@ -99,7 +99,7 @@ function windAt(w: Omit<MapWind, 'lat' | 'lon' | 'base' | 'height' | 'yaw' | 're
 /** A chest spot standing on a prop surface at world point `p` (its feet), facing massif turn `turn` (90: east). */
 function chestOn(id: string, p: Vec3, hint: string, turn: number, o: Partial<ChestSpotDef> = {}): void {
   const dir = v3normalize(p);
-  chests.push({ id, region: 'Trilhas', ...llOf(dir), hint, surface: 'prop', height: round(radial(p) - terrain.heightAt(dir), 2), yaw: yawAt(dir, turn), ...o });
+  chests.push({ id, region: 'Alturas', ...llOf(dir), hint, surface: 'prop', height: round(radial(p) - terrain.heightAt(dir), 2), yaw: yawAt(dir, turn), ...o });
 }
 /** A wind column centred on the radial through world point `p`, from radial height `from` to `to`. */
 function windOn(w: Omit<MapWind, 'lat' | 'lon' | 'base' | 'height' | 'region'> & { from: number; to: number }, p: Vec3): MapWind {

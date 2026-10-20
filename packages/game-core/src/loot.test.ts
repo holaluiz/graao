@@ -57,6 +57,32 @@ describe('GRALootTable', () => {
     for (const r of ['common', 'uncommon', 'rare', 'epic']) expect(byRarity.get(r) ?? 0).toBeGreaterThan(0);
     expect(byRarity.get('epic')!).toBeLessThan(byRarity.get('rare')!);
   });
+
+  it('a chest on a high spot (vantage) is rolled with advantage: rarer on average, deterministic, the match rules kept', () => {
+    const rank: Record<string, number> = { common: 0, uncommon: 1, rare: 2, epic: 3 };
+    const best = (c: { item: ItemId }[]) => Math.max(...c.map((d) => rank[ITEMS[d.item].rarity]!));
+    const n = LOOT_RULES.chestsPerMatch;
+    // The high chest is the last one of the match (the Alturas region is picked last).
+    const advantage = Array.from({ length: n }, (_, i) => i === n - 1);
+    let plain = 0;
+    let high = 0;
+    let higher = 0;
+    for (let m = 0; m < 600; m++) {
+      const seed = m * 2654435761;
+      const a = rollMatchLoot(seed, n);
+      const b = rollMatchLoot(seed, n, [], advantage);
+      expect(rollMatchLoot(seed, n, [], advantage)).toEqual(b);
+      plain += best(a[n - 1]!);
+      high += best(b[n - 1]!);
+      if (best(b[n - 1]!) > best(a[n - 1]!)) higher++;
+      expect(b.flat().filter((d) => ITEMS[d.item].rarity === 'epic').length).toBeLessThanOrEqual(CHEST_LOOT.maxEpicPerMatch);
+    }
+    expect(high / 600).toBeGreaterThan(plain / 600 + 0.15);
+    expect(higher).toBeGreaterThan(60);
+    // The region exists, is picked every match and is the only one with the advantage.
+    expect(CHEST_REGIONS.filter((r) => r.vantage).map((r) => r.name)).toEqual(['Alturas']);
+    expect(CHEST_REGIONS.find((r) => r.name === 'Alturas')!.min).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe('GRAInventory', () => {

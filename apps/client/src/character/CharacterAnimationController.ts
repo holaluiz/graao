@@ -24,9 +24,16 @@ function split(clip: THREE.AnimationClip): { lower: THREE.AnimationClip; upper: 
   };
 }
 
-const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall', 'skydive', 'swim', 'swimIdle', 'hang', 'climb', 'glide'];
+const LOCO: ClipName[] = ['idle', 'walk', 'run', 'sprint', 'air', 'fall', 'skydive', 'swim', 'swimIdle', 'hang', 'shimmy', 'climb', 'glide', 'updraft'];
 /** Climbing speed (m/s along the wall) at which the climb cycle plays at timeScale 1. */
 const CLIMB_NATIVE = 1.5;
+/** Shimmy speed along a ledge (m/s) at which the shimmy plays at timeScale 1 (the motor's is 1.5). */
+const SHIMMY_NATIVE = 1.5;
+/** Hysteresis (m/s): sideways speed that starts / ends the shimmy, rising speed that starts / ends the updraft ride. */
+const SHIMMY_ON = 0.35;
+const SHIMMY_OFF = 0.15;
+const UPDRAFT_ON = 1.2;
+const UPDRAFT_OFF = 0.4;
 /** Ground speed (m/s) at which each locomotion clip plays at timeScale 1 (tuned by eye). */
 const NATIVE_SPEED: Partial<Record<ClipName, number>> = { walk: 1.5, run: 4.6, sprint: 7.2, swim: 3.1 };
 
@@ -54,6 +61,8 @@ export interface AnimInput {
   waterDepth?: number;
   /** Speed along local up (m/s): the climb cycle runs forward going up, backward going down. */
   vertical?: number;
+  /** Speed along the body's right (m/s, negative to the left): the shimmy along a ledge follows it. */
+  lateral?: number;
 }
 
 export class CharacterAnimationController {
@@ -72,6 +81,8 @@ export class CharacterAnimationController {
   private jumpPending = false;
   private landPending = 0;
   private lastMove: MovementState = MovementState.IDLE;
+  private shimmying = false;
+  private riding = false;
 
   constructor(root: THREE.Object3D, private readonly lib: GRAAnimationLibrary) {
     this.mixer = new THREE.AnimationMixer(root);
@@ -191,17 +202,27 @@ export class CharacterAnimationController {
       case MovementState.SWIM:
         loco = s.speed > 0.7 ? 'swim' : 'swimIdle';
         break;
-      case MovementState.LEDGE_HANG:
-        loco = 'hang';
+      case MovementState.LEDGE_HANG: {
+        // Sliding along the ledge: the hands walk along the edge (with hysteresis: a stop and go does not flicker).
+        const lat = Math.abs(s.lateral ?? 0);
+        this.shimmying = this.shimmying ? lat > SHIMMY_OFF : lat > SHIMMY_ON;
+        loco = this.shimmying ? 'shimmy' : 'hang';
         break;
+      }
       case MovementState.CLIMB:
       case MovementState.MANTLE:
         loco = 'climb';
         break;
-      case MovementState.GLIDE:
-        loco = 'glide';
+      case MovementState.GLIDE: {
+        // Rising on an updraft: the body hangs upright under the kite.
+        const v = s.vertical ?? 0;
+        this.riding = this.riding ? v > UPDRAFT_OFF : v > UPDRAFT_ON;
+        loco = this.riding ? 'updraft' : 'glide';
         break;
+      }
     }
+    if (s.moveState !== MovementState.LEDGE_HANG) this.shimmying = false;
+    if (s.moveState !== MovementState.GLIDE) this.riding = false;
     if (s.diving) loco = 'skydive';
     for (const [name, l] of this.lower) l.target = name === loco ? 1 : 0;
     const native = NATIVE_SPEED[loco];
@@ -209,6 +230,8 @@ export class CharacterAnimationController {
     const climbRate = Math.hypot(s.speed, s.vertical ?? 0) * Math.sign((s.vertical ?? 0) || 1);
     const scale = loco === 'climb'
       ? s.moveState === MovementState.MANTLE ? 1.2 : THREE.MathUtils.clamp(climbRate / CLIMB_NATIVE, -1.3, 1.3) * (Math.abs(climbRate) < 0.15 ? 0 : 1)
+      // Forward moving left (the left hand leads), backward moving right.
+      : loco === 'shimmy' ? THREE.MathUtils.clamp(-(s.lateral ?? 0) / SHIMMY_NATIVE, -1.3, 1.3)
       : native ? THREE.MathUtils.clamp(s.speed / native, 0.65, 1.45) : 1;
     for (const map of [this.lower, this.upper]) {
       const l = map.get(loco);

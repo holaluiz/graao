@@ -1,5 +1,25 @@
 # graao MVP status
 
+## 2026-10-20 — Mundo vertical, 5ª rodada: magias como rotas, parede não é chão, loot nas alturas
+
+Continuação da frente vertical ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)):
+
+- **Exploit fechado no motor:** pulando repetidamente contra uma parede lisa dava para subi-la (a face lisa da Serra
+  até o cume, sem magia), porque o Rapier conta como chão qualquer contato não vertical e, na esfera, paredes voltadas
+  para fora inclinam 1–2°. Agora "no chão" exige apoio caminhável sob a cápsula ([estados](gameplay/TRAVERSAL_STATES.md)).
+- **Magias de mobilidade como rotas, testadas em partida real:** Linha de Varal do chão até a Ilha do Sino (a corda
+  passou a terminar na altura de pendurar quando pega uma beirada), Pulo de Pipa entre terraços, Asa de Papel do cume
+  à ilha (e 32 m × 18 m da pipa em ar parado), Atalho de Giz do cume à ilha e de volta, Ricochete saindo da parede,
+  Passo de Vento na rocha e pela borda. Pendurado e escalando, magias de mobilidade agora valem (saída sob ataque).
+- **Loot nas alturas:** região de baús Alturas (cume e ilhas), um baú por partida lá em cima, sorteado com vantagem; os
+  bots o disputam e sobem pelos paredões ([ilhas](world/FLOATING_ISLANDS.md#loot)). Mapa versão 11.
+- **Sala hospedada:** travamento da aba anfitriã não derruba mais quem está no ar nem perde comandos (repasse travado
+  ≠ cliente calado; [autoridade](networking/TRAVERSAL_AUTHORITY.md)).
+- **Animação:** ciclo de escalada, deslize na beirada e pose de corrente ascendente (procedurais).
+- **Produção:** o deploy da `main` (PR #10) tinha falhado na Vercel (CSS de toque, corrigido em `de68194`); o site
+  ficou num build em que um clique no mundo não capturava o ponteiro (sem mira/câmera/magias). Vai com o merge da
+  `mvp-online-1v1`.
+
 ## 2026-10-19 (noite) — Mundo vertical, 4ª rodada: rocha de verdade e travessia na sala hospedada
 
 Continuação da frente vertical ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)):

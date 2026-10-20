@@ -36,8 +36,7 @@ body.touch-ui .weapons { right: auto; left: 50%; bottom: calc(6px + env(safe-are
 body.touch-ui .loot-belt { right: auto; left: calc(68px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); bottom: auto;
   transform: scale(.82); transform-origin: left top; }
 body.touch-ui .hud .hint { bottom: auto; top: 96px; }
-  body.touch-ui .vitals { width: min(190px, 46vw); bottom: calc(250px + env(safe-area-inset-bottom)); }
-}
+body.touch-ui .vitals { width: min(190px, 46vw); bottom: calc(250px + env(safe-area-inset-bottom)); }
 @media (max-height: 420px) {
   .touch-pad { transform: scale(.88); transform-origin: right bottom; }
 }
