@@ -17,7 +17,7 @@ Player-facing text is Portuguese (pt-BR); ids and code stay in English.
 | Physics | One static Rapier world per process on the server, shared by every room (terrain trimesh + props); one per page on the client. Player capsules live in it with their own group. | Chest colliders get their own group; a room's character motor only collides with that room's chests (Rapier filter predicate). |
 | Planet | Sphere R = 100 m, analytic height + trimesh, authored structures + seeded scatter, named `REGIONS`. | Chest spots are authored per region and validated against the real trimesh and props. |
 | Rendering | GRAStylized material family, ink outline as a post pass for every stylized mesh, instanced props. | Chests use the same world material (ink and Tormenta bleach for free); pickups use clean unpigmented materials so rewards stay legible in the Tormenta. |
-| VFX / audio | `GRAVFXSystem` (2 draw calls, bursts, rings, flashes), `GRAAudioManager` (synthesized cues, buses, voice limits). | New cues and bursts only. |
+| VFX / audio | `GRAVFXSystem` (2 draw calls, bursts, rings, flashes), `GRAAudioManager` (sound bank with synthesized fallback, buses, voice limits). | New cues and bursts only. |
 | HUD | DOM/CSS/SVG; vitals, weapon cards, notices, banners. | Prompt, pickup feed, consumable bar, weapon replacement card. |
 | Inventory | None. | `GRAInventory` (game-core): 2 weapon slots, reserves, consumable stacks. |
 | Death | Elimination, respawn in warmup, no respawn in a match; nothing dropped. | Death drops through the same pickup system. |

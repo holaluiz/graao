@@ -84,6 +84,9 @@ export class CombatDirector {
   private online = false;
   private snapNext = false;
   private lastFireAt = -1e9;
+  /** The reload's pending beats (magazine in, bolt) and when that reload ends (performance.now), to cut them short. */
+  private readonly reloadBeats: (() => void)[] = [];
+  private reloadBeatsUntil = 0;
   private readonly pending: PendingShot[] = [];
   private countdownShown = -1;
   /** The server's summary of the match that just ended, and whether it reached this player's history. */
@@ -240,9 +243,14 @@ export class CombatDirector {
       this.holder.setSlot(this.handSlot());
       app.audio.play('switch');
     }
+    // A reload cut short (the other weapon taken, a respawn) silences the beats it had not played yet.
+    if (this.reloadBeats.length && !this.weapon.reloading) {
+      if (now < this.reloadBeatsUntil - 150) for (const stop of this.reloadBeats) stop();
+      this.reloadBeats.length = 0;
+    }
     if (r.reloadStarted) {
       app.net?.sendReload();
-      app.audio.play('reload');
+      this.reloadSound(this.weapon.weapon.reloadTime, now);
       app.character.anim.playUpper('reload', clipSpeed(app.character.anim.clipDuration('reload'), this.weapon.weapon.reloadTime));
     }
     if (r.empty) app.audio.play('empty');
@@ -307,6 +315,19 @@ export class CombatDirector {
    * never predicted, and SELF only comes again when something changes, so a local guess would linger as a ghost
    * weapon (or a missing one).
    */
+  /** The reload in three beats over its `seconds`: the magazine out now, in at half time, the bolt or slide near the end. */
+  private reloadSound(seconds: number, now: number): void {
+    const audio = this.app.audio;
+    for (const stop of this.reloadBeats) stop();
+    this.reloadBeats.length = 0;
+    audio.play('reload');
+    for (const [cue, at] of [['reload.in', 0.5], ['reload.end', 0.82]] as const) {
+      const stop = audio.play(cue, { delay: seconds * at });
+      if (stop) this.reloadBeats.push(stop);
+    }
+    this.reloadBeatsUntil = now + seconds * 1000;
+  }
+
   private resetKit(kit: WeaponKit): void {
     this.weapon.reset(kit, !this.online);
     this.melee.reset();
@@ -841,13 +862,27 @@ export class CombatDirector {
   }
 }
 
-/** Each weapon of the pack gets a voice from the three synthesized shots (pitch tells them apart). */
+/**
+ * Each weapon of the pack has a voice of its own (recorded shots in the sound bank); `reach` carries the heavy ones
+ * farther across the map. A weapon without one borrows the closest by its punch.
+ */
 function fireCue(w: WeaponDefinition): { cue: Cue; pitch: number; reach: number } {
   if (w.pellets > 1) return { cue: 'fire.petal', pitch: 1, reach: 1 };
-  if (w.damage >= 60) return { cue: 'fire.heavy', pitch: w.id === 'launcher' ? 0.8 : 1, reach: 1.5 };
-  // The Raio de Sol is light; the firearms are gunpowder (the rifle deeper and heard farther, the SMG quicker).
-  if (w.id === 'sunbeam') return { cue: 'fire.sunbeam', pitch: 1, reach: 1 };
-  return { cue: 'fire.light', pitch: w.id === 'pistol' ? 1.08 : w.id === 'smg' ? 1.18 : w.id === 'ak47' ? 0.9 : 1, reach: w.id === 'ak47' ? 1.2 : 1 };
+  switch (w.id) {
+    case 'sunbeam':
+      return { cue: 'fire.sunbeam', pitch: 1, reach: 1 };
+    case 'pistol':
+      return { cue: 'fire.pistol', pitch: 1, reach: 1 };
+    case 'smg':
+      return { cue: 'fire.smg', pitch: 1, reach: 1 };
+    case 'ak47':
+      return { cue: 'fire.rifle', pitch: 1, reach: 1.2 };
+    case 'sniper':
+      return { cue: 'fire.sniper', pitch: 1, reach: 1.5 };
+    case 'launcher':
+      return { cue: 'fire.rocket', pitch: 1, reach: 1.5 };
+  }
+  return w.damage >= 60 ? { cue: 'fire.sniper', pitch: 0.92, reach: 1.5 } : { cue: 'fire.rifle', pitch: 1.06, reach: 1 };
 }
 
 const WEAPON_AMMO_NAME = (w: WeaponDefinition): string => ({ solar: 'cápsulas solares', petal: 'cartuchos de pétala', heavy: 'munição pesada' })[w.ammo];

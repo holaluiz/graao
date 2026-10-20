@@ -1,6 +1,6 @@
 /**
- * The planet's own sounds (docs/world/WORLD_DESIGN.md, "Áudio e ambientação"), all synthesized here — no recordings,
- * nothing licensed:
+ * The planet's own sounds (docs/world/WORLD_DESIGN.md, "Áudio e ambientação"), synthesized here except doors and crates,
+ * which play the sound bank's CC0 recordings once decoded (docs/audio/SOUND_DESIGN.md):
  *
  * - Region beds under the wind loop: the Bairro's distant murmur, water by the lake, the falls and the fountains,
  *   insects and leaves in the Bosque, a faint hum in the Fenda. Each region of the map has a soundscape; where the
@@ -134,6 +134,8 @@ export class WorldAudio {
     const v = this.place(at, ear, right, 34);
     const out = this.audio.output('loot');
     if (!v || !out) return;
+    const rec = this.audio.sampleBuffer(open ? 'door.open' : 'door.close');
+    if (rec) return this.recording(out, rec, v.gain * 0.9, v.pan);
     const { ctx } = out;
     const t = ctx.currentTime;
     const g = this.voice(out, v.gain * 0.9, v.pan);
@@ -196,6 +198,8 @@ export class WorldAudio {
     const v = this.place(at, ear, right, 40);
     const out = this.audio.output('weapons');
     if (!v || !out) return;
+    const rec = this.audio.sampleBuffer(broken ? 'crate.break' : 'crate.hit');
+    if (rec) return this.recording(out, rec, v.gain, v.pan);
     const t = out.ctx.currentTime;
     const g = this.voice(out, v.gain, v.pan);
     if (!broken) {
@@ -233,6 +237,15 @@ export class WorldAudio {
     p.pan.value = pan;
     g.connect(p).connect(out.bus);
     return g;
+  }
+
+  /** A bank recording at a placed voice, a touch faster or slower so two doors never sound the same. */
+  private recording(out: { ctx: AudioContext; bus: AudioNode }, buf: AudioBuffer, gain: number, pan: number): void {
+    const src = out.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = 0.95 + Math.random() * 0.1;
+    src.connect(this.voice(out, gain, pan));
+    src.start();
   }
 
   /** A filtered noise knock (wood, latch, boards). */

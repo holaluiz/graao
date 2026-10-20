@@ -12,6 +12,7 @@
   [ability draft](gameplay/ABILITY_DRAFT.md) · [combat](gameplay/COMBAT.md) · [UFO deployment](gameplay/UFO_DEPLOYMENT.md) ·
   [Tormenta](gameplay/TORMENTA.md)
 - Rendering: [art direction](rendering/ART_DIRECTION.md) · [materials](rendering/MATERIALS.md) · [VFX](rendering/VFX.md)
+- Áudio: [sound design, fontes CC0 e catálogo de sons](audio/SOUND_DESIGN.md)
 - [Performance budgets and measurements](performance/BUDGETS.md)
 - Infrastructure: [Supabase](infrastructure/SUPABASE.md) · [R2](infrastructure/R2.md) · [deployment](infrastructure/DEPLOYMENT.md)
 - References: [Messenger](references/MESSENGER_DEEP_STUDY.md) · [Summer Afternoon](references/SUMMER_AFTERNOON_STUDY.md) ·

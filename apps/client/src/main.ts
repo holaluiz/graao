@@ -22,6 +22,13 @@ function fail(e: unknown): void {
 }
 
 async function start(): Promise<void> {
+  // ?sons: the sound board (every game sound by category, through the real mixer) without loading the world.
+  if (new URLSearchParams(location.search).has('sons')) {
+    const { SoundBoard } = await import('./ui/SoundBoard');
+    boot.remove();
+    new SoundBoard(document.body).show();
+    return;
+  }
   if (!document.createElement('canvas').getContext('webgl2')) {
     fail(new Error('este navegador não tem WebGL2. O graao precisa do Chrome ou do Edge no computador.'));
     return;
