@@ -1,0 +1,191 @@
+{
+  "date": "2026-10-20",
+  "viewport": "1366×768",
+  "server": "ws://localhost:2591",
+  "phaseAfterDraft": "LOADING",
+  "rounds": [
+    {
+      "round": 1,
+      "kind": "basic",
+      "offered": 30,
+      "chose": "steady_hand",
+      "confirmed": "botão",
+      "resolvedAfterS": 2,
+      "revealedMine": "steady_hand",
+      "serverAuto": false,
+      "passiveCardsBlocked": 0,
+      "seatsWithPick": 10
+    },
+    {
+      "round": 2,
+      "kind": "basic",
+      "offered": 22,
+      "chose": "slide",
+      "confirmed": "botão",
+      "resolvedAfterS": 2.2,
+      "revealedMine": "slide",
+      "serverAuto": false,
+      "passiveCardsBlocked": 7,
+      "seatsWithPick": 10
+    },
+    {
+      "round": 3,
+      "kind": "basic",
+      "offered": 21,
+      "chose": "thorn_seed",
+      "confirmed": "automático (prévia ao fim do tempo)",
+      "resolvedAfterS": 45,
+      "revealedMine": "thorn_seed",
+      "serverAuto": false,
+      "passiveCardsBlocked": 7,
+      "seatsWithPick": 10
+    },
+    {
+      "round": 4,
+      "kind": "ultimate",
+      "offered": 10,
+      "chose": "chalk_shortcut",
+      "confirmed": "botão",
+      "resolvedAfterS": 2.5,
+      "revealedMine": "chalk_shortcut",
+      "serverAuto": false,
+      "passiveCardsBlocked": 0,
+      "seatsWithPick": 10
+    }
+  ],
+  "myLoadoutMatchesScreen": true,
+  "everySeatValid": true,
+  "loadouts": [
+    {
+      "index": 0,
+      "name": "Jogador",
+      "bot": false,
+      "loadout": [
+        "steady_hand",
+        "slide",
+        "thorn_seed",
+        "chalk_shortcut"
+      ],
+      "valid": true,
+      "passives": 1
+    },
+    {
+      "index": 1,
+      "name": "Bot 1",
+      "bot": true,
+      "loadout": [
+        "wind_step",
+        "leaf_shell",
+        "gust_ring",
+        "kite_flight"
+      ],
+      "valid": true,
+      "passives": 0
+    },
+    {
+      "index": 2,
+      "name": "Bot 2",
+      "bot": true,
+      "loadout": [
+        "pollen_burst",
+        "thorn_seed",
+        "sap_snare",
+        "paper_city"
+      ],
+      "valid": true,
+      "passives": 0
+    },
+    {
+      "index": 3,
+      "name": "Bot 3",
+      "bot": true,
+      "loadout": [
+        "leaf_shell",
+        "gust_ring",
+        "bloom",
+        "firefly_beacon"
+      ],
+      "valid": true,
+      "passives": 0
+    },
+    {
+      "index": 4,
+      "name": "Bot 4",
+      "bot": true,
+      "loadout": [
+        "thorn_seed",
+        "sap_snare",
+        "steady_hand",
+        "ink_tide"
+      ],
+      "valid": true,
+      "passives": 1
+    },
+    {
+      "index": 5,
+      "name": "Bot 5",
+      "bot": true,
+      "loadout": [
+        "gust_ring",
+        "bloom",
+        "firefly_scout",
+        "confetti_wheel"
+      ],
+      "valid": true,
+      "passives": 0
+    },
+    {
+      "index": 6,
+      "name": "Bot 6",
+      "bot": true,
+      "loadout": [
+        "sap_snare",
+        "steady_hand",
+        "kite_jump",
+        "chalk_shortcut"
+      ],
+      "valid": true,
+      "passives": 1
+    },
+    {
+      "index": 7,
+      "name": "Bot 7",
+      "bot": true,
+      "loadout": [
+        "bloom",
+        "firefly_scout",
+        "clothesline",
+        "sun_meteor"
+      ],
+      "valid": true,
+      "passives": 0
+    },
+    {
+      "index": 8,
+      "name": "Bot 8",
+      "bot": true,
+      "loadout": [
+        "steady_hand",
+        "kite_jump",
+        "slide",
+        "petal_cyclone"
+      ],
+      "valid": true,
+      "passives": 1
+    },
+    {
+      "index": 9,
+      "name": "Bot 9",
+      "bot": true,
+      "loadout": [
+        "firefly_scout",
+        "clothesline",
+        "paper_wings",
+        "dawn_lance"
+      ],
+      "valid": true,
+      "passives": 0
+    }
+  ],
+  "totalS": 76
+}

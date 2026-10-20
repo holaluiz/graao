@@ -13,7 +13,13 @@ reescrevem o mesmo contrato.
       mensagem clara). `shared/validate.ts parseRoomListing` + `map` na metadata da sala; para salas do Graao Host
       (desligado no site, ADR-006) exige coluna na central (migration nova) e nova versão do app — só se ele voltar.
       Feito quando uma sala de outro mapa aparece indisponível na lista nas origens ligadas (dedicado, navegador).
-- [ ] Merge de `origin/main` (PR #7, `.env.production`) nesta branch antes do próximo PR.
+- [x] Merge de `origin/main` (PR #7, `.env.production`) nesta branch antes do próximo PR — tudo em `main` desde o
+      PR #12 (`049fdf1`, deploy `success`).
+- [x] Falha intermitente `keeps the seat while B reconnects` (fase A do plano 3.0): era o teste escutando depois do
+      evento; corrigida e provada ([baseline §3](../qa/BASELINE_2026_10.md#3-a-falha-intermitente-de-reconexão--causa-e-correção)).
+- [x] Estados explícitos da conexão (`LinkState`), tentativas de reconexão cortadas na janela, rota ICE no F3.
+- [ ] Decidir sobre `fix/online-empurrao` (`82f3b5a`): fila de comandos de 1 s também no servidor dedicado. Feito
+      quando houver medida de engasgo na rede real (alfa) mostrando se a fila de 12 descarta comandos fora da sala na aba.
 
 ## M2 — Alfa externa
 
@@ -28,12 +34,13 @@ Ver [HOST_VALIDATION.md](../networking/HOST_VALIDATION.md). Bloqueado por máqui
 
 ## M3 — Ability Draft visual
 
-- [ ] Grade única com as 30 básicas + grade dos 10 Supremos, sem abas obrigatórias (`apps/client/src/ui/DraftScreen.ts`
+- [x] Grade única com as 30 básicas + grade dos 10 Supremos, sem abas obrigatórias (`apps/client/src/ui/DraftScreen.ts`
       substitui `draftCatalogPage`). Participantes 5 em cima / 5 embaixo com 4 slots e estado.
-- [ ] Tooltip gerado do catálogo real (`game-data/abilities.ts`: mana, recarga, alcance, duração, efeitos, tags).
+- [x] Tooltip gerado do catálogo real (`game-data/abilities.ts`: mana, recarga, alcance, duração, efeitos, tags).
       Proibido texto que não corresponda a um efeito implementado (teste que compara tooltip × `effects`).
-- [ ] Sugestões de sinergia por tags, sem bônus escondido.
-- [ ] Layout mobile: grade rolável, painel de build fixo, toque para detalhe, botão confirmar.
+- [x] Sugestões de sinergia por tags, sem bônus escondido.
+- [x] Layout mobile: grade rolável, painel de build fixo, toque para detalhe, botão confirmar (20/10, emulação de toque).
+- [ ] Draft visual num celular físico e com pessoas em redes diferentes (depende do Gate B).
 - Contrato: `docs/gameplay/ABILITY_DRAFT_UX.md` (atualizar `docs/UX/ABILITY_DRAFT.md`, não duplicar).
 
 ## M4 — Game feel e áudio

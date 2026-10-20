@@ -88,7 +88,7 @@ Uma queda de rede conserva a política existente: a vaga é mantida por até 20 
 
 ## Draft e catálogo MVP
 
-O catálogo funcional tem **8 habilidades básicas e 3 Supremos**. Dez builds exigiriam 30 básicas e 10 Supremos diferentes, portanto a unicidade global não é viável nessa lotação. A regra existente aplica unicidade por categoria quando o catálogo comporta todos os picks; quando não comporta, permite repetição entre participantes e impede repetição na própria build. Não foram criadas habilidades falsas.
+O catálogo tem **30 básicas (8 passivas) e 10 Supremos**, todos visíveis no tabuleiro do Draft ([ABILITY_DRAFT](ABILITY_DRAFT.md)). A exclusividade é individual: nenhuma habilidade se repete na própria build, no máximo uma passiva, e participantes diferentes podem escolher a mesma habilidade.
 
 Bots escolhem no servidor. O prazo de cada rodada é configurável, e escolhas ausentes recebem uma opção válida quando o prazo termina. A UI mantém a build de quatro slots visível durante toda a jornada.
 

@@ -1,5 +1,56 @@
 # graao MVP status
 
+## 2026-10-20 — Ability Draft visual (Master Plan 3.0, fase B / M3): tabuleiro único, Gate C cumprido
+
+O Draft deixou as abas e páginas: um tabuleiro só ([Draft](UX/ABILITY_DRAFT.md)).
+
+- **Dez participantes:** cinco em cima e cinco embaixo, com avatar, nome, estado e quatro slots — vazio, atual,
+  prévia (só a sua), confirmado e oculto (a escolha secreta dos outros nunca aparece antes da revelação).
+- **Centro:** tempo, rodada, de quem é a vez (“Sua vez · escolha sua 2ª habilidade básica”, “7 de 10 confirmaram”) e
+  sua combinação com teclas; **30 básicas** numa grade de 10×3 por categoria e os **10 Supremos** numa linha à parte —
+  as 40 visíveis em 1366×768 e 1920×1080.
+- **Cartas** com ícone autoral, faixa e glifo de categoria, silhueta por tipo (ativa, passiva tracejada, Supremo em
+  borda dupla), Mana, recarga, linha de efeito, papéis táticos e carimbos de estado.
+- **Detalhe gerado só do catálogo:** estatísticas (Mana, recarga, alcance, duração, conjuração), uma frase por efeito
+  real e uma prévia esquemática em SVG com os números do catálogo (sem simular nada). Um teste confronta cada texto e
+  número exibido com os `effects` e com o código autoritativo que os executa. Ele achou duas promessas falsas: o raio
+  da revelação do Orbe Solar (não limita nada) e a redução de queda do Fôlego de Pipa (`fallDamage` sem consumidor);
+  a descrição do Fôlego foi corrigida no catálogo.
+- **Sinergias sugeridas**, sem bônus: Empurrão + Controle de área, Revelação + Precisão, Mobilidade + Curta
+  distância, Cobertura + Longa distância, lidas dos efeitos; ✦ nas cartas que fecham um par com a sua combinação.
+- **Celular em paisagem:** participantes compactos, barra e combinação fixas, grade rolável (Supremos primeiro na
+  rodada 4), toque abre o detalhe, confirmar fixo — medido em 844×390 e 740×360 com emulação de toque.
+- **Evidência:** `tools/ux/draft-captures.ts` (capturas `docs/UX/screenshots/draft-v3-*`, medições em
+  [draft-visual-checks.json](UX/draft-visual-checks.json)) e `tools/ux/draft-live.ts` — draft real pela tela contra o
+  servidor com 9 bots, uma rodada fechada pelo tempo, 10 combinações válidas ([draft-live-check.json](UX/draft-live-check.json)).
+- Regras, protocolo e servidor intocados. **M3: TESTING** — falta celular físico e pessoas em redes diferentes.
+- `pnpm typecheck` e `pnpm build` verdes; `pnpm exec vitest run`: 695/695 em 72 arquivos (525 s), incluindo os 3
+  arquivos novos/reescritos do Draft (32 testes de UI).
+- Achado de CSS: a classe global `.blocked` (retícula de mira) posiciona em absoluto qualquer elemento com esse nome;
+  o Draft usa `passive-limit`.
+
+## 2026-10-20 — Master Plan 3.0, fase A: a falha de reconexão e os estados da conexão
+
+O plano 3.0 mantém o contrato do 2.0 e agrupa os marcos em fases A–H ([roadmap](product/MASTER_GAME_DESIGN_2.md#master-plan-30-20102026));
+o baseline desta rodada está em [BASELINE_2026_10.md](qa/BASELINE_2026_10.md).
+
+- **Repositório:** tudo da `mvp-online-1v1` já estava em `main` (PR #12, `049fdf1`, deploy `success`) — o relatório
+  dava o merge como pendente. A branch `fix/online-empurrao` (protocolo 10, fila de 1 s) nunca entrou e ficou
+  obsoleta; decisão no backlog.
+- **A falha intermitente de reconexão era do teste:** o servidor anuncia "B voltou" antes de mandar `JOIN_ROOM` a B,
+  e o teste só escutava depois do `onReconnect` de B (perdia a mensagem em ≈ 11 % das reconexões, medido). Corrigido
+  sem afrouxar prazo; 20/20 sob carga de CPU.
+- **Rede da sala na aba:** estados explícitos (`SIGNALING → CONNECTING → CONNECTED ⇄ RECONNECTING → FAILED/CLOSED`);
+  cada tentativa de reconexão termina com a janela (antes, uma sinalização travada deixava "reconectando…" para
+  sempre); "vaga não guardada" deixou de aparecer como "a conexão caiu". F3 mostra **conexão** e **rota** ICE
+  (`direta`/`STUN`/`relay`) — o dado da alfa externa para decidir sobre TURN.
+- **Navegador (WebRTC real, um PC):** entrar, cair e voltar em 0,3 s, desistir em 19,0 s com a sinalização travada
+  (a anfitriã libera a vaga) e a anfitriã fechando a sala.
+
+**Validação:** suíte completa 695/695 em 72 arquivos (13 testes novos); typecheck, build e ESLint dos arquivos
+alterados passaram. **Gate da fase A continua BLOCKED** por máquinas e redes: nada foi testado entre PCs
+([roteiro](networking/HOST_VALIDATION.md)).
+
 ## 2026-10-20 — Mundo vertical, 5ª rodada: magias como rotas, parede não é chão, loot nas alturas
 
 Continuação da frente vertical ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)):

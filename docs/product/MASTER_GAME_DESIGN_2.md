@@ -81,9 +81,9 @@ se as regras eram as padrão.
 | Marco | Entregas | Gate | Estado (19/10/2026) |
 |---|---|---|---|
 | M0 Diagnóstico | Auditoria, matriz, baseline, riscos | Estado real conhecido | DONE — [auditoria](../qa/AUDIT_M0_2026-10-19.md) |
-| M1 Estabilidade | Falhas classificadas e corrigidas, hardening de rede, F3, regressão | Gate A | DONE (Gate A cumprido; 2 itens menores no backlog) |
+| M1 Estabilidade | Falhas classificadas e corrigidas, hardening de rede, F3, regressão | Gate A | DONE (Gate A cumprido; refeito em 20/10 — [baseline](../qa/BASELINE_2026_10.md)) |
 | M2 Alfa externa | Sala hospedada na aba entre redes reais, três hosts, relatório | Gate B | BLOCKED — máquinas/rede ([HOST_VALIDATION](../networking/HOST_VALIDATION.md)) |
-| M3 Draft visual | Grade única com 40 magias, 10 participantes, tooltips do catálogo real, mobile | Gate C | PARTIAL (tela atual com abas) |
+| M3 Draft visual | Grade única com 40 magias, 10 participantes, tooltips do catálogo real, mobile | Gate C | TESTING (20/10) — tabuleiro único 5+5 participantes, 30+10 magias sem abas, detalhe/diagrama/sinergias gerados do catálogo; Gate C cumprido ([Draft](../UX/ABILITY_DRAFT.md)); falta celular físico e pessoas em redes diferentes (Gate B) |
 | M4 Game feel + áudio | Feedback de armas/magias, AudioDirector, espacial com gravidade local, oclusão barata | Gate E | PARTIAL |
 | M5 Weapon Framework | Revólver, Arco, Lança-teia sobre contratos data-driven | 3 armas realmente diferentes | NOT_STARTED |
 | M6 Oficina | Acessórios com trade-offs, builds salvas e validadas no backend | Criar, salvar, carregar, usar | NOT_STARTED |
@@ -95,6 +95,27 @@ se as regras eram as padrão.
 
 Ordem obrigatória: M1 → M2 antes de ampliar sistemas; M5 antes de M6/M7 (a Oficina monta armas do framework novo).
 M3 e M4 podem andar em paralelo a M2 porque não tocam os mesmos contratos.
+
+### Master Plan 3.0 (20/10/2026)
+
+O plano 3.0 mantém este contrato (pilares, três progressões, integridade, ADRs) e reagrupa os marcos em oito fases
+com gate. Os marcos M0–M11 continuam sendo a unidade de trabalho e de estado; esta tabela é o roadmap 3.0 (não há
+arquivo separado). Baseline da fase A: [BASELINE_2026_10.md](../qa/BASELINE_2026_10.md).
+
+| Fase 3.0 | Marcos | Gate da fase | Estado (20/10/2026) |
+|---|---|---|---|
+| A Integridade e publicação | M1, M2 | partida externa concluída, sem bloqueio crítico | código e testes prontos (falha de reconexão corrigida, estados de conexão, rota ICE no F3); `main` em produção. **Gate BLOCKED**: máquinas e redes ([HOST_VALIDATION](../networking/HOST_VALIDATION.md)) |
+| B Draft e game feel | M3, parte de M4 (feedback de armas/magias, áudio básico consistente) | escolha e combate claros | PARTIAL: Draft visual (M3) em TESTING com o Gate C cumprido; game feel e áudio básico (M4) por fazer |
+| C Armas e Oficina | M5, M6 | montar e salvar uma arma que funciona na simulação | NOT_STARTED |
+| D Arsenal Particular | M7 | ciclo completo em multiplayer | NOT_STARTED |
+| E Progressão | M8 (sem Boletim/revanche) | progressão justa e persistente | NOT_STARTED |
+| F Áudio e social | resto de M4 (espacial, música adaptativa), M10 | áudio estável e voz opcional | PARTIAL (áudio) / NOT_STARTED (voz) |
+| G Mundo e otimização | M9, perfis gráficos, CPU/física/rede, bots, mobile | desempenho medido e melhorado sem perda | PARTIAL |
+| H Pré-lançamento | M11, Boletim do Planeta e revanche (de M8), onboarding | pronto para o lançamento aprovado | NOT_STARTED |
+
+Regra da fase A do 3.0: o Draft visual (fase B) só começa sobre uma base estável. A base está estável no que dá para
+provar num PC; o que falta do gate A depende de máquinas, então B pode começar em paralelo, sem tocar protocolo de
+rede.
 
 ## Decisões (ADRs curtos)
 
