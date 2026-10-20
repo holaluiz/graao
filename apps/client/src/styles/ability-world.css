@@ -1,3 +1,6 @@
 .ability-cloud-veil { position: absolute; inset: 0; background: #e4dce3; pointer-events: none; }
 .ability-bearings { position: absolute; inset: 0; pointer-events: none; }
+/* Direct children of #ui are interactive by default (main.css): these full-screen layers must never catch a click or a
+   touch meant for the world (pointer lock, the touch controls). */
+#ui > .ability-bearings, #ui > .ability-cloud-veil { pointer-events: none; }
 .ability-bearing { position: absolute; left: 50%; top: 18%; color: #ffdb66; font-size: 22px; -webkit-text-stroke: 2px #2a2130; paint-order: stroke fill; }

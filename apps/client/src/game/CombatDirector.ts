@@ -14,7 +14,7 @@
  * Response stack per event (BODY · WORLD · FX · CAMERA · AUDIO · UI), intensity MICRO → COMBAT → MAJOR.
  */
 import * as THREE from 'three';
-import { GROUPS_WORLD_QUERY, PLAYER_MELEE_BODY, newPassiveRuntime, passiveModifiers, muzzlePoint, resolveMelee, resolvePellet, shotSeed, spreadDirections, type MeleeBody, type PlayerHitTarget } from '@graao/game-core';
+import { GROUPS_WORLD_QUERY, PLAYER_MELEE_BODY, castAimRay, newPassiveRuntime, passiveModifiers, muzzlePoint, resolveMelee, resolvePellet, shotSeed, spreadDirections, type MeleeBody, type PlayerHitTarget } from '@graao/game-core';
 import { ATTRIBUTES, BOT_KIT, ITEMS, MATCH_KIT, MELEE, RARITIES, STARTING_KIT, TRAVERSAL_ACTIONS, TRAVERSAL_LABEL, WEAPONS, weaponItem, type WeaponDefinition, type WeaponId } from '@graao/game-data';
 import {
   ActionState,
@@ -213,7 +213,6 @@ export class CombatDirector {
     const now = performance.now();
     // The attribute panel reads keys 1–4 before the abilities do.
     app.progression.update();
-    if (input.consume('holster')) this.toggleFists(now);
     if (input.consume('ready')) {
       if (this.phase === MatchPhase.RESULTS) this.app.results.askLobby();
       else this.setReady(!this.me()?.ready);
@@ -318,29 +317,6 @@ export class CombatDirector {
     this.holder.setSlot(this.handSlot());
   }
 
-  /** H: put the weapons away (fists) or take the selected one back out. They stay in the inventory either way. */
-  private toggleFists(now: number): void {
-    const app = this.app;
-    const w = this.weapon;
-    if (!this.alive) return;
-    if (!w.carrying) {
-      app.hud.notice('SEM ARMAS · abra baús para encontrar uma', 1.3);
-      return;
-    }
-    if (w.fists || !w.ids[w.slot]) {
-      const slot = w.ids[w.slot] ? w.slot : w.ids.findIndex((id) => !!id);
-      w.slot = slot;
-      w.setFists(false, now);
-      app.net?.sendSwitch(slot);
-    } else {
-      w.setFists(true, now);
-      app.net?.sendSwitch(FISTS_SLOT);
-      app.hud.notice('ARMAS GUARDADAS · socos', 0.9);
-    }
-    this.holder.setSlot(this.handSlot());
-    app.audio.play('switch');
-  }
-
   /**
    * A punch (predicted): the swing plays now, the MELEE intent goes to the server, and a small contact puff shows
    * where the fist will most likely land. The server's `melee` event brings the verdict (and the hit its damage).
@@ -436,15 +412,16 @@ export class CombatDirector {
     const origin = cam.position;
     const dir = cam.getWorldDirection(this.tmp);
     const w = this.weapon.weapon;
-    const hit = app.world.physics.castRay(origin, dir, w.range);
+    const s = app.local.state;
+    const m = muzzlePoint(s.pos, s.facing);
+    // The same aim ray as the shot (resolvePellet): walls between the camera and the player do not count.
+    const hit = castAimRay(app.world.physics, origin, dir, w.range, m);
     if (!hit) {
       this.blocked = false;
       return;
     }
     const aim = { x: origin.x + dir.x * hit.toi, y: origin.y + dir.y * hit.toi, z: origin.z + dir.z * hit.toi };
-    const s = app.local.state;
-    const m = muzzlePoint(s.pos, s.facing);
-    const d = { x: aim.x - m.x, y: aim.y - m.y, z: aim.z - m.z };
+    const d ={ x: aim.x - m.x, y: aim.y - m.y, z: aim.z - m.z };
     const len = Math.hypot(d.x, d.y, d.z);
     if (len < 0.6) {
       this.blocked = false;
@@ -474,8 +451,6 @@ export class CombatDirector {
         return { key, name: WEAPONS[id].name, ammo: this.weapon.ammo[i]!, magazine: WEAPONS[id].magazine, reserve: this.weapon.infinite ? 999 : this.weapon.reserveFor(i), ...(r ? { rarity: { color: r.color, symbol: r.symbol, name: r.name } } : {}) };
       }),
       this.weapon.reloadProgress(now),
-      fists,
-      keyLabel(app.input.keyFor('holster')),
     );
     const cam = app.r.camera;
     const spread = passiveModifiers(this.me()?.loadout ?? [], newPassiveRuntime(), this.serverNow(), this.alive).weaponSpread;

@@ -33,6 +33,11 @@ export class LocalPlayer {
   private acc = 0;
   private seq = 0;
   private readonly pending: InputCmd[] = [];
+  /**
+   * The buttons held before the oldest pending command (the last acknowledged or dropped one; none after a teleport):
+   * the jump and sprint edges of a replay start from them, not from where the prediction already is.
+   */
+  private heldBefore = 0;
   /** Commands not yet sent to the server. */
   readonly outbox: InputCmd[] = [];
   /** Visual-only correction offset (decays to zero). */
@@ -60,6 +65,7 @@ export class LocalPlayer {
     this.state = createCharacterState(pos, facing);
     this.prev = cloneCharacterState(this.state);
     this.pending.length = 0;
+    this.heldBefore = 0;
     this.correction.set(0, 0, 0);
     this.dash = null;
     this.breath = MOVEMENT.breathTime;
@@ -93,14 +99,10 @@ export class LocalPlayer {
 
   /** Builds the command for this step from input and the camera frame. */
   private buildCmd(input: Input, cam: CameraFrame, frozen: boolean): InputCmd {
-    let mx = 0;
-    let my = 0;
-    if (!frozen) {
-      if (input.isDown('forward')) my += 1;
-      if (input.isDown('back')) my -= 1;
-      if (input.isDown('right')) mx += 1;
-      if (input.isDown('left')) mx -= 1;
-    }
+    // Keys or the touch stick (analogue), in the camera frame.
+    const axis = frozen ? { x: 0, y: 0 } : input.moveAxis();
+    const mx = axis.x;
+    const my = axis.y;
     const wish = cam.forward.clone().multiplyScalar(my).addScaledVector(cam.right, mx);
     if (wish.lengthSq() > 1) wish.normalize();
     let b = 0;
@@ -136,7 +138,7 @@ export class LocalPlayer {
       if (networked) {
         this.pending.push(cmd);
         this.outbox.push(cmd);
-        if (this.pending.length > 240) this.pending.shift();
+        if (this.pending.length > 240) this.heldBefore = this.pending.shift()![7];
       }
     }
     this.correction.multiplyScalar(Math.exp(-dt * 10));
@@ -146,14 +148,14 @@ export class LocalPlayer {
 
   /** Authoritative correction from a snapshot. */
   reconcile(server: CharacterState, ackSeq: number): void {
-    let acked: InputCmd | undefined;
-    while (this.pending.length && seqLE(this.pending[0]![0], ackSeq)) acked = this.pending.shift();
+    while (this.pending.length && seqLE(this.pending[0]![0], ackSeq)) this.heldBefore = this.pending.shift()![7];
     const before = this.state.pos;
     const bx = before.x, by = before.y, bz = before.z;
-    // The snapshot does not carry input edge state: rebuild it from the last acknowledged command.
+    // The snapshot does not carry input edge state: rebuild it from the command before the replay (the last one the
+    // server acknowledged; after a teleport, nothing held — never the prediction's own, already past the replay).
     const s = cloneCharacterState(server);
-    s.jumpHeld = acked ? (acked[7] & InputButton.JUMP) !== 0 : this.state.jumpHeld;
-    s.sprintHeld = acked ? (acked[7] & InputButton.SPRINT) !== 0 : this.state.sprintHeld;
+    s.jumpHeld = (this.heldBefore & InputButton.JUMP) !== 0;
+    s.sprintHeld = (this.heldBefore & InputButton.SPRINT) !== 0;
     // Snapshots do not carry dash state: rebuild it from the dash's start command (whole steps, exact).
     const d = this.dash;
     if (d && seqLE(d.seq, ackSeq)) {

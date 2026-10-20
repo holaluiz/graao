@@ -219,9 +219,6 @@ export class Hud {
 
   // Weapons.
   private readonly weaponsEl = el('div', 'weapons', this.el);
-  private readonly fistsEl = el('div', 'slot fists', this.weaponsEl);
-  private readonly fistsKey = el('div', 'slot-key', this.fistsEl, 'H');
-  private lastFists = '';
   private readonly slots: { root: HTMLElement; name: HTMLElement; ammo: HTMLElement; fill: HTMLElement; key: HTMLElement; rarity: HTMLElement; last: string }[] = [];
   private readonly ammoHint = el('div', 'ammo-hint', this.el);
   private reloadKey = keyLabel(DEFAULT_BINDINGS.reload);
@@ -272,10 +269,6 @@ export class Hud {
 
   constructor() {
     this.center.append(this.reticleCross, this.reticleCircle, this.reticleFists, this.blocked, this.hitmarker, this.stamina);
-    const fistHead = el('div', 'slot-head', this.fistsEl);
-    el('span', 'slot-rarity', fistHead, '✊');
-    el('span', 'slot-name', fistHead, 'Socos');
-    el('div', 'slot-ammo', this.fistsEl).innerHTML = '<small>sem custo</small>';
     this.placeEl.style.opacity = '0';
     this.roomEl.hidden = true;
     this.statusEl.hidden = true;
@@ -299,8 +292,10 @@ export class Hud {
     for (let i = 0; i < 10; i++) this.breathBubbles.push(el('i', 'bubble', bubbles));
     this.vitals.prepend(this.breathEl);
     this.breathEl.hidden = true;
+    // Q on the left, E on the right: the same sides as the keys. `slots` keeps the slot order (0 = E, 1 = Q).
     for (let i = 0; i < 2; i++) {
-      const root = el('div', 'slot', this.weaponsEl);
+      const root = el('div', 'slot');
+      this.weaponsEl.prepend(root);
       const key = el('div', 'slot-key', root);
       const head = el('div', 'slot-head', root);
       const rarity = el('span', 'slot-rarity', head);
@@ -615,26 +610,16 @@ export class Hud {
     this.breathEl.classList.toggle('out', key <= 0);
   }
 
-  /**
-   * Weapon slots and the fists card. `fists` says the attack is a punch right now (no weapon at all, or weapons put
-   * away with `fistsKey`): the fists card is the active one and no weapon slot is.
-   */
-  setWeapons(active: number, slots: WeaponSlotView[], reload: number, fists = false, fistsKey = 'H'): void {
-    const fk = `${fists}|${fistsKey}`;
-    if (fk !== this.lastFists) {
-      this.lastFists = fk;
-      this.fistsEl.classList.toggle('active', fists);
-      this.fistsKey.textContent = fistsKey;
-      this.fistsEl.title = fists ? 'Atacando com socos' : `${fistsKey}: guardar as armas e lutar com socos`;
-    }
+  /** Weapon slots. With no weapon in hand the selected slot is empty: no card is active and the attack punches. */
+  setWeapons(active: number, slots: WeaponSlotView[], reload: number): void {
     slots.forEach((s, i) => {
       const v = this.slots[i]!;
-      const key = `${i === active && !fists}|${s.key}|${s.name}|${s.ammo}|${s.reserve}|${s.rarity?.name}|${s.empty}`;
+      const key = `${i === active}|${s.key}|${s.name}|${s.ammo}|${s.reserve}|${s.rarity?.name}|${s.empty}`;
       if (key !== v.last) {
         // A new weapon in this slot: a short pop so the change reads.
         if (v.last && v.name.textContent !== s.name) replay(v.root, 'fresh');
         v.last = key;
-        v.root.classList.toggle('active', i === active && !s.empty && !fists);
+        v.root.classList.toggle('active', i === active && !s.empty);
         v.root.classList.toggle('empty', !!s.empty);
         v.key.textContent = s.key;
         v.name.textContent = s.empty ? 'Vazio' : s.name;
@@ -646,7 +631,7 @@ export class Hud {
       }
       v.fill.style.width = i === active && reload >= 0 ? `${reload * 100}%` : '0%';
     });
-    const a = fists ? undefined : slots[active];
+    const a = slots[active];
     const dry = !!a && !a.empty && a.ammo === 0 && reload < 0;
     this.ammoHint.hidden = !(dry || reload >= 0);
     this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : a && a.reserve <= 0 ? 'SEM MUNIÇÃO · procure caixas de munição' : `SEM MUNIÇÃO · ${this.reloadKey}`;

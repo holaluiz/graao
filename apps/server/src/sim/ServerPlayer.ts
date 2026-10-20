@@ -33,8 +33,6 @@ export class ServerPlayer implements AbilityActor, LootActor {
 
   /** Equipped weapon slot (0 = E, 1 = Q). */
   weapon = 0;
-  /** Weapons put away: fighting with fists even with a weapon in the slot (SWITCH_WEAPON to FISTS_SLOT). */
-  fists = false;
   /** Last punch accepted (server ms), the hand it used (0 left, 1 right) and the last MELEE sequence seen. */
   lastMeleeAt = 0;
   meleeHand = 1;
@@ -118,9 +116,12 @@ export class ServerPlayer implements AbilityActor, LootActor {
     return this.bot ? newInventory(BOT_KIT, true) : newInventory(STARTING_KIT);
   }
 
-  /** No weapon in hand: none in the selected slot, or weapons put away. The attack punches. */
+  /**
+   * No weapon in hand: the selected slot is empty, which only happens with no weapon at all (a weapon picked up is
+   * equipped right away, and there is no putting weapons away). The attack punches.
+   */
   get unarmed(): boolean {
-    return this.fists || !this.inv.slots[this.weapon];
+    return !this.inv.slots[this.weapon];
   }
 
   status(): SelfStatusMsg {

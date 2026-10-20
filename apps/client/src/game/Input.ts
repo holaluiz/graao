@@ -1,9 +1,12 @@
 import { DEFAULT_BINDINGS, normalizeBindings, type KeyBindings, type RebindableAction } from './KeyBindings';
 
-/** Remappable desktop controls, fixed mouse/navigation shortcuts, and release on focus loss. */
+/**
+ * Remappable desktop controls, fixed mouse/navigation shortcuts, and release on focus loss. Touch (TouchControls.ts)
+ * presses the same actions and moves an analogue stick through this class: one set of gameplay intents for both.
+ */
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'fire' | 'aim'
-  | 'weapon1' | 'weapon2' | 'holster' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard'
+  | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard'
   | 'interact' | 'item1' | 'item2' | 'item3' | 'stats' | 'stat5' | 'spectatePrevious' | 'spectateNext';
 
 const ALIASES: Record<string, RebindableAction> = {
@@ -24,6 +27,11 @@ export class Input {
   private readonly held = new Set<Action>();
   private readonly pressed = new Set<Action>();
   private readonly keyboardHeld = new Map<string, Action>();
+  /** Touch mode: actions held by on-screen buttons, the stick (x right, y forward, unit disc), the game engaged. */
+  private touchMode = false;
+  private touchEngaged = false;
+  private readonly touchHeld = new Set<Action>();
+  private readonly stick = { x: 0, y: 0 };
   private currentBindings: KeyBindings = { ...DEFAULT_BINDINGS };
   private keys = new Map<string, Action>();
   mouseDX = 0;
@@ -65,7 +73,7 @@ export class Input {
         e.preventDefault();
       }
       // A remapped Space still must not scroll/press a focused control; jumping also works without pointer lock.
-      if (a === 'debug' || a === 'jump' || e.code === 'Space' || (this.locked && ['weapon1', 'weapon2', 'holster', 'ability1', 'ability2', 'ability3', 'ultimate', 'interact', 'item1', 'item2', 'item3', 'stats', 'stat5'].includes(a))) e.preventDefault();
+      if (a === 'debug' || a === 'jump' || e.code === 'Space' || (this.locked && ['weapon1', 'weapon2', 'ability1', 'ability2', 'ability3', 'ultimate', 'interact', 'item1', 'item2', 'item3', 'stats', 'stat5'].includes(a))) e.preventDefault();
       this.pressCode(e.code, a, e.repeat);
     });
     on(window, 'keyup', (e: KeyboardEvent) => {
@@ -73,7 +81,8 @@ export class Input {
     });
     on(target, 'mousedown', (e: MouseEvent) => {
       if (!this.enabled) return;
-      if (!this.locked) return;
+      // Touch taps also emulate mouse clicks: in touch mode the fire button fires, never a tap on the world.
+      if (!this.locked || this.touchMode) return;
       if (e.button === 0) {
         this.held.add('fire');
         this.pressed.add('fire');
@@ -98,8 +107,68 @@ export class Input {
     });
   }
 
+  /** The game owns the controls: pointer lock on desktop, the engaged touch layer on a touch screen. */
   get locked(): boolean {
-    return document.pointerLockElement === this.target;
+    return this.touchMode ? this.touchEngaged : document.pointerLockElement === this.target;
+  }
+
+  get touch(): boolean {
+    return this.touchMode;
+  }
+
+  /** Switches to touch controls (the first touch of the screen, or `?touch`): no pointer lock from then on. */
+  setTouchMode(on: boolean): void {
+    if (on === this.touchMode) return;
+    this.releaseAll();
+    this.touchMode = on;
+    this.touchEngaged = false;
+  }
+
+  /** An on-screen button went down: the action is held (and pressed once) like a key. */
+  touchDown(action: Action): void {
+    if (!this.enabled || this.touchHeld.has(action)) return;
+    if (!this.held.has(action)) this.pressed.add(action);
+    this.touchHeld.add(action);
+    this.held.add(action);
+  }
+
+  touchUp(action: Action): void {
+    if (!this.touchHeld.delete(action)) return;
+    if (![...this.keyboardHeld.values()].includes(action)) this.held.delete(action);
+  }
+
+  isTouchHeld(action: Action): boolean {
+    return this.touchHeld.has(action);
+  }
+
+  /** The touch stick, clamped to the unit disc (x right, y forward). */
+  setStick(x: number, y: number): void {
+    const l = Math.hypot(x, y);
+    const k = l > 1 ? 1 / l : 1;
+    this.stick.x = this.enabled ? x * k : 0;
+    this.stick.y = this.enabled ? y * k : 0;
+  }
+
+  /** A camera drag on the touch screen, in pixels (the same look path as the mouse). */
+  addLook(dx: number, dy: number): void {
+    if (!this.enabled) return;
+    this.mouseDX += dx;
+    this.mouseDY += dy;
+  }
+
+  /**
+   * Movement intent (x right, y forward): the keys give ±1 per axis, the touch stick an analogue value; together they
+   * are clamped to the unit disc.
+   */
+  moveAxis(): { x: number; y: number } {
+    let x = this.enabled ? this.stick.x : 0;
+    let y = this.enabled ? this.stick.y : 0;
+    if (this.isDown('forward')) y += 1;
+    if (this.isDown('back')) y -= 1;
+    if (this.isDown('right')) x += 1;
+    if (this.isDown('left')) x -= 1;
+    const l = Math.hypot(x, y);
+    return l > 1 ? { x: x / l, y: y / l } : { x, y };
   }
 
   get bindings(): KeyBindings {
@@ -133,7 +202,7 @@ export class Input {
   private releaseCode(code: string): void {
     const action = this.keyboardHeld.get(code);
     this.keyboardHeld.delete(code);
-    if (action && ![...this.keyboardHeld.values()].includes(action)) this.held.delete(action);
+    if (action && ![...this.keyboardHeld.values()].includes(action) && !this.touchHeld.has(action)) this.held.delete(action);
   }
 
   get enabled(): boolean {
@@ -177,6 +246,10 @@ export class Input {
   }
 
   requestLock(): void {
+    if (this.touchMode) {
+      this.touchEngaged = true;
+      return;
+    }
     if (this.locked) return;
     // Browsers refuse pointer lock without a user gesture; that is expected, not an error.
     const p = this.target.requestPointerLock?.() as Promise<void> | undefined;
@@ -184,6 +257,11 @@ export class Input {
   }
 
   exitLock(): void {
+    if (this.touchMode) {
+      this.touchEngaged = false;
+      this.releaseAll();
+      return;
+    }
     if (this.locked) document.exitPointerLock();
   }
 
@@ -209,6 +287,9 @@ export class Input {
 
   releaseAll(): void {
     this.keyboardHeld.clear();
+    this.touchHeld.clear();
+    this.stick.x = 0;
+    this.stick.y = 0;
     this.held.clear();
     this.pressed.clear();
     this.mouseDX = 0;

@@ -9,7 +9,10 @@
  *   game's layout puts it (game-core buildLayout runs on the edited map), buildings settle on slopes the same way.
  * - Baús: place, move and turn the chest spots of the existing loot system; each is checked like the server checks it.
  * - Waypoints: the bots' authored navigation points and their links (click places one linked to the selected one,
- *   Shift+click links or unlinks two).
+ *   Shift+click links or unlinks two). Alt+click on another waypoint adds (or removes) a bot traversal link from the
+ *   selected one to it (docs/world/VERTICAL_BOT_NAVIGATION.md): an arrow coloured by kind — orange escalada, cyan
+ *   corrente, green planagem, yellow salto; the inspector sets its kind, its wind and its risk, and "Testar rota" plans
+ *   the bots' way (game-core nav, every link allowed) from the selected waypoint to another and draws it.
  * - Ventos: the map's wind volumes (docs/gameplay/WIND_VOLUMES.md) drawn as columns — cyan updrafts, yellow directional
  *   winds with their arrow, pink event winds (woken by a bell: `trigger`). Click places an updraft (on a roof or a deck
  *   its base starts there); Q/E turn a directional wind, +/− its radius, PgUp/PgDn its base, [ ] its height.
@@ -42,11 +45,13 @@ import {
   type GraaoMap,
   type KitCategory,
   type MapPlacement,
+  type MapTraversalLink,
   type MapWaypoint,
   type MapWind,
   type RegionDef,
+  TRAVERSAL_LINK_KINDS,
 } from '@graao/game-data';
-import { GROUPS_TERRAIN_QUERY, buildLayout, buildingSite, dirToLatLon, headingTangent, latLonToDir, quatRotate, resolveChestSpot, resolveWinds, type ColliderPrimitive, type Placement, type SurfacedCollider, type WorldLayout } from '@graao/game-core';
+import { GROUPS_TERRAIN_QUERY, buildLayout, buildNavGraph, buildingSite, dirToLatLon, headingTangent, latLonToDir, quatRotate, resolveChestSpot, resolveWinds, type ColliderPrimitive, type NavGraph, type Placement, type SurfacedCollider, type WorldLayout } from '@graao/game-core';
 import type { Vec3 } from '@graao/shared';
 import type { GraaoApp } from '../app/GraaoApp';
 import { buildKitChunks, kitPrefabGeometry } from '../world/kitGeometry';
@@ -86,7 +91,10 @@ const MODULE = /^(fundacao|embasamento|soleira|laje|pilar|parapeito|telhado|col-
 
 const FAMILY_NAMES: Record<Family, string> = { ...KIT_CATEGORY_NAMES, construcoes: 'CONSTRUÇÕES', estruturas: 'ESTRUTURAS' };
 const FAMILIES: Family[] = ['construcoes', 'colonial', 'urbano_bh', 'modernista', 'serra', 'bosque', 'vertical', 'props', 'rua', 'estruturas'];
-const WAYPOINT_KINDS: NonNullable<MapWaypoint['kind']>[] = ['rua', 'porta', 'escada', 'telhado', 'ponte', 'mirante', 'interior', 'trilha'];
+const WAYPOINT_KINDS: NonNullable<MapWaypoint['kind']>[] = ['rua', 'porta', 'escada', 'telhado', 'ponte', 'mirante', 'interior', 'trilha', 'ilha', 'paredao', 'corrente'];
+/** Arrow colours of the bot traversal links by kind. */
+const LINK_COLOR: Record<MapTraversalLink['kind'], number> = { escalada: 0xff9a3c, corrente: 0x7fe0ff, planagem: 0x8be36b, salto: 0xffd35a };
+const LINK_NAME: Record<MapTraversalLink['kind'], string> = { escalada: 'escalada', corrente: 'corrente de vento', planagem: 'planagem (descida)', salto: 'salto' };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
   const e = document.createElement(tag);
@@ -145,6 +153,9 @@ export class MapEditor {
   private selectionLines: THREE.LineSegments | null = null;
   private trailLines: THREE.Group | null = null;
   private colliderCenter: THREE.Vector3 | null = null;
+  /** The last "Testar rota" (drawn until the markers change) and the graph it was planned on (rebuilt after edits). */
+  private routeLine: THREE.Line | null = null;
+  private nav: { graph: NavGraph; stamp: string } | null = null;
 
   private mode: Mode = 'pecas';
   private family: Family = 'construcoes';
@@ -189,6 +200,7 @@ export class MapEditor {
     this.map.waypoints ??= [];
     this.map.trails ??= [];
     this.map.winds ??= [];
+    this.map.traversalLinks ??= [];
     this.baseVersion = this.map.mapVersion;
   }
 
@@ -443,6 +455,57 @@ export class MapEditor {
     this.toast(`${id}: corrente ascendente (troque o tipo no painel)`);
   }
 
+  /** Adds the traversal link a → b (an escalada: change it in the inspector), or removes it when it is there. */
+  private toggleTraversalLink(a: string, b: string): void {
+    if (a === b) return;
+    const links = this.map.traversalLinks!;
+    const at = links.findIndex((l) => l.from === a && l.to === b);
+    this.pushUndo();
+    if (at >= 0) {
+      const [gone] = links.splice(at, 1);
+      this.toast(`${gone!.id} apagada`);
+    } else {
+      const from = this.map.waypoints!.find((w) => w.id === a);
+      const id = this.uniqueId(`lk-${a.replace(/^wp-/, '')}`, (x) => links.some((l) => l.id === x));
+      links.push({ id, from: a, to: b, kind: 'escalada', ...(from?.region ? { region: from.region } : {}) });
+      this.toast(`${a} → ${b}: escalada (troque o tipo no painel)`);
+    }
+    this.changed('markers');
+  }
+
+  /**
+   * Plans the bots' way between two waypoints on the edited map (game-core buildNavGraph over the loaded world, every
+   * traversal link allowed) and draws it: a check that a link lands on the graph and that a region is reachable.
+   */
+  private testRoute(from: string, to: string): void {
+    const wa = this.map.waypoints!.find((w) => w.id === from);
+    const wb = this.map.waypoints!.find((w) => w.id === to);
+    if (!wa || !wb) return this.toast(`waypoint ${wb ? from : to} não existe`, true);
+    const stamp = JSON.stringify([this.map.waypoints, this.map.traversalLinks, this.map.winds]);
+    if (this.nav?.stamp !== stamp) {
+      this.toast('Montando o grafo de navegação…');
+      const t0 = performance.now();
+      this.nav = { graph: buildNavGraph(this.app.world, { map: this.map }), stamp };
+      console.info(`[editor] grafo: ${this.nav.graph.stats.nodes} nós, ${this.nav.graph.stats.links} ligações de travessia, ${Math.round(performance.now() - t0)} ms`);
+    }
+    const plan = this.nav.graph.plan(this.waypointPoint(wa), this.waypointPoint(wb), { allow: () => true });
+    this.clearRoute();
+    if (!plan) return this.toast(`Sem rota de ${from} até ${to}`, true);
+    const pts = plan.points.map((p) => v3of(p).addScaledVector(v3of(p).normalize(), 0.5));
+    this.routeLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xff4fd8, depthTest: false, transparent: true }));
+    this.routeLine.renderOrder = 10;
+    this.root.add(this.routeLine);
+    const used = plan.links.filter((l) => l).map((l) => `${l!.kind} ${l!.id}${l!.event ? ' (sino)' : ''}`);
+    this.toast(`Rota: ${plan.points.length} pontos${used.length ? ` · ${used.join(', ')}` : ' · só caminhando'}`);
+  }
+
+  private clearRoute(): void {
+    if (!this.routeLine) return;
+    this.root.remove(this.routeLine);
+    this.routeLine.geometry.dispose();
+    this.routeLine = null;
+  }
+
   private toggleLink(a: string, b: string): void {
     if (a === b) return;
     const wa = this.map.waypoints!.find((w) => w.id === a);
@@ -624,6 +687,7 @@ export class MapEditor {
     } else {
       this.map.waypoints = this.map.waypoints!.filter((w) => w.id !== id);
       for (const w of this.map.waypoints) w.links = w.links.filter((l) => l !== id);
+      this.map.traversalLinks = this.map.traversalLinks!.filter((l) => l.from !== id && l.to !== id);
       this.sel = null;
       this.changed('markers');
     }
@@ -806,7 +870,43 @@ export class MapEditor {
       g.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
       this.markerGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x4fd6e8, depthTest: false, transparent: true })));
     }
+    this.buildTraversalLinkMarkers(pos);
     this.buildWindMarkers();
+    this.clearRoute();
+  }
+
+  /** Bot traversal links: an arrow from start to end, raised over the waypoint balls, coloured by kind. */
+  private buildTraversalLinkMarkers(pos: Map<string, THREE.Vector3>): void {
+    const links = this.map.traversalLinks!;
+    if (!links.length) return;
+    const p: number[] = [];
+    const c: number[] = [];
+    const line = (a: THREE.Vector3, b: THREE.Vector3, color: THREE.Color) => {
+      p.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      c.push(color.r, color.g, color.b, color.r, color.g, color.b);
+    };
+    for (const l of links) {
+      const a0 = pos.get(l.from);
+      const b0 = pos.get(l.to);
+      if (!a0 || !b0) continue;
+      const selected = this.sel?.kind === 'waypoint' && (this.sel.id === l.from || this.sel.id === l.to);
+      const color = new THREE.Color(selected ? 0xffffff : LINK_COLOR[l.kind]);
+      const a = a0.clone().addScaledVector(a0.clone().normalize(), 0.9);
+      const b = b0.clone().addScaledVector(b0.clone().normalize(), 0.9);
+      line(a, b, color);
+      // The head, at the end.
+      const d = b.clone().sub(a).normalize();
+      const side = new THREE.Vector3().crossVectors(d, b.clone().normalize()).normalize();
+      const back = b.clone().addScaledVector(d, -0.8);
+      line(b, back.clone().addScaledVector(side, 0.4), color);
+      line(b, back.clone().addScaledVector(side, -0.4), color);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(c, 3));
+    const lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false, transparent: true }));
+    lines.renderOrder = 9;
+    this.markerGroup.add(lines);
   }
 
   /**
@@ -1149,6 +1249,10 @@ export class MapEditor {
       this.toggleLink(this.sel.id, hit.id!);
       return;
     }
+    if (this.mode === 'waypoints' && hit.kind === 'waypoint' && e.altKey && this.sel?.kind === 'waypoint') {
+      this.toggleTraversalLink(this.sel.id, hit.id!);
+      return;
+    }
     if (hit.kind === 'terrain') this.select(null);
     else this.select({ kind: hit.kind, id: hit.id! });
   }
@@ -1419,8 +1523,11 @@ export class MapEditor {
         ? this.map.chestSpots.map((c) => ({ id: c.id, label: `${c.id} · ${c.region}`, sel: { kind: 'chest' as const, id: c.id } }))
         : this.mode === 'ventos'
           ? this.map.winds!.map((w) => ({ id: w.id, label: `${w.id} · ${w.kind === 'updraft' ? 'ascendente' : 'direcional'}${w.trigger ? ' · sino' : ''}`, sel: { kind: 'wind' as const, id: w.id } }))
-          : this.map.waypoints!.map((w) => ({ id: w.id, label: `${w.id} · ${w.kind ?? 'rua'} · ${w.links.length} lig.`, sel: { kind: 'waypoint' as const, id: w.id } }));
-      this.list.append(el('div', 'me-fine', this.mode === 'baus' ? 'Clique no chão, num piso ou num telhado para criar um ponto de baú. Os baús usam o sistema de loot do jogo.' : this.mode === 'ventos' ? 'Clique para criar uma corrente ascendente (num telhado ou deck a base começa nele). Ciano: ascendente · amarelo: direcional · rosa: só sopra quando o sino toca.' : 'Clique para criar um waypoint ligado ao selecionado; Shift+clique em outro liga ou desliga os dois.'));
+          : this.map.waypoints!.map((w) => {
+            const trav = this.map.traversalLinks!.filter((l) => l.from === w.id).length;
+            return { id: w.id, label: `${w.id} · ${w.kind ?? 'rua'} · ${w.links.length} lig.${trav ? ` · ${trav} trav.` : ''}`, sel: { kind: 'waypoint' as const, id: w.id } };
+          });
+      this.list.append(el('div', 'me-fine', this.mode === 'baus' ? 'Clique no chão, num piso ou num telhado para criar um ponto de baú. Os baús usam o sistema de loot do jogo.' : this.mode === 'ventos' ? 'Clique para criar uma corrente ascendente (num telhado ou deck a base começa nele). Ciano: ascendente · amarelo: direcional · rosa: só sopra quando o sino toca.' : 'Clique para criar um waypoint ligado ao selecionado; Shift+clique em outro liga ou desliga os dois; Alt+clique cria (ou apaga) uma ligação de travessia dos bots do selecionado até ele.'));
       for (const it of items.filter((i) => !this.search || i.label.toLowerCase().includes(this.search))) {
         const row = el('div', 'me-item', it.label);
         row.classList.toggle('on', this.sel?.id === it.id);
@@ -1475,7 +1582,13 @@ export class MapEditor {
       if (!id || id === s.id) return;
       if (kind === 'placement' && this.placementById(id)) return this.toast('Esse id já existe', true);
       if (kind === 'wind' && this.map.winds!.some((w) => w.id === id)) return this.toast('Esse id já existe', true);
-      if (kind === 'waypoint') for (const w of this.map.waypoints!) w.links = w.links.map((l) => (l === s.id ? id : l));
+      if (kind === 'waypoint') {
+        for (const w of this.map.waypoints!) w.links = w.links.map((l) => (l === s.id ? id : l));
+        for (const l of this.map.traversalLinks!) {
+          if (l.from === s.id) l.from = id;
+          if (l.to === s.id) l.to = id;
+        }
+      }
       s.id = id;
       this.sel = { kind, id };
     }, target)));
@@ -1579,6 +1692,54 @@ export class MapEditor {
         links.append(row);
       }
       box.append(el('div', 'me-fine', `${w.links.length} ligações (Shift+clique em outro waypoint liga ou desliga)`), links);
+      // Bot traversal links out of it (and how many come in).
+      const out = this.map.traversalLinks!.filter((l) => l.from === w.id);
+      const incoming = this.map.traversalLinks!.filter((l) => l.to === w.id).length;
+      box.append(el('div', 'me-head', 'Travessia dos bots'), el('div', 'me-fine', `${out.length} saindo, ${incoming} chegando (Alt+clique em outro waypoint cria ou apaga)`));
+      const updrafts = this.map.winds!.filter((x) => x.kind === 'updraft');
+      const across = this.map.winds!.filter((x) => x.kind === 'directional');
+      for (const l of out) {
+        const row = el('div', 'me-link');
+        row.append(el('div', 'me-fine', `${l.id} → ${l.to}`));
+        const kindOf = el('select') as HTMLSelectElement;
+        for (const k of TRAVERSAL_LINK_KINDS) kindOf.append(new Option(LINK_NAME[k], k, false, k === l.kind));
+        kindOf.addEventListener('change', () => edit((v) => {
+          l.kind = v as MapTraversalLink['kind'];
+          if (l.kind === 'corrente') l.wind = updrafts.some((x) => x.id === l.wind) ? l.wind : updrafts[0]?.id;
+          else if (l.kind !== 'planagem' || !across.some((x) => x.id === l.wind)) delete l.wind;
+        }, 'markers')(kindOf.value));
+        row.append(labeled('tipo', kindOf));
+        if (l.kind === 'corrente') {
+          const windOf = el('select') as HTMLSelectElement;
+          for (const x of updrafts) windOf.append(new Option(`${x.id}${x.trigger ? ' (sino)' : ''}`, x.id, false, x.id === l.wind));
+          windOf.addEventListener('change', () => edit((v) => (l.wind = v), 'markers')(windOf.value));
+          row.append(labeled('vento', windOf));
+        } else if (l.kind === 'planagem') {
+          // A glide may ride a directional wind across (a bell's: the bots ring it first); none is a plain glide down.
+          const windOf = el('select') as HTMLSelectElement;
+          windOf.append(new Option('— nenhum —', '', false, !l.wind));
+          for (const x of across) windOf.append(new Option(`${x.id}${x.trigger ? ' (sino)' : ''}`, x.id, false, x.id === l.wind));
+          windOf.addEventListener('change', () => edit((v) => {
+            if (v) l.wind = v;
+            else delete l.wind;
+          }, 'markers')(windOf.value));
+          row.append(labeled('vento', windOf));
+        }
+        row.append(field('risco 0–1', String(l.risk ?? 0), edit((v) => {
+          const r = Math.min(1, Math.max(0, round(Number(v) || 0, 2)));
+          if (r > 0) l.risk = r;
+          else delete l.risk;
+        }, 'markers')));
+        row.append(button('Apagar ligação', () => this.toggleTraversalLink(l.from, l.to)));
+        box.append(row);
+      }
+      const target = el('input') as HTMLInputElement;
+      target.placeholder = 'id do waypoint de destino';
+      target.setAttribute('list', 'me-waypoint-ids');
+      const ids = el('datalist');
+      ids.id = 'me-waypoint-ids';
+      for (const x of this.map.waypoints!) ids.append(new Option(x.id, x.id));
+      box.append(labeled('testar rota até', target), ids, button('Testar rota', () => this.testRoute(w.id, target.value.trim())));
     }
     const actions = el('div', 'me-actions');
     actions.append(button('Mover (G)', () => {
@@ -1591,7 +1752,7 @@ export class MapEditor {
 
   private refreshTitle(): void {
     const m = this.map;
-    this.title.textContent = `${m.mapId} v${m.mapVersion}${this.dirty ? ' • não salvo' : ''} · ${m.placements.length} peças · ${m.chestSpots.length} baús · ${m.waypoints!.length} waypoints · ${m.trails!.length} trilhas · ${m.winds!.length} ventos`;
+    this.title.textContent = `${m.mapId} v${m.mapVersion}${this.dirty ? ' • não salvo' : ''} · ${m.placements.length} peças · ${m.chestSpots.length} baús · ${m.waypoints!.length} waypoints · ${m.trails!.length} trilhas · ${m.winds!.length} ventos · ${m.traversalLinks!.length} travessias`;
   }
 
   private toast(text: string, error = false): void {

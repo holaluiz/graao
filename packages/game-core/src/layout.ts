@@ -278,6 +278,17 @@ function kitPartCollider(p: KitPart, s: number, prefabTrav?: TraversalSurface): 
       }
       return { type: 'hull', points: pts, ...block };
     }
+    case 'hull': {
+      // A convex rock: its points around the centre, turned like any part (the client draws the same hull).
+      const rot = quatFromEulerDeg(p.rx, p.ry, p.rz);
+      const src = p.pts ?? [];
+      const pts: number[] = [];
+      for (let i = 0; i + 2 < src.length; i += 3) {
+        const [a, b, c] = quatRotate(rot, src[i]!, src[i + 1]!, src[i + 2]!);
+        pts.push((p.x + a) * s, (p.y + b) * s, (p.z + c) * s);
+      }
+      return { type: 'hull', points: pts, ...block };
+    }
   }
 }
 

@@ -114,6 +114,11 @@ export class LootHud {
 
   // ------------------------------------------------------------------------------------------------ prompt
 
+  /** The prompt's action on screen ("Abrir baú"), or null (the touch layer's contextual button reads it). */
+  get currentPrompt(): string | null {
+    return this.prompt.hidden ? null : this.promptAction.textContent;
+  }
+
   /** `[F] action · item (rarity)`; null hides it. */
   setPrompt(p: { action: string; item?: string; rarity?: Rarity; qty?: number; note?: string } | null): void {
     const key = p ? `${p.action}|${p.item}|${p.rarity}|${p.qty}|${p.note}` : '';

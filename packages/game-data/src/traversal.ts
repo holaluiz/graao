@@ -3,6 +3,7 @@
  * shared by client prediction and the authoritative server. Distances are metres along the character's local up
  * (radial) from the feet, speeds m/s, stamina points; timers are counted by the motor in whole 1/60 s steps.
  */
+import type { TraversalLinkKind } from './world/map';
 
 /**
  * Persistent traversal mode of a character (game-core CharacterState.traversal). NONE is ordinary locomotion
@@ -209,6 +210,30 @@ export const TRAVERSAL_ACTIONS: Record<TraversalMode, TraversalActions> = {
   // Hands on the glider: no weapons, only mobility magic (which takes over the glide).
   [TraversalMode.GLIDE]: { fire: false, cast: 'mobility', reload: true, interact: false, switchWeapon: true },
 };
+
+/**
+ * How bots take a map traversal link (`traversalLinks`, docs/world/VERTICAL_BOT_NAVIGATION.md): the stamina it needs at
+ * the start (a face costs ≈ 11 per metre climbed, a ride on the kite 8 per second), how long it may take before it
+ * counts as failed (s), how close to its end counts as arrived (m: a glide lands where it lands) and its pace for the
+ * planner (m/s along the link: a slow climb costs more than the same distance walked).
+ */
+export const BOT_TRAVERSAL: Record<TraversalLinkKind, { stamina: number; timeout: number; reach: number; pace: number }> = {
+  escalada: { stamina: 70, timeout: 14, reach: 1.2, pace: 2.5 },
+  corrente: { stamina: 85, timeout: 18, reach: 3.0, pace: 3.0 },
+  planagem: { stamina: 30, timeout: 10, reach: 6.0, pace: 5.0 },
+  salto: { stamina: 20, timeout: 5, reach: 1.0, pace: 2.5 },
+};
+export const BOT_TRAVERSAL_RULES = {
+  /** Walking pace the planner's costs are measured in (m/s). */
+  walkPace: 5.6,
+  /** Planner cost (m) of a fully risky link (risk 1). */
+  riskCost: 25,
+  /** Failures in a row before a bot leaves a link alone, and for how long (s). */
+  failLimit: 2,
+  blockFor: 45,
+  /** Misses that end back at the start (a jump short of the face) before the link counts as failed. */
+  retries: 4,
+} as const;
 
 /** HUD names of the traversal modes (pt-BR). */
 export const TRAVERSAL_LABEL: Record<TraversalMode, string> = {

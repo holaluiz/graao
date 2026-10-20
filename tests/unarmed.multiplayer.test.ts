@@ -232,7 +232,8 @@ describe('empty hands, punches, creeps and progression (two clients)', () => {
       await sleep(300);
       expect(A.self.latest()!.stats).toEqual([0, 0, 0, 1, 0]);
 
-      // ---- A weapon found: it takes the hand (no punches); put away, the fists come back; taken out, it shoots.
+      // ---- A weapon found: it takes the hand and the punches are gone. Weapons cannot be put away (the old
+      // FISTS_SLOT switch is refused), so with a weapon the attack only shoots.
       a.send(C2S.DEV_LOOT, { op: 'give', item: 'weapon_pistol' });
       const drop = await A.event((e): e is Extract<GameEvent, { e: 'items' }> => e.e === 'items' && e.src === -2 && e.it[0]![1] === ITEM_IDS.indexOf('weapon_pistol'));
       a.send(C2S.INTERACT, { s: 1, k: 1, id: drop.it[0]![0], g: A.loot.latest()!.gen });
@@ -244,17 +245,15 @@ describe('empty hands, punches, creeps and progression (two clients)', () => {
       await sleep(300);
       expect(A.seen(isMelee(ia)).length).toBe(2);
       a.send(C2S.SWITCH_WEAPON, { w: FISTS_SLOT });
-      await A.self.until((s) => s.fists === true && (s.wpn[0] === 'pistol' || s.wpn[1] === 'pistol'));
-      a.send(C2S.MELEE, { s: 7, o: aim2.o, d: aim2.d });
-      await A.event((e): e is Extract<GameEvent, { e: 'melee' }> => isMelee(ia)(e) && e.s === 7);
-      // Fists still refuse shots; the weapon back in hand shoots.
-      a.send(C2S.FIRE, { s: 2, w: armed.weapon, o: aim2.o, d: aim2.d, a: 1 });
       await sleep(300);
-      expect(A.seen((e) => e.e === 'shot' && e.by === ia).length).toBe(0);
-      a.send(C2S.SWITCH_WEAPON, { w: armed.weapon });
-      await A.self.until((s) => s.fists === false);
-      await sleep(400);
-      a.send(C2S.FIRE, { s: 3, w: armed.weapon, o: aim2.o, d: aim2.d, a: 1 });
+      expect(A.self.latest()!.fists).toBe(false);
+      expect(A.self.latest()!.weapon).toBe(armed.weapon);
+      a.send(C2S.MELEE, { s: 7, o: aim2.o, d: aim2.d });
+      await sleep(300);
+      expect(A.seen(isMelee(ia)).length).toBe(2);
+      // The weapon in hand shoots.
+      await sleep(200);
+      a.send(C2S.FIRE, { s: 2, w: armed.weapon, o: aim2.o, d: aim2.d, a: 1 });
       await A.event((e): e is Extract<GameEvent, { e: 'shot' }> => e.e === 'shot' && e.by === ia);
     } finally {
       await a.leave().catch(() => {});

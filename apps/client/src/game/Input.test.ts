@@ -317,4 +317,53 @@ describe('desktop keyboard input', () => {
     key('ArrowLeft');
     expect(input.consume('spectatePrevious')).toBe(true);
   });
+  it('touch mode: on-screen buttons hold and press the same actions, alongside the keyboard', () => {
+    input.setTouchMode(true);
+    expect(input.touch).toBe(true);
+    // Engaged like pointer lock (the directors read `locked`), let go by the options menu.
+    expect(input.locked).toBe(false);
+    input.requestLock();
+    expect(input.locked).toBe(true);
+    input.touchDown('jump');
+    expect(input.isDown('jump')).toBe(true);
+    expect(input.consume('jump')).toBe(true);
+    expect(input.consume('jump')).toBe(false);
+    // A key on the same action does not release the touch hold, and the other way round.
+    key('Space');
+    key('Space', 'keyup');
+    expect(input.isDown('jump')).toBe(true);
+    input.touchUp('jump');
+    expect(input.isDown('jump')).toBe(false);
+    key('Space');
+    input.touchDown('jump');
+    input.touchUp('jump');
+    expect(input.isDown('jump')).toBe(true);
+    key('Space', 'keyup');
+    input.exitLock();
+    expect(input.locked).toBe(false);
+    expect(input.isDown('jump')).toBe(false);
+  });
+
+  it('touch mode: the stick is an analogue movement axis, summed with the keys and clamped to the unit disc', () => {
+    input.setTouchMode(true);
+    input.setStick(0.3, 0.4);
+    expect(input.moveAxis()).toEqual({ x: 0.3, y: 0.4 });
+    input.setStick(3, 4);
+    const far = input.moveAxis();
+    expect(Math.hypot(far.x, far.y)).toBeCloseTo(1);
+    expect(far.x).toBeCloseTo(0.6);
+    input.setStick(0, 0);
+    key('KeyW');
+    expect(input.moveAxis()).toEqual({ x: 0, y: 1 });
+    key('KeyW', 'keyup');
+    // A camera drag goes through the same look path as the mouse.
+    input.addLook(100, 0);
+    expect(input.takeLook().yaw).toBeCloseTo(-100 * input.sensitivity);
+    // Disabled (a menu open): no stick, no look, no buttons.
+    input.enabled = false;
+    input.setStick(1, 0);
+    input.touchDown('fire');
+    expect(input.moveAxis()).toEqual({ x: 0, y: 0 });
+    expect(input.isDown('fire')).toBe(false);
+  });
 });

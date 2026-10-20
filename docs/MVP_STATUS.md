@@ -1,5 +1,23 @@
 # graao MVP status
 
+## 2026-10-19 (noite) — Mundo vertical, 4ª rodada: rocha de verdade e travessia na sala hospedada
+
+Continuação da frente vertical ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)):
+
+- **Arte (V9):** a Serra do Mirante e as ilhas deixaram de ser pilhas de lajes. Os patamares do maciço são desenhados
+  como rocha quebrada em facetas com estratos de itabirito, canga e ferrugem sobre o mesmo colisor (`KitPart.relief`
+  e `bands`, só visual, ≤ 0,1 m para fora); a parte de baixo das ilhas e das pedras flutuantes virou uma rocha só em
+  ponta; matacões irregulares; uma crista de três lâminas atrás do maciço dá silhueta de serra (até 17 m, fora das
+  três rotas). Formas livres usam o novo `shape: 'hull'` do kit: o cliente desenha o casco dos mesmos pontos de que o
+  `layout` faz o colisor convexo. Rotas medidas de novo (12,2 / 5,0 / 4,3 s, iguais); +2,4% de triângulos no kit,
+  nenhuma malha nova, quadro no pé da Serra ~1 ms acima da vila ([orçamento](performance/VERTICAL_WORLD_BUDGET.md)).
+- **Sala hospedada na aba (o modo do site):** pela primeira vez com travessia — convidado por WebRTC escala a rota B,
+  toca o sino do cume, plana na corrente até a Ilha do Sino e sobe nela; a anfitriã vê cada estado; correções de
+  predição de 1–7 mm. Achado: se a aba anfitriã trava ≥ 0,3 s, a proteção contra quem para de mandar comandos derruba
+  quem está planando ([autoridade](networking/TRAVERSAL_AUTHORITY.md)).
+- **Docs em dia com a 3ª rodada:** bots tocam sinos para abrir correntes de evento, fogem da Tormenta descendo da ilha
+  e voltam a lutar; dez participantes ao redor da Serra ([bots](world/VERTICAL_BOT_NAVIGATION.md)).
+
 ## 2026-10-19 — Site só com hospedagem na aba do navegador
 
 O formulário **Criar sala** tinha dois caminhos ("Criar e hospedar" com o Graao Host e "Ou hospedar nesta aba do
@@ -8,6 +26,36 @@ o Graao Host fica atrás de `VITE_GRAAO_HOST=on` (`hostApiConfigured()`), deslig
 dele na lista, sem consulta à central por código ou `/?sala=`. App, central, túnel e testes continuam no código; o
 launch `graao-client-hosting` liga a chave. O roteiro do M2 ([HOST_VALIDATION](networking/HOST_VALIDATION.md)) passou
 a validar a sala na aba, com um cenário de rede restrita para decidir sobre TURN (ADR-006).
+
+## 2026-10-19 (tarde) — Mundo vertical, 2ª rodada: bots com travessia, toque, combate vertical em rede
+
+Continuação da frente vertical ([relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)):
+
+- **Bots com travessia (V8):** o grafo de navegação ganhou ligações de travessia (`traversalLinks` do mapa, o
+  `BotTraversalLink`): escalada, corrente, planagem e salto, com capacidade, stamina, custo, risco e disponibilidade
+  (vento de sino). Bots sobem a Serra pelos paredões e pela corrente, vão às ilhas pela Corrente do Sino, saltam as
+  pedras até a Ilha da Torre e descem planando; um link que falha duas vezes fica bloqueado e uma caminhada de onde
+  caíram fica mais cara — sem laço sobe/desce ([navegação](world/VERTICAL_BOT_NAVIGATION.md)). O grafo deixou de aceitar
+  "degraus" altos para o lado de lajes.
+- **Editor:** Alt+clique liga waypoints com uma travessia; tipo, vento e risco no painel; "Testar rota" desenha o plano
+  dos bots sobre o mapa editado.
+- **Toque (V9):** joystick analógico, câmera por arraste, PULAR/PLANAR e um único botão contextual (SUBIR, SOLTAR,
+  ESCALAR/AGARRAR, ABRIR/TOCAR/PEGAR); ATIRAR/MIRAR/RECARREGAR, e os ícones do próprio HUD como botões de magia, arma
+  e item — as mesmas intenções do teclado. **Celular sempre na horizontal:** tela cheia + trava em paisagem no primeiro
+  toque (Android) e, em retrato, um cartão "Gire o celular" que bloqueia o jogo (iPhone). Corrigida uma camada de tela
+  cheia do HUD que engolia toques e o clique de recaptura do ponteiro no desktop.
+- **Rede:** em partida real, tiro da ilha ao chão, ilha como cobertura, empurrão da borda com planagem e pouso,
+  Tormenta ferindo quem está na ilha e vencedor; telhado pela beirada visto pelo outro cliente; predição com 100 ms
+  de atraso em cada sentido. A latência revelou e corrigiu um defeito de reconciliação logo após teleportes (o replay
+  perdia o pulo e corrigia ~2 m).
+
+- **Magias entre altitudes:** Meteoro Solar no chão sob a ilha não atinge quem está nela (área 3D), e o da borda
+  atinge o chão; projéteis mágicos param na rocha vindo de baixo e acertam de fora da borda; Voo de Papagaio leva do
+  chão à ilha; Anel de Vento joga pela borda (com planagem e pouso) e um Muro de Papel na borda segura o mesmo empurrão.
+
+**Validação:** suíte completa e typecheck (números no [relatório](qa/VERTICAL_TRAVERSAL_TEST_REPORT.md)); navegador
+(editor, toque em paisagem/retrato emulados, desktop). Pendente: celular físico, arte final, instalador novo do
+Graao Host (protocolo 11, publicação exige aprovação).
 
 ## 2026-10-19 — Vertical World & Traversal: escalada, planagem, vento, Serra do Mirante e ilhas
 

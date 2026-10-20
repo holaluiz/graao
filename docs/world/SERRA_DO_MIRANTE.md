@@ -13,8 +13,19 @@ paredões — para o sul, para quem chega pela trilha do lago). Sob ela o terren
 | 2 | x −6…5, z −4,5…3,6 | 8,0 m |
 | 3 (cume) | x −3,5…2,5, z −3,4…2,0 | 11,6 m (17,8 m sobre o raio) |
 
-Rocha: um colisor de caixa por patamar, vestido com lâminas inclinadas, estratos claros e musgo/capim de campo
-rupestre (decoração a ≤ 0,15 m do colisor). Tudo `traversal: 'none'` — as faces longas não são escada.
+Rocha: um colisor de caixa por patamar, **desenhado como rocha quebrada** — as faces viram facetas irregulares de
+≈ 1,6 × 1,1 m (até 0,1 m para fora e 0,2 m para dentro do colisor, topo plano para caminhar) em estratos inclinados de
+itabirito, canga e ferrugem (`KitPart.relief` e `bands`, só visual), com musgo/capim de campo rupestre por cima. Os
+pilares de pouso das rampas seguem o mesmo visual. Tudo `traversal: 'none'` — as faces longas não são escada; os
+paredões de quartzito claro (rota B) continuam lisos e claros para ler "escale aqui" de longe.
+
+**Crista dos fundos** (`crista-mirante`, peça própria): três lâminas de rocha (cascos convexos) atrás do patamar 1,
+do chão até 12, 17 e 14,5 m, inclinadas para trás — de longe o maciço vira serra, não bolo de andares; a mais alta
+aparece por cima do cume vista da frente, abaixo do topo do cruzeiro. Rente à face de trás do patamar 1 até 1,4 m
+acima do terraço de trás (sem fresta onde cair) e com vãos entre elas (a trilha continua exposta em trechos). Fora do
+alcance sem magia; o topo é uma aresta, não um poleiro. Matacões do pé, do terraço e do cume também são cascos
+convexos (colisor = desenho). Capturas: `docs/world/screenshots/vertical-serra-rocha.jpg` e
+`vertical-ilha-e-crista.jpg`.
 
 ## Rotas
 
@@ -49,6 +60,10 @@ Pedras de cobertura baixa na aproximação, o marco de trilha `vert-marco-trilha
 
 ## Verificação
 
-- Motor real no mapa real: rotas A, B e C chegam ao cume; o bot do servidor sobe pela trilha (`world.vertical`).
+- Motor real no mapa real: rotas A, B e C chegam ao cume; bots do servidor sobem pela trilha, pelos três paredões e
+  pela corrente oeste, e do cume tocam o sino para planar até a Ilha do Sino (`world.vertical`).
+- Sala hospedada na aba com convidado por WebRTC: rota B completa, sino do cume, planagem na corrente do sino até a
+  ilha ([autoridade](../networking/TRAVERSAL_AUTHORITY.md)).
 - Navegador (Chromium) contra o servidor: escalada → mantle → terraço com correção de reconciliação ≤ 6 mm.
-- Visual: capturas no relatório de QA. Arte: blocos estilizados; refinamento de silhueta/cor é polimento (V9).
+- Visual: capturas no relatório de QA. Arte: rocha facetada com estratos e crista (4ª rodada, 19/10); as rotas
+  mediram os mesmos 12,2 / 5,0 / 4,3 s depois da troca.

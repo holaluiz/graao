@@ -7,7 +7,12 @@
  * Gameplay tags, not looks, decide traversal (docs/gameplay/CLIMBING.md): the rock masses are `traversal: 'none'` (their
  * long faces are walls, not ladders), the climbable faces are `'climb'` and stand 0.15 m proud of the mass with their
  * top 5 cm over it, so the wall probe meets the face and the ledge probe meets its top; island tops and platforms are
- * `'ledge'` (whoever falls short can still catch the edge). Every collider is a box or a cylinder (no trimesh).
+ * `'ledge'` (whoever falls short can still catch the edge). Every collider is a box, a cylinder or a small convex hull
+ * (no trimesh).
+ *
+ * Rock looks (docs/world/VERTICAL_PREFABS.md): the massif's tiers are boxes drawn broken into facets and banded like
+ * itabirito (`relief`, `bands`: visual, within 0.1 m out and 0.2 m in of the collider, the tops flat); boulders and the
+ * rock under the islands are convex hulls, drawn from the same points their colliders are built from.
  *
  * Map-level pieces with no prefab: wind volumes (the map's `winds`: WIND_UPDRAFT / WIND_DIRECTIONAL) and loot points
  * on heights (chest spots with `surface: 'prop'` and a `height`).
@@ -21,6 +26,7 @@ import {
   cyl,
   deco,
   gabledRoof,
+  hull,
   near,
   slope,
   span,
@@ -41,39 +47,19 @@ function rng(seed: number): () => number {
 
 // ------------------------------------------------------------------------------------------------ rock
 
+/** Broken-rock look of the massif's boxes (visual: facets ≤ 0.1 m out and ≤ 0.2 m into the collider, flat tops). */
+const RELIEF = 0.1;
+
 /**
- * A rock mass from (x0, y0, z0) to (x1, y1, z1): one box collider, dressed with tilted facets hugging its sides, strata
- * bands and moss on its top (decoration within 0.12 m of the collider, so what you see is what stops you).
+ * A rock mass from (x0, y0, z0) to (x1, y1, z1): one box collider, drawn broken into facets and banded in `colors`
+ * like itabirito (KitPart `relief`, `bands`), moss on its top. Climbable faces stand 0.25 m proud of it, clear of the
+ * facets.
  */
 function rockMass(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, colors: KitColor[], seed: number): KitPart[] {
   const r = rng(seed);
-  const P: KitPart[] = [span(x0, y0, z0, x1, y1, z1, colors[0]!)];
+  const P: KitPart[] = [span(x0, y0, z0, x1, y1, z1, colors[0]!, { relief: RELIEF, bands: colors.slice(1) })];
   const w = x1 - x0;
   const d = z1 - z0;
-  const h = y1 - y0;
-  // Facets: slabs leaning a few degrees against each side face, alternating colours.
-  const faces: [number, number, number, number, 'x' | 'z'][] = [[x0, (z0 + z1) / 2, -1, d, 'x'], [x1, (z0 + z1) / 2, 1, d, 'x'], [(x0 + x1) / 2, z0, -1, w, 'z'], [(x0 + x1) / 2, z1, 1, w, 'z']];
-  for (const [fx, fz, sgn, len, axis] of faces) {
-    const n = Math.max(1, Math.round(len / 2.6));
-    for (let i = 0; i < n; i++) {
-      const t = (i + 0.5) / n - 0.5;
-      const hy = h * (0.3 + r() * 0.18);
-      const cy = y0 + h * (0.35 + r() * 0.3);
-      const half = (len / n) * (0.42 + r() * 0.08);
-      const c = colors[(i + 1 + Math.floor(r() * 2)) % colors.length]!;
-      // A gentle tilt: the facet stays within 0.15 m of the face (climbable faces stand 0.25 m proud of it).
-      const tilt = (r() - 0.5) * Math.min(5, (0.07 / Math.max(0.3, hy)) * (360 / Math.PI));
-      if (axis === 'x') P.push(box(fx + sgn * 0.04, cy, fz + t * len, 0.05, hy, half, c, { ...deco, rz: tilt, rx: (r() - 0.5) * 2 }));
-      else P.push(box(fx + t * len, cy, fz + sgn * 0.04, half, hy, 0.05, c, { ...deco, rx: tilt, rz: (r() - 0.5) * 2 }));
-    }
-    // Strata: two thin pale bands along the face.
-    for (const k of [0.38, 0.72]) {
-      const y = y0 + h * k + (r() - 0.5) * 0.3;
-      if (y <= Math.max(y0, 0) + 0.2) continue;
-      if (axis === 'x') P.push(box(fx + sgn * 0.11, y, fz, 0.02, 0.05, len / 2 - 0.1, 'rochaClara', { ...near, rx: (r() - 0.5) * 2 }));
-      else P.push(box(fx, y, fz + sgn * 0.11, len / 2 - 0.1, 0.05, 0.02, 'rochaClara', { ...near, rz: (r() - 0.5) * 2 }));
-    }
-  }
   // Moss and campo rupestre on the top (a few patches, under the walking height).
   for (let i = 0; i < Math.max(2, Math.round((w * d) / 14)); i++) {
     const px = x0 + 0.6 + r() * (w - 1.2);
@@ -81,6 +67,82 @@ function rockMass(x0: number, y0: number, z0: number, x1: number, y1: number, z1
     P.push(box(px, y1 + 0.015, pz, 0.5 + r() * 0.7, 0.015, 0.4 + r() * 0.6, i % 3 ? 'musgo' : 'capim', { ...near, ry: r() * 90 }));
   }
   return P;
+}
+
+/** An icosahedron's corners (scaled so the farthest coordinate is 1) and the six axis points: a boulder's cloud. */
+const PHI = (1 + Math.sqrt(5)) / 2;
+const BOULDER_CLOUD: [number, number, number][] = [
+  ...[-1, 1].flatMap((a) => [-1, 1].flatMap((b): [number, number, number][] => [[0, a / PHI, b], [a / PHI, b, 0], [b, 0, a / PHI]])),
+  [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+];
+
+/**
+ * A boulder about hx × hy × hz around (x, y, z), never past that box: a convex hull of the cloud above, each point
+ * pulled in a little at random. The collider is the same hull (cover is what it looks like).
+ */
+function boulder(x: number, y: number, z: number, hx: number, hy: number, hz: number, color: KitColor, seed: number, o: Partial<KitPart> = {}): KitPart {
+  const r = rng(seed);
+  const pts: number[] = [];
+  for (const [a, b, c] of BOULDER_CLOUD) {
+    const k = 0.78 + 0.22 * r();
+    pts.push(x + a * hx * k, y + b * hy * k, z + c * hz * k);
+  }
+  return hull(pts, color, o);
+}
+
+/** The rock under a floating island narrows from under its slab to a point: ring scale by depth fraction. */
+const SPIRE: [number, number][] = [[0, 0.8], [0.18, 0.8], [0.42, 0.58], [0.66, 0.34], [0.85, 0.15], [1, 0]];
+const spireScale = (f: number): number => {
+  for (let i = 1; i < SPIRE.length; i++) {
+    const [f1, k1] = SPIRE[i]!;
+    const [f0, k0] = SPIRE[i - 1]!;
+    if (f <= f1) return k0 + ((k1 - k0) * (f - f0)) / (f1 - f0);
+  }
+  return 0;
+};
+
+/**
+ * The rock under a slab of half extents hw × hd whose bottom is at `y0`: rings of points down to a tip `depth` below,
+ * each ring a rounded rectangle pulled in a little at random (never wider than 0.8 of the slab: someone hanging from
+ * its edge clears it), banded in strata. One convex hull: shots and bodies meet the rock that is drawn.
+ */
+function spire(hw: number, hd: number, y0: number, depth: number, seed: number, colors: KitColor[]): KitPart {
+  const r = rng(seed);
+  const pts: number[] = [];
+  for (const [f, k] of SPIRE.slice(0, -1)) {
+    for (let i = 0; i < 10; i++) {
+      const a = ((i + 0.35 * r()) / 10) * Math.PI * 2;
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      // Superellipse (exponent 4): the ring keeps something of the slab's corners.
+      const e = (c ** 4 + s ** 4) ** -0.25;
+      const j = k * (0.8 + 0.2 * r());
+      pts.push(c * e * hw * j, y0 - depth * (f ? f + (r() - 0.5) * 0.08 : 0), s * e * hd * j);
+    }
+  }
+  pts.push((r() - 0.5) * hw * 0.3, y0 - depth, (r() - 0.5) * hd * 0.3);
+  return hull(pts, colors[0]!, { traversal: 'none', bands: colors.slice(1) });
+}
+
+/**
+ * A rock blade of a crest, its foot `w` wide (along X) and `t` deep (from z0 back to z0 − t), from `y0` (in the ground)
+ * up: the front face plumb at z = z0 up to `plumb` (flush with what stands in front: no crevice to slip into), then
+ * leaning back `lean` m by its ridge at height `h`. A convex hull, banded like the massif, not grabbable.
+ */
+function blade(x: number, z0: number, w: number, t: number, y0: number, plumb: number, h: number, lean: number, seed: number, colors: KitColor[]): KitPart {
+  const r = rng(seed);
+  const hw = w / 2;
+  const ym = plumb + (h - plumb) * 0.55;
+  const ridge = (r() - 0.5) * hw * 0.6;
+  const pts = [
+    // Foot, then the plumb shoulder (front corners straight up, the back pulled in).
+    x - hw, y0, z0, x + hw, y0, z0, x - hw * (0.8 + 0.2 * r()), y0, z0 - t, x + hw * (0.8 + 0.2 * r()), y0, z0 - t,
+    x - hw * 0.92, plumb, z0, x + hw * 0.92, plumb, z0, x - hw * 0.7, plumb, z0 - t * 0.85, x + hw * 0.75, plumb, z0 - t * 0.8,
+    // Narrower and leaning back, then a ridge of two points off the middle.
+    x - hw * 0.6, ym, z0 - lean * 0.5, x + hw * 0.55, ym, z0 - lean * 0.45, x - hw * 0.4, ym, z0 - t * 0.7 - lean * 0.5, x + hw * 0.45, ym, z0 - t * 0.75 - lean * 0.5,
+    x + ridge - hw * 0.18, h, z0 - lean - t * 0.3, x + ridge + hw * 0.12, h - 0.6 - r() * 0.8, z0 - lean - t * 0.35,
+  ];
+  return hull(pts, colors[0]!, { traversal: 'none', bands: colors.slice(1) });
 }
 
 /**
@@ -158,10 +220,10 @@ vertical('rampa-trilha-13', 'Rampa de trilha 13 m', 'passagem', trailRamp(13.2, 
 vertical('rampa-trilha-9', 'Rampa de trilha 9 m', 'passagem', trailRamp(9.0, 3.8, 9), 'none');
 vertical('rampa-trilha-7', 'Rampa de trilha 7 m', 'passagem', trailRamp(7.0, 3.6, 13), 'none');
 
-/** Floating stepping stone (plataforma): a 1.8 m mossy rock top at the base, a rough cone under it. Grabbable edges. */
+/** Floating stepping stone (plataforma): a 1.8 m mossy rock top at the base, a rough point of rock under it. Grabbable edges. */
 vertical('plataforma-pedra', 'Plataforma de pedra flutuante', 'baixa', [
-  span(-0.9, -0.5, -0.9, 0.9, 0, 0.9, 'itabirito', { traversal: 'ledge' }),
-  cone(0, -1.15, 0, 0.75, 0.65, 'canga', { traversal: 'none', rx: 180, seg: 7 }),
+  span(-0.9, -0.5, -0.9, 0.9, 0, 0.9, 'itabirito', { traversal: 'ledge', relief: 0.04 }),
+  spire(0.9, 0.9, -0.5, 1.4, 61, ['canga', 'itabirito']),
   box(0, 0.015, 0, 0.75, 0.015, 0.7, 'musgo', near),
   box(0.5, -0.3, 0.92, 0.3, 0.12, 0.02, 'rochaClara', near),
 ], 'ledge', [0.8, 1.4]);
@@ -248,7 +310,7 @@ vertical('capelinha', 'Capelinha (oratório)', 'estrutura', capelinha());
  */
 function island(w: number, d: number, seed: number): KitPart[] {
   const r = rng(seed);
-  const P: KitPart[] = [span(-w / 2, -0.9, -d / 2, w / 2, 0, d / 2, 'terraVermelha', { traversal: 'ledge' })];
+  const P: KitPart[] = [span(-w / 2, -0.9, -d / 2, w / 2, 0, d / 2, 'terraVermelha', { traversal: 'ledge', relief: 0.06, bands: ['canga'] })];
   // Rim stones and the grass cover.
   P.push(box(0, 0.012, 0, w / 2 - 0.25, 0.012, d / 2 - 0.25, 'musgo', near));
   for (let i = 0; i < Math.round((w + d) / 1.6); i++) {
@@ -257,28 +319,22 @@ function island(w: number, d: number, seed: number): KitPart[] {
     const z = Math.sin(a) * (d / 2 - 0.4) * (0.6 + r() * 0.4);
     P.push(box(x, 0.1, z, 0.18 + r() * 0.12, 0.1, 0.15 + r() * 0.1, i % 2 ? 'rochaClara' : 'canga', { ...near, ry: r() * 90 }));
   }
-  // Underside: three tapering tiers and a point (colliders: shots and bodies meet the rock, nobody grabs it).
-  const tiers: [number, number, KitColor][] = [[0.82, 1.9, 'itabirito'], [0.6, 1.8, 'canga'], [0.36, 1.7, 'ferrugem']];
-  let y = -0.9;
-  for (const [ti, [k, hh, c]] of tiers.entries()) {
-    P.push(span((-w / 2) * k, y - hh, (-d / 2) * k, (w / 2) * k, y, (d / 2) * k, c, { traversal: 'none' }));
-    // Facets leaning out of each tier, in the next tier's colour.
-    const fc = tiers[(ti + 1) % tiers.length]![2];
-    for (const [sx, sz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      P.push(box(sx * (w / 2) * k * 0.98, y - hh * 0.5, sz * (d / 2) * k * 0.98, sx ? 0.08 : (w / 2) * k * 0.8, hh * 0.45, sz ? 0.08 : (d / 2) * k * 0.8, fc, { ...deco, rx: sz * 8, rz: -sx * 8 }));
-    }
-    y -= hh;
-  }
-  P.push(cone(0, y - 1.0, 0, Math.min(w, d) * 0.16, 1.0, 'pedraEscura', { traversal: 'none', rx: 180, seg: 7 }));
-  // Crystals and roots under it (the arquipélago glows a little at dusk).
+  // Underside: one banded rock narrowing to a point (its collider is the same hull: shots and bodies meet it, nobody
+  // grabs it).
+  const depth = 7.4;
+  P.push(spire(w / 2, d / 2, -0.9, depth, seed * 7 + 1, ['itabirito', 'canga', 'ferrugem']));
+  // Crystals growing out of the rock halfway down, pointing down and out (the arquipélago glows a little at dusk).
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + r();
-    P.push(cone(Math.cos(a) * w * 0.22, -2.4 - r() * 1.6, Math.sin(a) * d * 0.22, 0.16, 0.45, 'cristal', { ...deco, rx: 180 + (r() - 0.5) * 30, seg: 5 }));
+    const f = 0.3 + r() * 0.25;
+    const k = spireScale(f) * 0.84;
+    P.push(cone(Math.cos(a) * (w / 2) * k, -0.9 - depth * f, Math.sin(a) * (d / 2) * k, 0.16, 0.45, 'cristal', { ...deco, rx: 180 - 35 * Math.sin(a), rz: -35 * Math.cos(a), seg: 5 }));
   }
+  // Roots hanging from the slab's overhang, outside the rock.
   for (let i = 0; i < 6; i++) {
     const a = r() * Math.PI * 2;
     const len = 0.8 + r() * 1.6;
-    P.push(cyl(Math.cos(a) * (w / 2) * 0.85, -0.9 - len / 2, Math.sin(a) * (d / 2) * 0.85, 0.035, len / 2, i % 2 ? 'musgo' : 'madeiraEscura', { ...near, seg: 4, rz: (r() - 0.5) * 12 }));
+    P.push(cyl(Math.cos(a) * (w / 2) * 0.9, -0.9 - len / 2, Math.sin(a) * (d / 2) * 0.9, 0.035, len / 2, i % 2 ? 'musgo' : 'madeiraEscura', { ...near, seg: 4, rz: (r() - 0.5) * 12 }));
   }
   return P;
 }
@@ -320,25 +376,38 @@ const { t1, t2, t3 } = MACICO;
 vertical('macico-mirante-base', 'Serra do Mirante: maciço (base)', 'estrutura', [
   ...rockMass(t1.x0, -3, t1.z0, t1.x1, t1.top, t1.z1, ['itabirito', 'canga', 'ferrugem'], 101),
   // Ramp 1's landing at the back corner, flush with the terrace.
-  span(t1.x1, -1, -6.6, 9.8, t1.top, -4.6, 'canga'),
+  span(t1.x1, -1, -6.6, 9.8, t1.top, -4.6, 'canga', { relief: RELIEF, bands: ['itabirito'] }),
   // Boulders at the foot (low cover on the approach), reaching 1 m into the ground: the massif's frame is a tangent
   // plane, so 10 m from its centre the planet's surface is already ≈ 0.5 m under its y = 0.
-  ...[[-6.5, 7.6, 0.8], [4.8, 7.4, 0.7], [-9.2, -3.5, 0.9], [9.0, 3.6, 0.6]].map(([x, z, s], i) => box(x!, (s! * 1.2 - 1) / 2, z!, s!, (s! * 1.2 + 1) / 2, s! * 0.85, i % 2 ? 'canga' : 'itabirito', { ry: i * 33 + 10 })),
+  ...[[-6.5, 7.6, 0.8], [4.8, 7.4, 0.7], [-9.2, -3.5, 0.9], [9.0, 3.6, 0.6]].map(([x, z, s], i) => boulder(x!, (s! * 1.2 - 1) / 2, z!, s!, (s! * 1.2 + 1) / 2, s! * 0.85, i % 2 ? 'canga' : 'itabirito', 110 + i, { ry: i * 33 + 10 })),
 ], 'none');
 vertical('macico-mirante-meio', 'Serra do Mirante: maciço (meio)', 'estrutura', [
   ...rockMass(t2.x0, t1.top - 0.3, t2.z0, t2.x1, t2.top, t2.z1, ['canga', 'itabirito', 'ferrugem'], 202),
   // Ramp 2's landing pillar, beside tier 2's front terrace.
-  span(-8, t1.top - 0.2, 3.2, t2.x0, t2.top, 4.8, 'itabirito'),
-  // A low wall of stones on the front terrace of tier 1 (cover while resting from the climb).
-  ...[-5.2, 4.2].map((x, i) => box(x, t1.top + 0.4, 5.3, 0.9, 0.4, 0.35, i ? 'rochaClara' : 'canga', { ry: i ? -8 : 6 })),
+  span(-8, t1.top - 0.2, 3.2, t2.x0, t2.top, 4.8, 'itabirito', { relief: RELIEF, bands: ['canga', 'ferrugem'] }),
+  // A low wall of stones on the front terrace of tier 1 (cover while resting from the climb), sunk a little into it.
+  ...[-5.2, 4.2].map((x, i) => boulder(x, t1.top + 0.34, 5.3, 0.9, 0.46, 0.35, i ? 'rochaClara' : 'canga', 210 + i, { ry: i ? -8 : 6 })),
 ], 'none');
 vertical('macico-mirante-cume', 'Serra do Mirante: maciço (cume)', 'estrutura', [
   ...rockMass(t3.x0, t2.top - 0.3, t3.z0, t3.x1, t3.top, t3.z1, ['itabirito', 'ferrugem', 'canga'], 303),
   // Ramp 3's landing pillar at tier 3's back corner.
-  span(t3.x1, t2.top - 0.2, -4.4, 4.6, t3.top, -3.0, 'canga'),
-  // Two boulders on the summit: some cover, open sky over them (clear of the climb's arrival and ramp 3's way in).
-  box(-2.9, t3.top + 0.45, 1.1, 0.55, 0.45, 0.48, 'rochaClara', { ry: 8 }),
-  box(2.0, t3.top + 0.35, 0.0, 0.45, 0.35, 0.42, 'canga', { ry: -6 }),
+  span(t3.x1, t2.top - 0.2, -4.4, 4.6, t3.top, -3.0, 'canga', { relief: RELIEF, bands: ['itabirito'] }),
+  // Two boulders on the summit: some cover, open sky over them (clear of the climb's arrival and ramp 3's way in),
+  // sunk a little into the summit so no point of them floats.
+  boulder(-2.9, t3.top + 0.39, 1.1, 0.55, 0.51, 0.48, 'rochaClara', 310, { ry: 8 }),
+  boulder(2.0, t3.top + 0.29, 0.0, 0.45, 0.41, 0.42, 'canga', 311, { ry: -6 }),
+], 'none');
+/**
+ * The crest behind the massif (its silhouette from afar: a serra, not a stepped block): three rock blades rising from
+ * the ground along the back of tier 1 to 12–17 m (the tallest shows over the summit seen from the front, under the
+ * cruzeiro's top), flush with its back face up to 1.4 m over the back terrace, with gaps between them (the trail
+ * there stays exposed in places). Out of reach without magic; their ridges are knife edges, no perch. Its own piece, so it dissolves alone between the camera and someone
+ * on the back terrace. Clear of the three routes, ramp 1's landing and the west updraft.
+ */
+vertical('crista-mirante', 'Serra do Mirante: crista dos fundos', 'alta', [
+  blade(-6.4, t1.z0, 3.0, 2.6, -1.6, t1.top + 1.4, 12.0, 1.4, 401, ['itabirito', 'canga', 'ferrugem']),
+  blade(-1.6, t1.z0, 3.6, 2.8, -1.6, t1.top + 1.4, 17.0, 2.2, 402, ['itabirito', 'ferrugem', 'canga']),
+  blade(3.0, t1.z0, 3.2, 2.6, -1.6, t1.top + 1.4, 14.5, 1.8, 403, ['canga', 'itabirito', 'ferrugem']),
 ], 'none');
 
 addBuilding({
@@ -346,12 +415,13 @@ addBuilding({
   name: 'Serra do Mirante (maciço com 3 rotas)',
   category: 'vertical',
   halfX: 10,
-  halfZ: 8,
+  halfZ: 10,
   settle: 'center',
   pieces: [
     { prefab: 'macico-mirante-base', x: 0, z: 0 },
     { prefab: 'macico-mirante-meio', x: 0, z: 0 },
     { prefab: 'macico-mirante-cume', x: 0, z: 0 },
+    { prefab: 'crista-mirante', x: 0, z: 0 },
     // Route B: one climbable face per tier, on the front.
     { prefab: 'paredao-escalada-4', x: 0, z: t1.z1 },
     { prefab: 'paredao-escalada-38', x: 0.2, y: t1.top, z: t2.z1 },

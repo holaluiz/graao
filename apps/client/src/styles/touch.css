@@ -1,0 +1,58 @@
+/* Touch controls (apps/client/src/game/TouchControls.ts): stick on the left, camera drag elsewhere, buttons on the right. */
+.touch { position: absolute; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none;
+  --touch-face: rgba(255, 246, 228, .16); --touch-line: rgba(255, 246, 228, .72); --touch-ink: #fff6e4; --touch-on: rgba(242, 193, 78, .42); }
+/* Direct children of #ui are interactive by default (main.css); the layer itself only frames its zones and buttons. */
+#ui > .touch { pointer-events: none; }
+.touch[hidden] { display: none; }
+.touch-look { position: absolute; inset: 0; pointer-events: auto; touch-action: none; }
+.touch-stick-zone { position: absolute; left: 0; bottom: 0; width: 42%; height: 68%; pointer-events: auto; touch-action: none; }
+.touch-stick { position: absolute; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%; border: 2px solid var(--touch-line);
+  background: var(--touch-face); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.touch-stick.on { opacity: 1; }
+.touch-knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%;
+  background: rgba(255, 246, 228, .55); border: 2px solid var(--touch-ink); }
+.touch-pad { position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: calc(14px + env(safe-area-inset-bottom));
+  width: 240px; height: 230px; pointer-events: none; }
+.touch-btn { position: absolute; pointer-events: auto; touch-action: none; border-radius: 50%; border: 2px solid var(--touch-line);
+  background: var(--touch-face); color: var(--touch-ink); font: 800 11px/1 'Nunito', system-ui, sans-serif; letter-spacing: .04em;
+  text-shadow: 0 1px 2px rgba(30, 20, 30, .7); display: grid; place-items: center; padding: 0; -webkit-tap-highlight-color: transparent; }
+.touch-btn.down, .touch-btn.on { background: var(--touch-on); }
+.touch-fire { right: 0; bottom: 64px; width: 84px; height: 84px; font-size: 12px; }
+.touch-jump { right: 92px; bottom: 0; width: 74px; height: 74px; }
+.touch-jump.glide { border-color: #9fe3ef; color: #dff7fb; }
+.touch-action { right: 100px; bottom: 84px; width: 70px; height: 70px; border-color: #f2c14e; color: #ffe7a8; font-size: 10px; }
+.touch-action[hidden] { display: none; }
+.touch-aim { right: 6px; bottom: 158px; width: 54px; height: 54px; font-size: 9px; }
+.touch-reload { right: 176px; bottom: 6px; width: 54px; height: 54px; font-size: 8px; }
+.touch-menu { left: calc(14px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); width: 44px; height: 44px;
+  border-radius: 12px; font-size: 20px; }
+.touch.dead .touch-pad, .touch.dead .touch-stick-zone { display: none; }
+
+/* The HUD laid out for thumbs: its ability slots, weapon cards and item belt are the buttons (TouchControls.bindHud). */
+body.touch-ui .ab-slot, body.touch-ui .weapons .slot, body.touch-ui .belt-slot { pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; }
+body.touch-ui .abilities { left: auto; right: calc(12px + env(safe-area-inset-right)); top: calc(10px + env(safe-area-inset-top)); bottom: auto;
+  transform: scale(.78); transform-origin: right top; }
+body.touch-ui .weapons { right: auto; left: 50%; bottom: calc(6px + env(safe-area-inset-bottom)); transform: translateX(-50%) scale(.66); transform-origin: center bottom; }
+body.touch-ui .loot-belt { right: auto; left: calc(68px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); bottom: auto;
+  transform: scale(.82); transform-origin: left top; }
+body.touch-ui .hud .hint { bottom: auto; top: 96px; }
+  body.touch-ui .vitals { width: min(190px, 46vw); bottom: calc(250px + env(safe-area-inset-bottom)); }
+}
+@media (max-height: 420px) {
+  .touch-pad { transform: scale(.88); transform-origin: right bottom; }
+}
+
+/* Phones play in landscape (TouchControls.lockLandscape): in portrait on a touch screen this card covers everything. */
+.rotate-hint { display: none; position: fixed; inset: 0; z-index: 1000; place-items: center; padding: 24px; background: #f3e9d8;
+  color: #2a2130; touch-action: none; text-align: center; font-family: 'Nunito', system-ui, sans-serif; }
+@media (orientation: portrait) and (pointer: coarse) { .rotate-hint { display: grid; } }
+@media (orientation: portrait) { body.touch-ui .rotate-hint { display: grid; } }
+.rotate-card { display: grid; justify-items: center; gap: 10px; max-width: 280px; }
+.rotate-phone { width: 46px; height: 78px; border: 4px solid #2a2130; border-radius: 10px; margin-bottom: 14px;
+  animation: rotate-phone 1.8s ease-in-out infinite; }
+@keyframes rotate-phone { 0%, 25% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
+.rotate-title { margin: 0; font-size: 22px; font-weight: 900; }
+.rotate-note { margin: 0; font-size: 14px; opacity: .75; }
+.rotate-btn { margin-top: 8px; padding: 10px 16px; border: 2.5px solid #2a2130; border-radius: 12px; background: #f2c14e; color: #2a2130;
+  font: 800 13px/1 'Nunito', system-ui, sans-serif; }
+@media (prefers-reduced-motion: reduce) { .touch-stick { transition: none; } .rotate-phone { animation: none; transform: rotate(-90deg); } }

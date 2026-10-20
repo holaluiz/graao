@@ -227,8 +227,33 @@ export interface PelletResult {
 }
 
 /**
+ * Distance along a camera aim ray where the world starts to count: level with `anchor` (the muzzle, the head). The
+ * shoulder camera only keeps out of the terrain, so it can sit inside a house wall or behind one; what lies between
+ * the camera and the character must not take the aim (the muzzle's own line of sight still stops the shot).
+ */
+export function aimRayStart(cameraOrigin: Vec3, dir: Vec3, anchor: Vec3): number {
+  return Math.max(0, (anchor.x - cameraOrigin.x) * dir.x + (anchor.y - cameraOrigin.y) * dir.y + (anchor.z - cameraOrigin.z) * dir.z);
+}
+
+/** The world along a camera aim ray from level with `anchor` on (`aimRayStart`); `toi` is measured from the camera. */
+export function castAimRay(
+  physics: Pick<GamePhysics, 'castRay'>,
+  cameraOrigin: Vec3,
+  dir: Vec3,
+  maxDist: number,
+  anchor: Vec3,
+  filterGroups: number = GROUPS_WORLD_QUERY,
+  predicate?: (collider: { handle: number }) => boolean,
+): { toi: number; handle: number } | null {
+  const t0 = Math.min(aimRayStart(cameraOrigin, dir, anchor), maxDist);
+  const hit = physics.castRay(v3addScaled(cameraOrigin, dir, t0), dir, maxDist - t0, filterGroups, predicate);
+  return hit ? { toi: t0 + hit.toi, handle: hit.handle } : null;
+}
+
+/**
  * Resolves one hitscan pellet: the camera ray finds the aimed point (world or player), then the muzzle must see that
  * point — a wall between the shooter's body and the aim point blocks the shot there (no shooting around corners).
+ * Walls between the camera and the shooter do not count (`castAimRay`).
  */
 export function resolvePellet(
   physics: GamePhysics,
@@ -241,7 +266,7 @@ export function resolvePellet(
   /** Server: only this room's run-time colliders (doors, crates: interactives.ts). */
   predicate?: (collider: { handle: number }) => boolean,
 ): PelletResult {
-  const world = physics.castRay(cameraOrigin, dir, range, GROUPS_WORLD_QUERY, predicate);
+  const world = castAimRay(physics, cameraOrigin, dir, range, muzzle, GROUPS_WORLD_QUERY, predicate);
   const tw = world ? world.toi : range;
   const hp = rayPlayers(cameraOrigin, dir, tw, players, shooter);
   const aimT = hp ? hp.t : tw;

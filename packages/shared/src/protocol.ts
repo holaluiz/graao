@@ -235,7 +235,7 @@ export type PlayerSnap = [
 
 export const STAMINA_SCALE = 100;
 
-/** The snapshot's `weapon` field (and SWITCH_WEAPON `w`) for empty hands: fighting with fists, weapons put away. */
+/** The snapshot's `weapon` field for empty hands (no weapon at all): fighting with fists. */
 export const FISTS_SLOT = 2;
 
 /** Creep AI states (server-owned; clients pick the creature's pose from them). */
@@ -525,7 +525,7 @@ export interface FireMsg {
 }
 export const DIR_SCALE = 10000;
 
-/** SWITCH_WEAPON: slot 0 (E), 1 (Q) or FISTS_SLOT (put the weapons away and fight with fists). */
+/** SWITCH_WEAPON: slot 0 (E) or 1 (Q). Weapons are never put away: only empty hands punch. */
 export interface SwitchWeaponMsg {
   w: number;
 }
@@ -606,7 +606,7 @@ export interface SelfStatusMsg {
   airControl?: number;
   sprintSpeed?: number;
   abilityMovement?: { mode: 'grapple' | 'glide' | 'flight'; remaining: number; speed: number; gravityFactor: number; airControl: number; lift: number; anchor?: { x: number; y: number; z: number } } | null;
-  /** Empty hands: no weapon in hand (none carried, or put away), the attack button punches. */
+  /** Empty hands: no weapon carried, the attack button punches. */
   fists?: boolean;
   /** Last MELEE sequence the server handled. */
   meleeSeq?: number;

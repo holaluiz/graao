@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import {
   GRAAbilitySystem,
   createAbilityBarrier,
+  castAimRay,
   castOrigin,
   defaultLoadout,
   lobDirection,
@@ -305,12 +306,13 @@ export class AbilityDirector {
     if (dash) dir = this.moveDirection(camDir);
     else if (def.targetType === 'direction') {
       // Toward what the camera aims at (world or a player), from where the projectile leaves the caster.
+      // The world counts from level with the cast origin on: the shoulder camera may sit inside or behind a wall.
       const reach = projectileReach(def) + 10;
-      const hit = app.world.physics.castRay(origin, camDir, reach);
+      const from = castOrigin(feet, camDir);
+      const hit = castAimRay(app.world.physics, origin, camDir, reach, from);
       const tw = hit ? hit.toi : reach;
       const hp = rayPlayers(origin, camDir, tw, app.net ? app.net.hitTargets() : [], this.me);
       const aim = origin.clone().addScaledVector(camDir, hp ? hp.t : tw);
-      const from = castOrigin(feet, camDir);
       dir = proj && proj.gravity > 0 && hit && !hp ? lobDirection(from, aim, proj.speed, proj.gravity) : new THREE.Vector3(aim.x - from.x, aim.y - from.y, aim.z - from.z).normalize();
     } else if (def.targetType === 'point') {
       point = resolveTargetPoint(app.world.physics, app.world.terrain, feet, origin, camDir, def.range);
@@ -337,12 +339,7 @@ export class AbilityDirector {
   private moveDirection(camDir: THREE.Vector3): Vec3 {
     const app = this.app;
     const f = app.camera.frame;
-    let mx = 0;
-    let my = 0;
-    if (app.input.isDown('forward')) my += 1;
-    if (app.input.isDown('back')) my -= 1;
-    if (app.input.isDown('right')) mx += 1;
-    if (app.input.isDown('left')) mx -= 1;
+    const { x: mx, y: my } = app.input.moveAxis();
     const w = f.forward.clone().multiplyScalar(my).addScaledVector(f.right, mx);
     if (w.lengthSq() < 1e-4) {
       const up = this.tmp.set(app.local.state.pos.x, app.local.state.pos.y, app.local.state.pos.z).normalize();

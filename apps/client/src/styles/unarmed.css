@@ -1,12 +1,5 @@
 /* Empty hands, creeps and in-match progression (HUD). Same paper/ink language as main.css. */
 
-/* ---- Fists card (bottom-right, before E / Q) */
-.slot.fists { width: 108px; border-left-color: #c98a5a; }
-.slot.fists .slot-rarity { color: inherit; -webkit-text-stroke: 0; font-size: 14px; }
-.slot.fists .slot-name { text-transform: uppercase; }
-.slot.fists .slot-ammo small { font-size: 11px; opacity: .7; }
-.slot.fists.active { background: rgba(255, 238, 214, .97); }
-
 /* ---- Fists reticle: four knuckles around a dot; pops on a landed punch, droops on a miss, shakes on a wall */
 .reticle.fists .kn circle, .reticle.fists .dot { fill: #fff; stroke: rgba(42, 33, 48, .9); stroke-width: 1.5; paint-order: stroke; }
 .reticle.fists .kn { transform-origin: 0 0; transform-box: view-box; }
@@ -94,10 +87,4 @@
 @media (max-width: 640px) {
   .stat-panel { width: calc(100vw - 32px); }
   .stat-line { display: none; }
-  .slot.fists { width: 84px; }
-}
-/* Phones: the fists card shrinks to its key and fist so it does not push the E / Q cards further over the vitals. */
-@media (max-width: 520px) {
-  .slot.fists { width: 46px; padding-inline: 6px; }
-  .slot.fists .slot-name, .slot.fists .slot-ammo { display: none; }
 }

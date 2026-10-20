@@ -4,11 +4,11 @@
  * same code the authoritative server runs. Every route is played with plain inputs (wish, jump, sprint), like a player.
  */
 import { describe, expect, it } from 'vitest';
-import { CharacterMotor, InteractiveSystem, buildNavGraph, createCharacterState, createGameWorld, decodeInput, frameOfPlacement, newInput, type CharacterBody, type CharacterState } from '@graao/game-core';
-import { GRAAO_MAP, PLANET, TraversalMode } from '@graao/game-data';
+import { CharacterMotor, InteractiveSystem, TraversalCap, buildNavGraph, createCharacterState, createGameWorld, decodeInput, frameOfPlacement, kitShape, newInput, type CharacterBody, type CharacterState } from '@graao/game-core';
+import { GRAAO_MAP, KIT_PREFABS, PLANET, TraversalMode } from '@graao/game-data';
 import { AIM_SCALE, InputButton, WISH_SCALE, v3dot, v3len, v3normalize, type Vec3 } from '@graao/shared';
-import { BotNavigator } from '../apps/server/src/sim/BotNav';
-import { botIntent } from '../apps/server/src/sim/BotBrain';
+import { BotNavigator, type NavContext } from '../apps/server/src/sim/BotNav';
+import { botDropAhead, botIntent, botLinkIntent } from '../apps/server/src/sim/BotBrain';
 
 const world = await createGameWorld({ includeVisual: false });
 const motor = new CharacterMotor(world.physics);
@@ -198,6 +198,73 @@ describe('Arquipélago dos Sinos', () => {
   });
 });
 
+describe('rock looks (kitVertical: relief, bands, convex hulls)', () => {
+  const vertical = Object.values(KIT_PREFABS).filter((p) => p.category === 'vertical');
+
+  it('a hull rock collides with the very points it is drawn from; relief and bands never change a collider', () => {
+    let hulls = 0;
+    for (const prefab of vertical) {
+      const solid = prefab.parts.filter((p) => (p.solid ?? 'full') !== 'none');
+      const colliders = kitShape(prefab).colliders;
+      expect(colliders).toHaveLength(solid.length);
+      solid.forEach((p, i) => {
+        const c = colliders[i]!;
+        if (p.shape === 'hull') {
+          hulls++;
+          expect(c.type).toBe('hull');
+          const pts = c.type === 'hull' ? c.points : [];
+          expect(pts).toHaveLength(p.pts!.length);
+          // Unrotated parts: the collider's points are the part's, moved to its centre.
+          if (!p.rx && !p.ry && !p.rz) pts.forEach((v, k) => expect(v).toBeCloseTo(p.pts![k]! + [p.x, p.y, p.z][k % 3]!, 9));
+          for (let k = 0; k < p.pts!.length; k++) expect(Math.abs(p.pts![k]!)).toBeLessThanOrEqual([p.hx, p.hy, p.hz][k % 3]! + 1e-9);
+        }
+        if (p.relief || p.bands) {
+          if (p.shape === 'box') expect(c).toMatchObject({ type: 'cuboid', hx: p.hx, hy: p.hy, hz: p.hz });
+          expect(p.relief ?? 0).toBeLessThanOrEqual(0.1);
+        }
+      });
+    }
+    expect(hulls).toBeGreaterThanOrEqual(12);
+  });
+
+  it('the rock under an island stays inside 0.8 of its slab: whoever hangs from the edge clears it', () => {
+    for (const [id, hw, hd] of [['ilha-flutuante-g', 5.5, 4.5], ['ilha-flutuante-m', 3.5, 3.5], ['ilha-flutuante-p', 2.5, 2.5]] as const) {
+      const rock = KIT_PREFABS[id]!.parts.find((p) => p.shape === 'hull')!;
+      for (let k = 0; k < rock.pts!.length; k += 3) {
+        expect(Math.abs(rock.x + rock.pts![k]!), id).toBeLessThanOrEqual(hw * 0.8 + 1e-9);
+        expect(Math.abs(rock.z + rock.pts![k + 2]!), id).toBeLessThanOrEqual(hd * 0.8 + 1e-9);
+        expect(rock.y + rock.pts![k + 1]!, id).toBeLessThanOrEqual(-0.9 + 1e-9);
+      }
+    }
+  });
+
+  it('the crest behind the massif stands flush with the back terrace (no crevice) and leaves gaps open', () => {
+    // Out from the back terrace (tier 1's top, 4.2 m), 1 m over it, toward the back (−Z in the massif's frame).
+    const back = { x: -massif.forward.x, y: -massif.forward.y, z: -massif.forward.z };
+    const from = (x: number) => massif.at(x, 5.2, -5.4);
+    const blade = world.physics.castRay(from(-1.6), back, 3);
+    expect(blade, 'a lâmina do meio').not.toBeNull();
+    expect(blade!.toi).toBeGreaterThan(0.55);
+    expect(blade!.toi).toBeLessThan(0.65);
+    // Between the blades the terrace's edge stays open to the drop.
+    expect(world.physics.castRay(from(-4.15), back, 3), 'vão entre lâminas').toBeNull();
+    expect(world.physics.castRay(from(0.8), back, 3), 'vão entre lâminas').toBeNull();
+    // The blades never reach over the terrace: nothing in its strip, at any height up to the summit.
+    for (const p of KIT_PREFABS['crista-mirante']!.parts) for (let k = 2; k < p.pts!.length; k += 3) expect(p.z + p.pts![k]!).toBeLessThanOrEqual(-6 + 1e-9);
+  });
+
+  it('boulders on the summit and the terrace sit on the rock, no point of them floating', () => {
+    const tops: Record<string, number> = { 'macico-mirante-cume': 11.6, 'macico-mirante-meio': 4.2 };
+    for (const [id, top] of Object.entries(tops)) {
+      for (const p of KIT_PREFABS[id]!.parts.filter((q) => q.shape === 'hull')) {
+        let low = Infinity;
+        for (let k = 1; k < p.pts!.length; k += 3) low = Math.min(low, p.y + p.pts![k]!);
+        expect(low, id).toBeLessThanOrEqual(top + 1e-9);
+      }
+    }
+  });
+});
+
 describe('bots in the vertical world (docs/world/VERTICAL_BOT_NAVIGATION.md)', () => {
   const nav = buildNavGraph(world);
 
@@ -226,11 +293,198 @@ describe('bots in the vertical world (docs/world/VERTICAL_BOT_NAVIGATION.md)', (
     expect([...seen]).toEqual([TraversalMode.NONE]);
   }, 60000);
 
-  it('the islands are not in the walking graph of the bots (no link a bot could not follow)', () => {
-    const top = nav.nearest(sino.at(0, 0, 0), 2.0);
+  it('the islands are off the walking graph; only traversal links join them to the ground', () => {
+    const top = nav.nearest(sino.at(1.5, 0, 1.5), 2.0);
     const ground = nav.nearest(massif.at(4.0, 0, 11.0), 3.0);
     expect(ground).toBeGreaterThanOrEqual(0);
-    // Either no node stands on the island, or none joins it to the ground.
-    expect(top < 0 || nav.route(ground, top) === null).toBe(true);
+    expect(top).toBeGreaterThanOrEqual(0);
+    // On foot no way joins them (plain queries never take a link)...
+    expect(nav.route(ground, top)).toBeNull();
+    // ...with the links a bot can do there is a way up (the Corrente do Sino) and a way down (a glide).
+    const all = () => true;
+    expect(nav.route(ground, top, undefined, all)).not.toBeNull();
+    expect(nav.route(top, ground, undefined, all)).not.toBeNull();
+    expect(nav.stats.links).toBe(GRAAO_MAP.traversalLinks!.length);
+    // Every map link landed on two nodes; corrente links know their wind, and the Torre's is an event wind.
+    expect(nav.links.find((l) => l.id === 'vert-lk-corrente-torre')!.event).toBe(true);
+    expect(nav.links.find((l) => l.id === 'vert-lk-corrente-sino')!.event).toBe(false);
+    expect(nav.links.every((l) => l.kind !== 'corrente' || l.wind >= 0)).toBe(true);
+  });
+
+  /** Report of a bot run: where it ended, what it went through, the links it set out on and the ones it gave up. */
+  interface BotRun {
+    arrived: boolean;
+    seen: Set<number>;
+    links: string[];
+    blocked: string[];
+    /** Bells the bot rang (map placement ids). */
+    rang: string[];
+    /** Steps the room's edge guard stopped (a walk toward a drop no walk takes). */
+    edges: number;
+    seconds: number;
+    pos: Vec3;
+  }
+  /**
+   * A bot driven like the server drives one (GraaoMatchRoom.updateBots): the navigator plans with the bot's traversal,
+   * the intent is computed at the room's 20 Hz and fed to the motor at 60 Hz, a link's intent replaces the walk's, and
+   * the motor may start a traversal only while a link is under way (traversalCaps = the navigator's caps).
+   */
+  /** The point a character stands on under (or just over) `p`: frame points away from a frame's centre float (d²/2R). */
+  const footing = (p: Vec3, lift = 0): Vec3 => {
+    const u = v3normalize(p);
+    const hit = world.physics.castRay({ x: p.x + u.x * 1.5, y: p.y + u.y * 1.5, z: p.z + u.z * 1.5 }, { x: -u.x, y: -u.y, z: -u.z }, 4)!;
+    const k = 1.5 - hit.toi + lift;
+    return { x: p.x + u.x * k, y: p.y + u.y * k, z: p.z + u.z * k };
+  };
+  /**
+   * With `system` the bells are real: the bot may ring them (validated by the InteractiveSystem, as the room does), and
+   * their event winds blow in the motor while they ring.
+   */
+  function runBot(from: Vec3, to: Vec3, o: { caps?: number; windOn?: (w: number) => boolean; seconds?: number; facing?: Vec3; system?: InteractiveSystem } = {}): BotRun {
+    // Standing on whatever is under `from` (a terrace, an island, the ground), as a bot that walked there; the goal is
+    // the footing under `to`.
+    const goal = footing(to);
+    const s = createCharacterState(footing(from, 0.04), flat(o.facing ?? massif.forward, v3normalize(from)));
+    s.traversalCaps = 0;
+    const body = motor.createBody(s);
+    const navigator = new BotNavigator();
+    const run: BotRun = { arrived: false, seen: new Set(), links: [], blocked: [], rang: [], edges: 0, seconds: 0, pos: s.pos };
+    const system = o.system;
+    const bells = system?.bells.map((b) => ({ id: b.id, pos: b.position, winds: world.physics.winds.filter((w) => w.trigger === b.mapId).map((w) => w.index) }));
+    const windOn = system ? (w: number) => system.windsOn.has(w) : o.windOn;
+    if (system) motor.windActive = system.windsOn;
+    const arrived = (st: CharacterState) => st.grounded && v3len(tangent({ x: goal.x - st.pos.x, y: goal.y - st.pos.y, z: goal.z - st.pos.z }, v3normalize(st.pos))) < 2.5 && Math.abs(radial(st.pos) - radial(goal)) < 1.2;
+    let intent = { wish: { x: 0, y: 0, z: 0 }, aim: s.facing, buttons: 0 };
+    const total = Math.round((o.seconds ?? 90) * 60);
+    for (let i = 0; i < total && !run.arrived; i++) {
+      const now = 1000 + (i * 1000) / 60;
+      if (i % 3 === 0) {
+        const ctx: NavContext = { caps: o.caps ?? TraversalCap.ALL, stamina: s.stamina, grounded: s.grounded, traversal: s.traversal, windOn, bells };
+        const walking = s.grounded || s.swimming;
+        const step = walking || navigator.linking ? navigator.next(nav, s.pos, goal, now, ctx) : { point: null, stuck: false, left: 0 };
+        const base = botIntent(s, undefined, 1, now, step.stuck, step.point ?? goal, false);
+        intent = { wish: base.wish, aim: base.aim, buttons: base.buttons };
+        if (step.link || s.traversal === TraversalMode.CLIMB || s.traversal === TraversalMode.HANG) Object.assign(intent, botLinkIntent(s, step, world.physics.winds));
+        if (s.grounded && !navigator.linking && botDropAhead(world.physics, s.pos, intent.wish)) {
+          intent.wish = { x: 0, y: 0, z: 0 };
+          navigator.edge(now);
+          run.edges++;
+        }
+        if (step.link && run.links.at(-1) !== step.link.id) run.links.push(step.link.id);
+        if (system && step.ring !== undefined && system.bellNear(s.pos) === step.ring && system.ring({ index: 0, state: s }, step.ring, now) === 0) run.rang.push(system.bells.find((b) => b.id === step.ring)!.mapId);
+        s.traversalCaps = navigator.caps;
+      }
+      system?.update(now);
+      decodeInput([i, Math.round(intent.wish.x * WISH_SCALE), Math.round(intent.wish.y * WISH_SCALE), Math.round(intent.wish.z * WISH_SCALE), Math.round(intent.aim.x * AIM_SCALE), Math.round(intent.aim.y * AIM_SCALE), Math.round(intent.aim.z * AIM_SCALE), intent.buttons], inp);
+      motor.step(body, s, inp, DT);
+      run.seen.add(s.traversal);
+      expect(Number.isFinite(s.pos.x + s.pos.y + s.pos.z)).toBe(true);
+      run.arrived = arrived(s);
+      run.seconds = i / 60;
+    }
+    run.blocked = nav.links.filter((l) => navigator.isBlocked(l.id, 1000 + run.seconds * 1000)).map((l) => l.id);
+    run.pos = { ...s.pos };
+    body.dispose();
+    if (system) motor.windActive = null;
+    return run;
+  }
+  const summary = (r: BotRun) => `chegou ${r.arrived} em ${r.seconds.toFixed(1)} s; links ${r.links.join(' → ') || '—'}; sinos ${r.rang.join(', ') || '—'}; paradas na borda ${r.edges}; bloqueados ${r.blocked.join(', ') || '—'}; termina a ${radial(r.pos).toFixed(1)} m`;
+
+  it('a bot climbs route B: the three faces of the massif, with the terraces as rests', () => {
+    const r = runBot(massif.at(0.4, 0, 9.5), massif.at(0, 11.6, 0), { caps: TraversalCap.LEDGE | TraversalCap.CLIMB, seconds: 60 });
+    expect(r.arrived, summary(r)).toBe(true);
+    expect(r.links).toEqual(['vert-lk-paredao-1', 'vert-lk-paredao-2', 'vert-lk-paredao-3']);
+    expect(r.seen.has(TraversalMode.CLIMB)).toBe(true);
+    expect(r.seen.has(TraversalMode.GLIDE)).toBe(false);
+    expect(r.blocked).toEqual([]);
+  }, 60000);
+
+  it('a bot rides route C: the west updraft and the corrente across onto the summit', () => {
+    const r = runBot(massif.at(-10.0, 0, 4.0), massif.at(0, 11.6, 0), { caps: TraversalCap.GLIDE, seconds: 60 });
+    expect(r.arrived, summary(r)).toBe(true);
+    expect(r.links).toEqual(['vert-lk-corrente-mirante']);
+    expect(r.seen.has(TraversalMode.GLIDE)).toBe(true);
+    expect(r.seen.has(TraversalMode.CLIMB)).toBe(false);
+  }, 60000);
+
+  it('a bot takes the Corrente do Sino up to the island, walks across it and over the bridge to the Oratório', () => {
+    const r = runBot(massif.at(10.2, 0, 9.0), oratorio.at(0.3, 0, -0.2), { seconds: 70 });
+    expect(r.arrived, summary(r)).toBe(true);
+    expect(r.links).toEqual(['vert-lk-corrente-sino']);
+    expect(r.blocked).toEqual([]);
+  }, 70000);
+
+  it('a bot on the island heading for the ground (the Tormenta, a fight) glides down, then walks', () => {
+    const r = runBot(sino.at(1.5, 0, 1.5), massif.at(10.2, 0, 9.0), { seconds: 60, facing: sino.forward });
+    expect(r.arrived, summary(r)).toBe(true);
+    expect(r.links.length, summary(r)).toBe(1);
+    expect(r.links[0]).toMatch(/^vert-lk-planagem-/);
+    expect(r.seen.has(TraversalMode.GLIDE)).toBe(true);
+  }, 60000);
+
+  it('a bot jumps the floating stones from the Oratório up to the Ilha da Torre (its bell silent)', () => {
+    const r = runBot(oratorio.at(0.3, 0, -0.2), torre.at(0.6, 0, 0.9), { seconds: 60, windOn: () => false, facing: oratorio.forward });
+    expect(r.arrived, summary(r)).toBe(true);
+    expect(r.links[0]).toBe('vert-lk-salto-0');
+    expect(r.links.at(-1)).toBe('vert-lk-salto-torre');
+    expect(r.blocked).toEqual([]);
+  }, 60000);
+
+  it('a bot on the Ilha do Sino heading for the Ilha da Torre rings the island bell and rides its updraft', () => {
+    const system = new InteractiveSystem({ physics: world.physics, layout: world.layout, actors: () => [], emit: () => {} });
+    const r = runBot(sino.at(1.5, 0, 1.5), torre.at(0.6, 0, 0.9), { seconds: 60, facing: sino.forward, system });
+    expect(r.arrived, summary(r)).toBe(true);
+    expect(r.rang, summary(r)).toEqual(['vert-ilha-do-sino']);
+    // The bell's updraft instead of the bridge, the Oratório and six jumps over the stones.
+    expect(r.links, summary(r)).toEqual(['vert-lk-corrente-torre']);
+    expect(r.seen.has(TraversalMode.GLIDE)).toBe(true);
+    expect(r.blocked).toEqual([]);
+  }, 60000);
+
+  it('a bot on the summit heading for the Ilha do Sino rings the summit bell and glides across on its corrente', () => {
+    const system = new InteractiveSystem({ physics: world.physics, layout: world.layout, actors: () => [], emit: () => {} });
+    const r = runBot(massif.at(0, 11.6, 0), sino.at(-1.0, 0, 2.6), { seconds: 60, system });
+    expect(r.arrived, summary(r)).toBe(true);
+    expect(r.rang, summary(r)).toEqual(['vert-serra-macico']);
+    expect(r.links, summary(r)).toEqual(['vert-lk-corrente-cume-ilha']);
+    expect(r.blocked).toEqual([]);
+    // With no bell to ring the same bot goes the long way: glide down, walk to the Corrente do Sino, ride it up.
+    const ground = runBot(massif.at(0, 11.6, 0), sino.at(-1.0, 0, 2.6), { seconds: 90, windOn: () => false });
+    expect(ground.arrived, summary(ground)).toBe(true);
+    expect(ground.links, summary(ground)).toEqual(['vert-lk-planagem-cume', 'vert-lk-corrente-sino']);
+  }, 120000);
+
+  it('on foot a bot stops at an island edge instead of walking off it (only a link takes it down)', () => {
+    // Straight at a point on the ground beyond the south edge, as a bot fighting or heading for a goal with no plan.
+    const target = world.terrain.surfaceAt(v3normalize(sino.at(0.5, 0, 22)));
+    const walk = (guard: boolean) => {
+      const r = spawn(sino.at(0.5, 0, 1.5), sino.forward);
+      let stops = 0;
+      step(r, 4, (s) => {
+        const wish = { x: target.x - s.pos.x, y: target.y - s.pos.y, z: target.z - s.pos.z };
+        if (guard && s.grounded && botDropAhead(world.physics, s.pos, wish)) {
+          stops++;
+          return { wish: null, buttons: 0 };
+        }
+        return { wish, buttons: 0 };
+      });
+      const h = radial(r.s.pos);
+      done(r);
+      return { h, stops };
+    };
+    const guarded = walk(true);
+    expect(guarded.stops).toBeGreaterThan(0);
+    expect(guarded.h).toBeGreaterThan(radial(sino.base) - 0.5);
+    // The same walk without the guard goes over the edge.
+    expect(walk(false).h).toBeLessThan(radial(sino.base) - 5);
+    // A step down the graph takes (a terrace, under 3,4 m) is not stopped: from the summit's front edge to tier 2.
+    expect(botDropAhead(world.physics, massif.at(0, 11.6, 1.6), massif.forward)).toBe(false);
+  });
+
+  it('without traversal a bot plans no link: it walks route A (and never reaches an island)', () => {
+    expect(nav.plan(massif.at(4.0, 0, 11.0), sino.at(1.5, 0, 1.5))).toBeNull();
+    const summit = nav.plan(massif.at(4.0, 0, 11.0), massif.at(0, 11.6, 0));
+    expect(summit).not.toBeNull();
+    expect(summit!.links.every((l) => l === null)).toBe(true);
   });
 });

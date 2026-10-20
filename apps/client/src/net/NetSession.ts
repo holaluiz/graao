@@ -7,20 +7,18 @@
  */
 import * as THREE from 'three';
 import { Client } from '@colyseus/sdk';
-import { createCharacterState, traversalOfMoveState, unpackTraversal, type CharacterState, type PlayerHitTarget } from '@graao/game-core';
+import type { PlayerHitTarget } from '@graao/game-core';
 import { MAP_HASH } from '@graao/game-data';
 import {
   type ActionState,
   MovementState,
   C2S,
   CLIENT_VERSION,
-  FACING_SCALE,
   INTERPOLATION_DELAY_MS,
   JoinError,
   NoticeCode,
   PITCH_SCALE,
   POS_SCALE,
-  STAMINA_SCALE,
   PROTOCOL_VERSION,
   ROOM_NAME,
   S2C,
@@ -54,6 +52,7 @@ import {
   type WorldStateMsg,
   type WorldUseMsg,
 } from '@graao/shared';
+import { snapToCharacterState } from './snapState';
 import type { GraaoApp } from '../app/GraaoApp';
 import { RemotePlayer } from './RemotePlayer';
 import { AbilityStateCache } from './AbilityStateCache';
@@ -454,26 +453,7 @@ export class NetSession {
         this.app.combat.onSelfSnapshot(health, shield, mana, (flags & SnapFlag.ALIVE) !== 0);
         // Aboard the UFO nothing is simulated locally; the dive starts from the `jump` event, not from a snapshot.
         if ((flags & SnapFlag.ON_SHIP) !== 0 || this.app.deploy.riding) continue;
-        const st: CharacterState = createCharacterState({ x: px / POS_SCALE, y: py / POS_SCALE, z: pz / POS_SCALE }, { x: fx / FACING_SCALE, y: fy / FACING_SCALE, z: fz / FACING_SCALE });
-        const len = Math.hypot(st.facing.x, st.facing.y, st.facing.z) || 1;
-        st.facing.x /= len;
-        st.facing.y /= len;
-        st.facing.z /= len;
-        st.vel.x = vx / VEL_SCALE;
-        st.vel.y = vy / VEL_SCALE;
-        st.vel.z = vz / VEL_SCALE;
-        st.grounded = (flags & SnapFlag.GROUNDED) !== 0;
-        st.aiming = (flags & SnapFlag.AIMING) !== 0;
-        st.diving = (flags & SnapFlag.DIVING) !== 0;
-        st.airJumped = (flags & SnapFlag.AIR_JUMPED) !== 0;
-        st.airTime = st.grounded ? 0 : 1;
-        st.moveState = move as CharacterState['moveState'];
-        st.swimming = move === MovementState.SWIM;
-        // Traversal: the mode rides on moveState, stamina and the step timers on their own fields (older servers: none).
-        st.traversal = traversalOfMoveState(move);
-        if (s[20] !== undefined) st.stamina = s[20] / STAMINA_SCALE;
-        if (s[21] !== undefined) unpackTraversal(s[21], st);
-        if (s[22] !== undefined) st.ledgeR = s[22] / POS_SCALE;
+        const st = snapToCharacterState(s);
         st.aim = { ...this.app.local.state.aim };
         const localAbility = this.app.local.state;
         st.rooted = localAbility.rooted;
@@ -569,7 +549,7 @@ export class NetSession {
     if (!this.left) this.room.send(C2S.RELOAD, {});
   }
 
-  /** SWITCH_WEAPON: 0 (E), 1 (Q) or FISTS_SLOT (weapons put away, punches). */
+  /** SWITCH_WEAPON: 0 (E) or 1 (Q). */
   sendSwitch(slot: number): void {
     if (!this.left) this.room.send(C2S.SWITCH_WEAPON, { w: slot });
   }

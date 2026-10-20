@@ -15,7 +15,8 @@ elevação). Overrides válidos por instância: `scale` dentro da faixa do prefa
 | `GRAPPLE_ANCHOR` | `ancora-gancho` (e `anchor: true` em qualquer parte) | alvo da Linha de Varal |
 | `VERTICAL_LOOT_POINT` | `chestSpots` com `surface: 'prop'` + `height` | aba Baús do editor |
 | `VERTICAL_OBJECTIVE` | `sineira` (parte `bell`) | sino que acorda ventos ([ilhas](FLOATING_ISLANDS.md)) |
-| — | `cruzeiro-serra`, `capelinha`, `arvore-ilha`, `ruina-mureta`, `ruina-pilar`, `rampa-trilha-13/9/7`, `macico-mirante-*` | apoio |
+| `BotTraversalLink` | `traversalLinks` do mapa (não é prefab) | aba Waypoints: Alt+clique liga dois waypoints; tipo, vento e risco no painel ([bots](VERTICAL_BOT_NAVIGATION.md)) |
+| — | `cruzeiro-serra`, `capelinha`, `arvore-ilha`, `ruina-mureta`, `ruina-pilar`, `rampa-trilha-13/9/7`, `macico-mirante-*`, `crista-mirante` | apoio |
 | — | construção `serra-do-mirante` | o maciço com as três rotas |
 
 ## Tags de travessia
@@ -32,10 +33,27 @@ tag, toda parte sólida é `ledge` e grades/cercas (`solid: 'move'`) são `none`
    o chão.
 3. Destinos de mantle precisam de 0,55 m livres além da borda (nada de pedra decorativa colada ao topo de um
    paredão).
-4. Colisores simples: caixas, cilindros, cones. Nenhum trimesh novo.
+4. Colisores simples: caixas, cilindros, cones e cascos convexos pequenos (`shape: 'hull'`). Nenhum trimesh novo.
+5. Pontos (waypoints, pousos, destinos de teste) saem do apoio real sob o ponto do referencial — um ponto a 10 m do
+   centro de um referencial flutua 0,5 m; abaixo de uma ilha, o chão é o terreno, não o topo da ilha.
+6. Rocha sem polígono à toa: uma caixa com `relief` é desenhada quebrada em facetas (até `relief` m para fora e o
+   dobro para dentro do colisor, topo plano; no máximo 0,1 m) e `bands` a pinta em estratos — só visual, o colisor
+   continua a caixa, então serve para massas que as rotas usam. Uma rocha de forma livre (matacão, ponta de ilha,
+   lâmina de crista) é um `hull`: o cliente desenha o casco dos mesmos pontos de que o `layout` faz o colisor, então o
+   que se vê é o que bloqueia. Peças que a câmera pode ter entre ela e o jogador (a crista atrás do terraço) ficam em
+   prefab próprio, para dissolver sozinhas.
+
+## Ligações de travessia no editor
+
+Na aba Waypoints (3): Alt+clique noutro waypoint cria (ou apaga) uma ligação do selecionado até ele — seta laranja
+escalada, ciano corrente, verde planagem, amarela salto. O painel do waypoint lista as que saem dele com tipo, vento
+(correntes: as ascendentes do mapa, marcando as de sino) e risco, e "Testar rota" monta o grafo dos bots sobre o mapa
+editado (todas as ligações permitidas) e desenha o caminho até outro waypoint, dizendo quais ligações usou. Apagar ou
+renomear um waypoint atualiza as ligações.
 
 ## Persistência e compatibilidade
 
-Mapa `mapVersion/geometryVersion/collisionVersion` 5. `winds` é opcional (mapas antigos carregam sem ventos);
-`validateMap` confere ventos e gatilhos; `serializeMap` grava `"winds"`. Prefabs e mapa entram no `MAP_HASH`: um
+Mapa `mapVersion/geometryVersion/collisionVersion` 7. `winds` e `traversalLinks` são opcionais (mapas antigos carregam
+sem ventos e sem ligações: os bots só caminham); `validateMap` confere ventos, gatilhos e ligações (waypoints
+existentes, tipo, vento das correntes, risco e custo); `serializeMap` grava `"winds"` e, havendo, `"traversalLinks"`. Prefabs e mapa entram no `MAP_HASH`: um
 Graao Host com o mapa antigo é recusado com `MAP_MISMATCH` (correto: as colisões mudaram).
