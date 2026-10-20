@@ -481,7 +481,7 @@ export const ABILITIES: Record<AbilityId, AbilityDefinition> = {
     presentation: { color: '#8cbc81', color2: '#e4f6bd', icon: 'new_bark', anim: 'buff', cue: 'shield' },
   }),
   kite_breath: def({
-    id: 'kite_breath', name: 'Fôlego de Pipa', blurb: 'Ganhe 20% de controle no ar e reduza consequências de quedas compatíveis.',
+    id: 'kite_breath', name: 'Fôlego de Pipa', blurb: 'Ganhe 20% de controle de movimento enquanto estiver no ar.',
     slotType: 'basic', kind: 'passive', category: 'passive', manaCost: 0, cooldown: 0, castTime: 0, range: 0,
     targetType: 'none', tags: ['passive', 'air'], effects: [], passive: { type: 'airControl', factor: 1.2, bonus: 0.8 },
     presentation: { color: '#9ac9e8', color2: '#e8f6ff', icon: 'kite_breath', anim: 'buff', cue: 'gust' },
