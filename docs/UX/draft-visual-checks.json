@@ -1,0 +1,288 @@
+{
+  "date": "2026-10-20",
+  "url": "http://localhost:5191",
+  "report": {
+    "desktop-1366": {
+      "viewport": "1366×768",
+      "mobile": false,
+      "round2": {
+        "file": "docs/UX/screenshots/draft-v3-desktop-1366-round2.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 40,
+        "gridScrolls": false,
+        "cardMinSize": [
+          98,
+          131
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": true,
+        "confirmHeight": 42,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": false,
+        "smallestFontPx": 7.5
+      },
+      "round4": {
+        "file": "docs/UX/screenshots/draft-v3-desktop-1366-round4.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 40,
+        "gridScrolls": false,
+        "cardMinSize": [
+          98,
+          131
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": true,
+        "confirmHeight": 42,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": false,
+        "smallestFontPx": 7.5
+      },
+      "reveal": {
+        "file": "docs/UX/screenshots/draft-v3-desktop-1366-reveal.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 40,
+        "gridScrolls": false,
+        "cardMinSize": [
+          98,
+          131
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": false,
+        "confirmHeight": 0,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": false,
+        "smallestFontPx": 7.5
+      },
+      "mouse": {
+        "detailOnHover": "Linha de Varal",
+        "picksSent": [
+          [
+            1,
+            "clothesline"
+          ]
+        ]
+      }
+    },
+    "desktop-1920": {
+      "viewport": "1920×1080",
+      "mobile": false,
+      "round2": {
+        "file": "docs/UX/screenshots/draft-v3-desktop-1920-round2.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 40,
+        "gridScrolls": false,
+        "cardMinSize": [
+          141,
+          194
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": true,
+        "confirmHeight": 42,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": false,
+        "smallestFontPx": 7.5
+      },
+      "round4": {
+        "file": "docs/UX/screenshots/draft-v3-desktop-1920-round4.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 40,
+        "gridScrolls": false,
+        "cardMinSize": [
+          141,
+          194
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": true,
+        "confirmHeight": 42,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": false,
+        "smallestFontPx": 7.5
+      },
+      "reveal": {
+        "file": "docs/UX/screenshots/draft-v3-desktop-1920-reveal.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 40,
+        "gridScrolls": false,
+        "cardMinSize": [
+          141,
+          194
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": false,
+        "confirmHeight": 0,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": false,
+        "smallestFontPx": 7.5
+      },
+      "mouse": {
+        "detailOnHover": "Linha de Varal",
+        "picksSent": [
+          [
+            1,
+            "clothesline"
+          ]
+        ]
+      }
+    },
+    "mobile-844": {
+      "viewport": "844×390",
+      "mobile": true,
+      "round2": {
+        "file": "docs/UX/screenshots/draft-v3-mobile-844-round2.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 10,
+        "gridScrolls": true,
+        "cardMinSize": [
+          100,
+          88
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": true,
+        "confirmHeight": 40,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": true,
+        "smallestFontPx": 6.5
+      },
+      "round4": {
+        "file": "docs/UX/screenshots/draft-v3-mobile-844-round4.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 10,
+        "gridScrolls": true,
+        "cardMinSize": [
+          100,
+          88
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": true,
+        "confirmHeight": 40,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": true,
+        "smallestFontPx": 6.5
+      },
+      "reveal": {
+        "file": "docs/UX/screenshots/draft-v3-mobile-844-reveal.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 10,
+        "gridScrolls": true,
+        "cardMinSize": [
+          100,
+          88
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": false,
+        "confirmHeight": 0,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": true,
+        "smallestFontPx": 6.5
+      },
+      "tap": {
+        "file": "docs/UX/screenshots/draft-v3-mobile-844-tap.jpg",
+        "detailAfterTap": "Olho de Quintal",
+        "picksSent": [
+          [
+            1,
+            "backyard_eye"
+          ]
+        ]
+      }
+    },
+    "mobile-740": {
+      "viewport": "740×360",
+      "mobile": true,
+      "round2": {
+        "file": "docs/UX/screenshots/draft-v3-mobile-740-round2.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 10,
+        "gridScrolls": true,
+        "cardMinSize": [
+          87,
+          88
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": true,
+        "confirmHeight": 40,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": true,
+        "smallestFontPx": 6.5
+      },
+      "round4": {
+        "file": "docs/UX/screenshots/draft-v3-mobile-740-round4.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 10,
+        "gridScrolls": true,
+        "cardMinSize": [
+          87,
+          88
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": true,
+        "confirmHeight": 40,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": true,
+        "smallestFontPx": 6.5
+      },
+      "reveal": {
+        "file": "docs/UX/screenshots/draft-v3-mobile-740-reveal.jpg",
+        "seats": 10,
+        "seatsOnScreen": 10,
+        "cards": 40,
+        "cardsOnScreen": 10,
+        "gridScrolls": true,
+        "cardMinSize": [
+          87,
+          88
+        ],
+        "buildSlotsOnScreen": 4,
+        "confirmOnScreen": false,
+        "confirmHeight": 0,
+        "tabsOrPages": 0,
+        "horizontalOverflow": false,
+        "detailScrolls": true,
+        "smallestFontPx": 6.5
+      },
+      "tap": {
+        "file": "docs/UX/screenshots/draft-v3-mobile-740-tap.jpg",
+        "detailAfterTap": "Olho de Quintal",
+        "picksSent": [
+          [
+            1,
+            "backyard_eye"
+          ]
+        ]
+      }
+    }
+  }
+}

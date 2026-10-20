@@ -201,6 +201,8 @@ export class DraftScreen {
       this.automaticPreview = !!prev && prev.round === s.round && s.stage === 'reveal' && this.automaticPreview;
       this.lastTick = -1;
       this.windowEnds = 0;
+      // Phones scroll the grid: each round opens at the top, where its own grid comes first.
+      if (!prev || prev.round !== s.round) this.pools.scrollTop = 0;
       if (!prev || prev.round !== s.round || s.stage === 'reveal') {
         const revealed = s.reveal.find((x) => x.index === me)?.a;
         const current = this.inspected && isAbilityId(this.inspected) && ABILITIES[this.inspected].slotType === s.kind ? this.inspected : null;
@@ -464,13 +466,13 @@ export class DraftScreen {
       const who = revealed.get(id);
       b.classList.toggle('revealed', !!who);
       const passiveLimit = active && def.kind === 'passive' && passiveTaken && !mine;
-      b.classList.toggle('blocked', passiveLimit);
+      b.classList.toggle('passive-limit', passiveLimit);
       const matches = active && available && build.length ? synergyMatches(id, build) : [];
       b.classList.toggle('synergy', matches.length > 0);
       const syn = b.querySelector('.dc-syn') as HTMLElement;
       syn.title = matches.length ? `Combina com ${[...new Set(matches.map((m) => ABILITIES[m.partner].name))].join(' e ')}` : '';
       const stamp = b.querySelector('.dc-stamp') as HTMLElement;
-      stamp.textContent = mine ? 'NA SUA COMBINAÇÃO' : passiveLimit ? 'LIMITE: 1 PASSIVA' : who ? (who.length > 1 ? `${who.length} JOGADORES` : who[0]!.toUpperCase())
+      stamp.textContent = mine ? 'JÁ É SUA' : passiveLimit ? 'JÁ TEM PASSIVA' : who ? (who.length > 1 ? `${who.length} JOGADORES` : who[0]!.toUpperCase())
         : taken ? this.names(owner!) : confirmed ? 'CONFIRMADA' : selected ? 'SELECIONADA' : '';
       const state = mine ? ', já está na sua combinação' : passiveLimit ? ', indisponível: limite de uma passiva' : !active ? `, disponível na ${def.slotType === 'ultimate' ? 'rodada 4' : 'rodadas 1 a 3'}` : '';
       b.setAttribute('aria-label', `${def.name}, ${kindLabel(def).toLowerCase()}, ${b.dataset.headline}${state}${selected ? ', selecionada' : ''}${confirmed ? ', confirmada' : ''}${matches.length ? `, ${syn.title.toLowerCase()}` : ''}`);
@@ -490,7 +492,7 @@ export class DraftScreen {
     this.details.style.setProperty('--ab-color', def.presentation.color);
     this.details.style.setProperty('--ab-color2', def.presentation.color2);
     this.detailArt.replaceChildren(icon(def, 'dd-icon'));
-    this.detailCategory.replaceChildren(categoryGlyph(def), `${CATEGORY_INFO[def.category].label} · ${kindLabel(def)}`);
+    this.detailCategory.replaceChildren(categoryGlyph(def), def.kind === 'active' ? `${CATEGORY_INFO[def.category].label.toUpperCase()} · ATIVA` : def.kind === 'passive' ? 'PASSIVA · AUTOMÁTICA' : 'SUPREMO');
     this.detailName.textContent = def.name;
     this.detailDescription.textContent = def.blurb;
     this.detailStats.replaceChildren();
@@ -511,7 +513,8 @@ export class DraftScreen {
       const chip = el('span', 'dd-role', this.detailTags, ROLE_INFO[role].label);
       chip.title = ROLE_INFO[role].hint;
     }
-    for (const label of abilityTagLabels(def)) el('span', 'dd-tag', this.detailTags, label);
+    const roleLabels = new Set(abilityRoles(def).map((r) => ROLE_INFO[r].label));
+    for (const label of abilityTagLabels(def)) if (!roleLabels.has(label)) el('span', 'dd-tag', this.detailTags, label);
     this.renderSynergy(id, build);
   }
 

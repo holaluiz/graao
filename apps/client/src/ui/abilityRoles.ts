@@ -72,7 +72,8 @@ export function synergyHints(id: AbilityId): { synergy: Synergy; has: TacticalRo
   const roles = abilityRoles(ABILITIES[id]);
   return SYNERGIES.flatMap((synergy) => [
     ...(roles.includes(synergy.a) ? [{ synergy, has: synergy.a, wants: synergy.b }] : []),
-    ...(roles.includes(synergy.b) ? [{ synergy, has: synergy.b, wants: synergy.a }] : []),
+    // An ability with both halves (Orbe Solar: reveal + precision) is listed once.
+    ...(roles.includes(synergy.b) && !roles.includes(synergy.a) ? [{ synergy, has: synergy.b, wants: synergy.a }] : []),
   ]);
 }
 

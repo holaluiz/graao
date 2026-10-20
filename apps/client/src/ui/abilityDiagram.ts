@@ -86,7 +86,7 @@ function topView(def: AbilityDefinition): string | null {
         return `<rect class="dg-wall dg-anim-rise" x="${f(wx)}" y="${f(Y + offset - e.width * s / 2 / Math.max(1, e.count * 0.6))}" width="${f(Math.max(3, e.depth * s * 2))}" height="${f(e.width * s / Math.max(1, e.count * 0.6))}"/>`;
       }).join('');
       const shots = [Y - 14, Y + 2, Y + 16].map((y) => `<path class="dg-shot-line" d="M${X0 + L} ${y}H${f(x + 10)}"/>`).join('');
-      return `${shots}${walls}${me(X0, Y)}${text((X0 + x) / 2, Y - 8, `${num(def.range)} m`)}${text(x + 4, H - 2, `${num(e.width)} m de largura`)}`;
+      return `${path(X0 + 8, Y, x - 4, Y)}${shots}${walls}${me(X0, Y)}${text((X0 + x) / 2, Y - 8, `${num(def.range)} m`)}${text(x + 4, H - 2, `${num(e.width)} m de largura`)}`;
     }
     case 'dash': case 'mobility': {
       if (e.kind === 'mobility' && e.mode !== 'slide') return null;
