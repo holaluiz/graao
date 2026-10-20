@@ -67,6 +67,9 @@ Nunca fica negativa (asserção em todos os testes de travessia).
 - Collider inexistente: a parede é re-sondada a cada passo; sem ela, solta.
 - Velocidade acima do autorizado: velocidades fixas por estado, o servidor simula com o mesmo código.
 - Reagarrar para ganhar altura: espera de 0,35 s e teste dedicado.
+- Subir parede lisa no pulo repetido: a parede não é chão (o controlador do Rapier achava que era, porque na esfera
+  ela inclina 1–2° para trás); o motor exige apoio caminhável sob a cápsula — teste dedicado (20/10).
+- Magia saindo da parede: só mobilidade, com a espera de reagarre (ver [estados](TRAVERSAL_STATES.md)).
 
 ## Telhados da vila (medido)
 
@@ -80,4 +83,14 @@ rota) — comportamento esperado.
 `traversal.test.ts`: caixa de 1 m (mantle direto), muro de 1,8 e 3,2 m (pendurar e subir), deslizar e parar no fim
 da beirada, muro fino (pendura mas não sobe), beirada sob laje (subida recusada), bloco sem tag, sem stamina,
 bot sem capacidade, reagarre sem ganho de altura, paredão de 6 m (escala e sobe), paredão de 20 m (exaustão), salto
-para fora. `tests/world.vertical.test.ts`: os três paredões da Serra do Mirante no mapa real.
+para fora, pulo repetido contra face lisa não sobe. `tests/world.vertical.test.ts`: os três paredões da Serra do
+Mirante no mapa real. `tests/vertical.mobility.multiplayer.test.ts`: Ricochete chuta para fora de um paredão (sem
+reagarre imediato) e é recusado longe de parede; Linha de Varal do chão até a beirada da Ilha do Sino.
+
+## Animação
+
+O ciclo `climb` é procedural (nenhum pacote tem escalada de parede): uma mão alcança alto enquanto a outra puxa na
+altura do ombro e o pé oposto sobe, depois o outro lado; joelhos para os lados (a cápsula fica a 4 cm da face: joelhos
+para a frente entrariam na rocha) e a cabeça olha a rota. Corre com a velocidade de escalada (para trás descendo).
+Pendurado parado, `hang`; deslizando na beirada, `shimmy` (a mão líder estende-se ao longo da borda), no sentido do
+deslize. O mantle continua o `ClimbUp_1m` da UAL. Captura: `docs/world/screenshots/vertical-escalada-ciclo.jpg`.

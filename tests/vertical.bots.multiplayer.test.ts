@@ -229,6 +229,9 @@ describe('a chest up high (Alturas: better loot)', () => {
       ...opts('A'), legacyWarmup: true, maxPlayers: 2, bots: 1, countdownMs: 300, skipDraft: true, skipUfo: true, creepCount: 0,
       lootSpots: ['vert-cume-mirante', ...(plain ? [plain.c.def.id] : [])], chestCount: plain ? 2 : 1,
       matchSpawns: [ll(far), ll(foot)],
+      // The safe region stays round the Serra the whole time (a random one would send the bot off to it instead).
+      tormentaFinal: ll(foot),
+      tormentaPhases: [{ waitMs: 120000, shrinkMs: 3000, radiusDeg: 60, damage: 1 }],
     });
     const A = watch(a);
     await new Promise<WelcomeMsg>((r) => a.onMessage(S2C.WELCOME, r));
@@ -241,6 +244,12 @@ describe('a chest up high (Alturas: better loot)', () => {
       expect(await until(() => phaseOf(A) === MatchPhase.MATCH, 8000), 'a partida começa').toBe(true);
       const top = room.loot.chests.find((c) => c.spot.def.id === 'vert-cume-mirante')!;
       const sb = [...room.players.values()].find((p) => p.index === ib)!;
+      // Seats are not handed out in a fixed order: put the bot at the foot of the Serra and the person far away.
+      const sa = [...room.players.values()].find((p) => !p.bot)!;
+      const rest = (st: ServerSide['state'], p: Vec3, f: Vec3) => Object.assign(st, { pos: add(p, v3normalize(p), 0.05), vel: { x: 0, y: 0, z: 0 }, facing: f, grounded: false, traversal: 0, stamina: TRAVERSAL.stamina.max, glideSteps: 0 });
+      rest(sa.state, far, massif.forward);
+      rest(sb.state, foot, neg(massif.forward));
+      room.bots.get(ib)!.nav.reset();
       const links = new Set<string>();
       let chosen = -2;
       const tracker = setInterval(() => {

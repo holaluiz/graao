@@ -13,7 +13,7 @@ elevação). Overrides válidos por instância: `scale` dentro da faixa do prefa
 | `SUSPENDED_BRIDGE` | `ponte-tabuas` (existente, 7 m) | reaproveitada |
 | `TRAVERSAL_PLATFORM` | `plataforma-pedra` | pedra flutuante de 1,8 m, escala 0,8–1,4 |
 | `GRAPPLE_ANCHOR` | `ancora-gancho` (e `anchor: true` em qualquer parte) | alvo da Linha de Varal |
-| `VERTICAL_LOOT_POINT` | `chestSpots` com `surface: 'prop'` + `height` | aba Baús do editor |
+| `VERTICAL_LOOT_POINT` | `chestSpots` com `surface: 'prop'` + `height`, região **Alturas** (sorteio com vantagem) | aba Baús do editor (campo região) |
 | `VERTICAL_OBJECTIVE` | `sineira` (parte `bell`) | sino que acorda ventos ([ilhas](FLOATING_ISLANDS.md)) |
 | `BotTraversalLink` | `traversalLinks` do mapa (não é prefab) | aba Waypoints: Alt+clique liga dois waypoints; tipo, vento e risco no painel ([bots](VERTICAL_BOT_NAVIGATION.md)) |
 | — | `cruzeiro-serra`, `capelinha`, `arvore-ilha`, `ruina-mureta`, `ruina-pilar`, `rampa-trilha-13/9/7`, `macico-mirante-*`, `crista-mirante` | apoio |

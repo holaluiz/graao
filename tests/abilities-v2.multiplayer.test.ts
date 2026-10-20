@@ -5,7 +5,7 @@ import { ABILITIES, DEFAULT_APPEARANCE, type Loadout } from '@graao/game-data';
 import { chestOf, resolveTargetPoint, validateLoadout } from '@graao/game-core';
 import { AbilityReject, C2S, CLIENT_VERSION, MatchPhase, PROTOCOL_VERSION, ROOM_NAME, S2C, v3cross, v3normalize, type AbilityEntityView, type AbilityResultMsg, type AbilityRevealMsg, type EventsMsg, type GameEvent, type RoomStateMsg, type SelfStatusMsg, type SnapshotMsg, type Vec3, type WelcomeMsg } from '@graao/shared';
 import { createGraaoServer } from '../apps/server/src/app';
-import { getWorld } from '../apps/server/src/world';
+import { getNav, getWorld } from '../apps/server/src/world';
 import { setAuthVerifier } from '../apps/server/src/auth/SupabaseAuth';
 import { setMatchStore } from '../apps/server/src/persistence/MatchStore';
 
@@ -51,7 +51,8 @@ async function pair(aBuild: Loadout, bBuild: Loadout) {
   await sleep(400);
   return { a, b, A, B, ia: A.welcome!.index, ib: B.welcome!.index };
 }
-beforeAll(async () => { setAuthVerifier(null); setMatchStore({ name: 'none', record: async () => null }); await getWorld(); await server.listen(port); }, 60000);
+// The bots' navigation graph is built once per server, at the first match with bots: built here, not in a test's wait.
+beforeAll(async () => { setAuthVerifier(null); setMatchStore({ name: 'none', record: async () => null }); getNav(await getWorld()); await server.listen(port); }, 60000);
 afterEach(async () => { await Promise.all(rooms.splice(0).map((room) => room.leave().catch(() => {}))); });
 afterAll(async () => { await server.gracefullyShutdown(false).catch(() => {}); });
 

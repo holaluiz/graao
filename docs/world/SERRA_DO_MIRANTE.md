@@ -38,8 +38,13 @@ convexos (colisor = desenho). Capturas: `docs/world/screenshots/vertical-serra-r
 \* `pnpm exec tsx tools/profiling/vertical-routes.ts` joga cada rota com entradas de jogador no mapa real; os testes
 `tests/world.vertical.test.ts` exigem que as três cheguem ao cume.
 
-Atalhos por magia: Voo de Papagaio (sobe 18 m), Linha de Varal até a barra do cruzeiro (âncora), Pulo de Pipa entre
-patamares.
+Atalhos por magia: Voo de Papagaio (sobe 18 m), Linha de Varal (pega qualquer superfície; numa beirada termina na
+altura de pendurar), Pulo de Pipa entre patamares — verificado em partida real: do terraço 1, diante da face lisa do
+patamar 2 (sem beirada, sem escalada), pulo + pulo duplo ficam no terraço 1 e com o Pulo de Pipa no alto do pulo
+duplo o jogador pousa no terraço 2, pulando a rampa 2 e o paredão. A pipa universal e a Asa de Papel saem do cume
+para a Ilha do Sino; o Atalho de Giz do cume abre um portal até ela. Antes de 20/10, pular repetidamente contra a face
+lisa do patamar 2 subia até o cume sem magia nenhuma (a parede contava como chão): corrigido no motor
+([estados](../gameplay/TRAVERSAL_STATES.md)).
 
 ## Cume
 
@@ -47,7 +52,8 @@ patamares.
 - **Sineira** (`sineira`): o sino do cume acorda por 24 s o vento `vert-corrente-cume-ilha`, que leva quem plana do
   cume até a Ilha do Sino (sem o sino, a planagem não alcança — teste dedicado). O toque é ouvido longe: todo mundo
   sabe que há alguém no cume.
-- **Baú** `vert-cume-mirante` (exposto, céu aberto) e duas pedras como cobertura parcial.
+- **Baú** `vert-cume-mirante` (exposto, céu aberto) e duas pedras como cobertura parcial. Região de baús **Alturas**:
+  sorteado com vantagem, disputado também pelos bots ([ilhas](FLOATING_ISLANDS.md#loot)).
 - Descidas: as três rotas ao contrário, saltar e planar para qualquer lado, ou a corrente do sino para as ilhas.
 
 Contestável: o cume é visto (e atingível) da trilha, dos terraços, da corrente oeste e das ilhas; a rampa 3 e os

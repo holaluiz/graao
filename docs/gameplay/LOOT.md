@@ -23,3 +23,13 @@ Player-facing text is Portuguese (pt-BR); ids and code stay in English.
 | Death | Elimination, respawn in warmup, no respawn in a match; nothing dropped. | Death drops through the same pickup system. |
 | Tormenta | Server safe region (geodesic cap) + global material uniforms. | Untouched; chests read the same uniforms. |
 | Assets / R2 | Weapons are baked into the bundle; everything else code-built. | Chests and consumables are code-built (no new asset, no R2 or Supabase needed). |
+
+## Baús nas alturas (2026-10-20)
+
+Região de baús **Alturas** (`CHEST_REGIONS`, a última da lista: o índice vai na rede) com os pontos do cume da Serra do
+Mirante, da capelinha da Ilha do Sino e da Ilha da Torre. `min: 1`: toda partida tem um baú lá em cima, que é o
+inicial da região (sempre com arma). `vantage: true`: o baú é sorteado duas vezes (`rollMatchLoot`, `advantage`) e fica
+a rolagem cujo melhor item é mais raro; as regras da partida (armas suficientes, no máximo 2 épicos) valem depois.
+Bots pesam esses baús como 20 m mais perto. Testes: `loot.test.ts` (vantagem em 600 partidas simuladas, determinismo,
+teto de épicos) e `tests/vertical.bots.multiplayer.test.ts` (bot sobe ao cume e abre o baú). Ver
+[ilhas](../world/FLOATING_ISLANDS.md#loot).

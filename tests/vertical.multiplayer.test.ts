@@ -532,7 +532,8 @@ describe('a stall of the relay (a hosted room: every command passes through the 
       // A alone silent (B's commands keep coming): that is A's own silence; the server drops A from the kite.
       const alone = new Set<number>();
       stallA = true;
-      await play(STALL + 150, (s) => alone.add(s.traversal));
+      // (Long enough for B's commands to come in between even on a loaded machine.)
+      await play(STALL + 550, (s) => alone.add(s.traversal));
       release();
       await play(300);
       if (process.env.GRAAO_DEBUG) console.log(`só A calado: estados ${[...alone].join(',')}`);

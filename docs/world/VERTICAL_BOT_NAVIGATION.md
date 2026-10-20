@@ -82,7 +82,9 @@ patamar 1 como peças soltas). Cada ponto foi sondado no motor (cápsula cabe, a
 ## Limites conhecidos
 
 - Bots tocam um sino só para abrir o link que o plano deles quer usar, nunca para negar um vento a alguém.
-- Escolha de destino continua a de sempre (baú mais próximo, alvo, Tormenta): um bot sobe à ilha quando o baú dela ou o
-  alvo está lá, não por estratégia de altura.
+- Escolha de destino: baú mais próximo, alvo, Tormenta — com um peso para o alto: um baú da região Alturas (cume e
+  ilhas, sorteado com vantagem) vale como 20 m mais perto (`BOT_VANTAGE_PULL`). Um bot no pé da Serra trocou um baú
+  comum a 8,2 m pelo do cume a 15,1 m, subiu os três paredões e o abriu (`tests/vertical.bots.multiplayer.test.ts`).
+  Fora disso não há estratégia de altura (posição de tiro, fuga para o alto).
 - Creeps continuam terrestres; criaturas aéreas são expansão futura.
 - Sem dano de queda no jogo: um link que falha só custa tempo.

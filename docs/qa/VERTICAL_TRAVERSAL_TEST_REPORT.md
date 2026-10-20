@@ -1,4 +1,4 @@
-# Relatório de testes — Vertical World & Traversal (19/10/2026)
+# Relatório de testes — Vertical World & Traversal (19–20/10/2026)
 
 Estados conforme [RELEASE_GATES](RELEASE_GATES.md). Nada aqui foi verificado em redes externas, em celular físico ou
 com dez participantes humanos.
@@ -8,22 +8,24 @@ com dez participantes humanos.
 | Gate | Estado | Evidência |
 |---|---|---|
 | V0 Auditoria | DONE | [auditoria](../gameplay/VERTICAL_TRAVERSAL_AUDIT.md) com baseline |
-| V1 Movimento (beirada, mantle, escalada curta, planagem) | TESTING | 29 testes do motor; navegador solo e online; telhado da vila pela beirada em rede |
-| V2 Autoridade e rede | TESTING | servidor real + clientes SDK; partida real com combate vertical; **predição do cliente com 100 ms de atraso em cada sentido**; Chromium × servidor local; sem rede externa |
+| V1 Movimento (beirada, mantle, escalada curta, planagem) | TESTING | 31 testes do motor; navegador solo e online; telhado da vila pela beirada em rede; **parede lisa não é mais chão (exploit de subir no pulo repetido fechado)** |
+| V2 Autoridade e rede | TESTING | servidor real + clientes SDK; partida real com combate vertical; predição do cliente com 100 ms de atraso em cada sentido; **travamento de 350 ms do repasse (sala hospedada) sem queda e com correção de 1 mm**; Chromium × servidor local; sem rede externa |
 | V3 Correntes de vento | TESTING | 10 testes; ventos do mapa real; sincronia do sino em rede |
 | V4 Serra do Mirante | TESTING | 3 rotas chegam ao cume no motor real (12,2 s / 5,0 s / 4,3 s), e bots sobem pelas rotas B e C; arte em blocos |
 | V5 Ilha do Sino | TESTING | acesso universal, caminhada, ponte, pedras, saída por planagem, baús; tiro da ilha ao chão, rocha como cobertura, empurrão da borda, Tormenta na ilha (partida real); meteoro, projéteis, Voo de Papagaio, Anel de Vento e Muro de Papel na borda |
 | V6 Editor | TESTING | aba Ventos, cores de colisor por tag, família VERTICAL; ligações de travessia dos bots (Alt+clique, tipo/vento/risco) e "Testar rota" |
 | V7 Arquipélago | TESTING | 3 ilhas, 2 sinos com evento autoritativo |
-| V8 Bots e creeps | TESTING | `BotTraversalLink` no grafo; bots escalam, sobem correntes, planam para descer, saltam pedras e **tocam sinos** no mapa real; falha bloqueia o link; da ilha fogem da Tormenta e voltam a lutar; creeps terrestres |
-| V9 Polimento | PARTIAL | controles de toque com ação contextual; animações procedurais (pendurar, planar) + clipe UAL; **rocha facetada com estratos, ilhas com rocha em ponta, crista da Serra**; sem clipes dedicados nem celular físico |
+| V8 Bots e creeps | TESTING | `BotTraversalLink` no grafo; bots escalam, sobem correntes, planam para descer, saltam pedras e tocam sinos no mapa real; falha bloqueia o link; da ilha fogem da Tormenta e voltam a lutar; **disputam o baú das Alturas (sobem ao cume e o abrem)**; creeps terrestres |
+| V9 Polimento | PARTIAL | controles de toque com ação contextual; **ciclo de escalada, deslize na beirada e pose de corrente** procedurais + pendurar/planar + clipe UAL do mantle; rocha facetada com estratos, ilhas com rocha em ponta, crista da Serra; sem clipes de captura nem celular físico |
 | V10 Validação final | PARTIAL | 10 participantes (2 SDK + 8 bots) no servidor real; **sala hospedada na aba com convidado por WebRTC** (rota B, sino, planagem até a ilha); faltam celular físico, redes externas e partida completa entre pessoas |
 
 ## Testes automatizados
 
 | Arquivo | Testes | O que prova |
 |---|---|---|
-| `packages/game-core/src/traversal.test.ts` | 29 | matemática radial, tabela de estados, beirada/mantle/escalada/planagem, anti-abuso, empurrão e magia, contrato de predição |
+| `packages/game-core/src/traversal.test.ts` | 31 | matemática radial, tabela de estados, beirada/mantle/escalada/planagem, anti-abuso, **parede lisa não é chão**, empurrão e magia, **o que cada estado permite**, contrato de predição |
+| `tests/vertical.mobility.multiplayer.test.ts` | 6 | magias de mobilidade como rotas em partida real: Linha de Varal do chão à ilha, Pulo de Pipa entre terraços, Asa de Papel × pipa e cume → ilha, Atalho de Giz cume ↔ ilha, Ricochete saindo da parede, Passo de Vento na rocha e pela borda |
+| `packages/game-core/src/loot.test.ts` | +1 | baú das Alturas sorteado com vantagem |
 | `packages/game-core/src/wind.test.ts` | 10 | coluna e esvaecimento, pipa, direcional, stamina, sino, teto radial, Tormenta por direção em altitude e no lado oposto |
 | `tests/world.vertical.test.ts` | 21 | mapa real: rotas A/B/C, ilha pela corrente, ponte + pedras, sinos; **bots** pela trilha, pelos três paredões (rota B), pela corrente oeste (rota C), Corrente do Sino → ilha → ponte → Oratório, da ilha ao chão planando, pedras até a Ilha da Torre, tocando o sino da ilha e o do cume para abrir as correntes, parando na borda a pé; sem travessia nenhum link; **rocha**: casco desenhado = colisor, relevo nunca muda colisor, rocha da ilha ≤ 0,8 da laje, crista rente ao terraço e com vãos, matacões apoiados |
 | `apps/server/src/sim/BotNav.test.ts` | 8 | sair no link, concluir, erro de tentativa ≠ falha, descanso pela stamina, duas falhas bloqueiam (sem laço), tempo esgotado, capacidades e vento de evento, desvio até o sino e volta, sino longe demais ou mudo |
@@ -151,11 +153,48 @@ uma rocha só em ponta, matacões irregulares e uma crista de três lâminas atr
 vila como antes ([orçamento](../performance/VERTICAL_WORLD_BUDGET.md)). Capturas: `vertical-serra-rocha.jpg`,
 `vertical-ilha-e-crista.jpg`, `vertical-ilhas-rocha.jpg` em `docs/world/screenshots/`.
 
+## Quinta rodada (20/10): magias como rotas, parede não é chão, loot nas alturas, repasse
+
+Testes novos e o que acharam:
+
+| Arquivo / cenário | Resultado |
+|---|---|
+| `tests/vertical.mobility.multiplayer.test.ts` — Linha de Varal do chão à Ilha do Sino | **defeito corrigido**: a corda pegava a parte de baixo da laje e terminava 2,7 m sob o topo, debaixo do beiral (cabeça na laje, mãos fora de alcance, queda de 14 m). Agora a corda que pega a face ou o beiral de uma beirada termina na altura de pendurar: PENDURADO → MANTLE → de pé na ilha |
+| idem — Pulo de Pipa | do terraço 1 diante da face lisa do patamar 2: sem magia fica no terraço 1, com o Pulo de Pipa no alto do pulo duplo pousa no terraço 2 |
+| idem — Asa de Papel | em ar parado de 14 m: Asa 32,1 m × pipa 18,1 m; do cume pousa na Ilha do Sino (a pipa universal também chega pela corrente permanente do lado oeste) |
+| idem — Atalho de Giz | do chão sob a ilha é recusado (sem linha de visão do topo); do cume: portal até a ilha e de volta; outro jogador não usa; ninguém é mandado para cima de quem está na saída |
+| idem — Ricochete | **defeito corrigido**: magia era sempre recusada na parede; liberada, a magia soltava a parede sem espera e quem empurrava a parede reagarrava no mesmo passo. Agora chuta para fora (5 m, sobe 5 m/s) e não reagarra de imediato; longe de parede, recusado |
+| idem — Passo de Vento | contra a face do patamar 1 para na rocha (6,30 m, face em 6, sem atravessar); pela borda da ilha, a pipa abre e pousa |
+| `traversal.test.ts` — parede lisa | **exploit corrigido**: pulando repetidamente contra uma face lisa o personagem a subia (8,3 m numa face de 6 m; no mapa real, a face lisa do patamar 2 até o cume, sem nenhuma capacidade de travessia), porque o Rapier conta como chão qualquer contato não vertical e as paredes voltadas para fora inclinam 1–2° na esfera. O motor agora exige apoio caminhável sob a cápsula; o teste falha sem a correção |
+| `traversal.test.ts` — o que cada estado permite | pendurado/escalando/planando: só mobilidade; mantle: nada |
+| `loot.test.ts` — vantagem | baú das Alturas sorteado duas vezes: melhor item ~0,15 degrau mais raro em média (600 partidas), determinístico, teto de épicos mantido |
+| `tests/vertical.bots.multiplayer.test.ts` — baú das Alturas | bot no pé da Serra troca um baú comum a 8,2 m pelo do cume a 15,1 m, sobe os três paredões e o abre |
+| `tests/vertical.multiplayer.test.ts` — travamento do repasse | **achado da 4ª rodada corrigido**: todos calados 350 ms (a aba anfitriã travada): A segue planando no servidor e a pior correção é 1 mm; sem a correção, A cai da pipa e corrige 1,19 m. Só A calado: A cai (a proteção continua) |
+
+Suíte completa (20/10): **673/681 em 70 arquivos** (868 s), rodando com uma sala hospedada com bot aberta no navegador
+e um Chrome pesado na máquina. As 8 falhas, rodadas arquivo por arquivo: 5 de relógio real passam sozinhas (Voo de
+Papagaio, intervalo de socos do `unarmed`, suavidade e reconexão do `multiplayer.test` — 49/49 —, travamento do
+repasse); 2 eram fragilidade antiga — o grafo de navegação dos bots era montado na primeira partida com bots, dentro
+da espera de 5–6 s do teste (6,9 s numa máquina carregada; 16,5 s durante a suíte): `prematch` e o draft de 10
+lugares agora montam o grafo no `beforeAll` (12/12 e 4/4); 1 era fragilidade do teste novo do baú do cume (ordem dos
+assentos e Tormenta sorteada fora da Serra), corrigida. A suavidade com e sem a lógica do repasse: passa com ela e
+falhou sem ela (p95 4,1) na mesma máquina — ruído, não regressão. Typecheck completo limpo.
+
+Navegador (modo solo no painel): ciclo de escalada no paredão 1 visto de lado e de trás — mãos alternando na parede,
+pés subindo, joelhos fora da rocha; deslize na beirada e pose de corrente ascendente alimentando o controlador de
+animação. Capturas `vertical-escalada-ciclo.jpg` e `vertical-corrente-pose.jpg` em `docs/world/screenshots/`.
+
+Produção (20/10): o deploy da `main` com as rodadas 2–4 (PR #10) falhou na Vercel por um erro de CSS de toque
+(corrigido em `de68194`); o site ficou no build anterior, que ainda tinha a camada `.ability-bearings` engolindo o
+clique no mundo — no desktop o ponteiro não era capturado (sem mira, câmera e atalhos de magia; contorno: ESC →
+Continuar). Corrigido na rodada 2; vai ao ar com o merge da `mvp-online-1v1`.
+
 ## Pendências
 
 - Celular físico: toque, tela cheia e trava em paisagem foram testados só com emulação no Chromium do painel.
-- Clipes dedicados (pendurar, planar), roupa ao vento; texturas/arte final além da rocha procedural.
-- Bots: escolher altura por estratégia; creeps aéreos; bots com travessia exercitados dentro do Worker no navegador.
-- Sala hospedada: a queda por falta de comandos (0,3 s) pune o convidado no ar quando a aba anfitriã trava.
+- Clipes de captura (pendurar, escalar, planar), roupa ao vento; texturas/arte final além da rocha procedural.
+- Bots: altura por estratégia de combate (além do baú das Alturas); creeps aéreos; bots com travessia exercitados
+  dentro do Worker no navegador (a sala hospedada com bot foi criada nesta rodada, mas a validação foi interrompida).
+- Atalho de Giz: quem chega e fica parado sobre a saída volta pelo portal depois de 1,5 s (regra da magia; avaliar).
 - Redes externas e celular físico (máquinas do M2). O Graao Host está desligado no site (ADR-006); instalador novo
   para o protocolo 11 só se ele voltar (publicação exige aprovação).

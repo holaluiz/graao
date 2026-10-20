@@ -4,7 +4,7 @@ import { Client, type Room } from '@colyseus/sdk';
 import { DEFAULT_APPEARANCE } from '@graao/game-data';
 import { C2S, CLIENT_VERSION, MatchPhase, NoticeCode, PROTOCOL_VERSION, ROOM_NAME, S2C, type DraftStateMsg, type EventsMsg, type NoticeMsg, type RoomListing, type RoomStateMsg, type SnapshotMsg } from '@graao/shared';
 import { createGraaoServer } from '../apps/server/src/app';
-import { getWorld } from '../apps/server/src/world';
+import { getNav, getWorld } from '../apps/server/src/world';
 import { setAuthVerifier } from '../apps/server/src/auth/SupabaseAuth';
 import { setMatchStore } from '../apps/server/src/persistence/MatchStore';
 
@@ -76,9 +76,11 @@ async function ready(room: Room, messages: ReturnType<typeof watch>) {
 beforeAll(async () => {
   setAuthVerifier(null);
   setMatchStore({ name: 'none', record: async () => null });
-  await getWorld();
+  // The bots' navigation graph is built once per server, at the first match with bots (seconds on a busy machine):
+  // build it here, not inside a test's few-second wait.
+  getNav(await getWorld());
   await server.listen(port);
-}, 30000);
+}, 60000);
 afterEach(async () => {
   await Promise.all(open.splice(0).filter((room) => room.connection.isOpen).map((room) => room.leave().catch(() => {})));
 });
