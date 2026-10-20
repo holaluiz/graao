@@ -1213,9 +1213,13 @@ describe('solo matches with server-controlled bots', () => {
 });
 
 describe('dropped connections (internet play: a blip does not end the match)', () => {
-  /** The first message matching `pred` that arrives after this call. */
-  function next<T>(box: ReturnType<typeof inbox<T>>, pred: (m: T) => boolean, ms = 8000): Promise<T> {
-    const start = box.all.length;
+  /**
+   * The first message matching `pred` from index `start` on (default: the first one that arrives after this call).
+   * Pass an earlier `start` when the message may already be in: the server's `onReconnect` broadcasts the room state
+   * before it sends JOIN_ROOM to the reconnecting client, so A can receive "B is back" ~1 ms before B's SDK fires
+   * `onReconnect` (measured: 5 in 44 reconnections), and nothing else re-sends it in a quiet match.
+   */
+  function next<T>(box: ReturnType<typeof inbox<T>>, pred: (m: T) => boolean, ms = 8000, start = box.all.length): Promise<T> {
     const t0 = Date.now();
     return new Promise((resolve, reject) => {
       const iv = setInterval(() => {
@@ -1259,8 +1263,9 @@ describe('dropped connections (internet play: a blip does not end the match)', (
       const dropped = await next(ra, (m) => !!m.players.find((p) => p.index === ib)?.dropped);
       expect(dropped.phase).toBe(MatchPhase.MATCH);
       expect(dropped.winner).toBe(-1);
+      const afterDrop = ra.all.indexOf(dropped) + 1;
       await reconnected;
-      const back = await next(ra, (m) => m.players.some((p) => p.index === ib) && !m.players.find((p) => p.index === ib)!.dropped);
+      const back = await next(ra, (m) => m.players.some((p) => p.index === ib) && !m.players.find((p) => p.index === ib)!.dropped, 8000, afterDrop);
       expect(back.phase).toBe(MatchPhase.MATCH);
       expect(back.players.map((p) => p.index).sort()).toEqual([ia, ib].sort());
       // Everything the client may have missed is sent again (its status, the room).
@@ -1282,8 +1287,8 @@ describe('dropped connections (internet play: a blip does not end the match)', (
     b.reconnection.enabled = false;
     try {
       cut(b);
-      await next(ra, (m) => m.players.some((p) => p.dropped));
-      const end = await next(ra, (m) => m.phase === MatchPhase.RESULTS, 6000);
+      const dropped = await next(ra, (m) => m.players.some((p) => p.dropped));
+      const end = await next(ra, (m) => m.phase === MatchPhase.RESULTS, 6000, ra.all.indexOf(dropped) + 1);
       expect(end.winner).toBe(ia);
     } finally {
       await a.leave(true);
