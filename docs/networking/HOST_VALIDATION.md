@@ -7,8 +7,9 @@ Aqui fica o que falta provar **entre máquinas e redes diferentes**, como medir 
 Resultados vão para `docs/qa/EXTERNAL_ALPHA_REPORT.md` — nada é marcado como feito sem as máquinas.
 
 Já provado num PC só: host + convidado em duas abas até a partida e de volta ao lobby, convidado reconectando em
-0,9 s na mesma vaga, sala do host seguindo no ritmo com a aba em segundo plano, e o site no ar (PR #7) hospedando até
-o Draft com convidado em outra aba. O histórico do Graao Host (três hosts por túnel quick, central de produção, app
+0,9 s na mesma vaga (0,3 s em 20/10), sala do host seguindo no ritmo com a aba em segundo plano, e o site no ar
+(PR #7) hospedando até o Draft com convidado em outra aba. Em 20/10: desistência limitada à janela (19,0 s com a
+sinalização travada) e anfitriã fechando a sala ([baseline](../qa/BASELINE_2026_10.md#4-rede-da-sala-na-aba-estados-explícitos-e-prazos-que-não-estouram)). O histórico do Graao Host (três hosts por túnel quick, central de produção, app
 empacotado) está em [GRAAO_HOST_TEST_REPORT.md](../hosting/GRAAO_HOST_TEST_REPORT.md).
 
 ## O que o dono do projeto precisa providenciar
@@ -44,15 +45,35 @@ Conta Cloudflare e certificado de assinatura só voltam a importar se o Graao Ho
 Abra o F3 em todos os clientes (ping, quedas de conexão, tick do servidor, snapshot) e anote no relatório. Anote
 também o tipo de rede de cada PC (fibra doméstica, 4G, empresa).
 
+Desde 20/10/2026 o F3 mostra também, em cada convidado:
+
+- **conexão** — estado da ligação com a sala (`SIGNALING`, `CONNECTING`, `CONNECTED`, `RECONNECTING · tentativa n`,
+  `FAILED · motivo`, `CLOSED · motivo`) e há quanto tempo está nele. Tabela de transições em
+  [BASELINE_2026_10.md §4](../qa/BASELINE_2026_10.md#4-rede-da-sala-na-aba-estados-explícitos-e-prazos-que-não-estouram).
+- **rota** — como os bytes chegam: `direta` (mesma rede ou endereço alcançável), `STUN` (atravessou NAT), `relay`
+  (passou por TURN; só aparece se `VITE_ICE_SERVERS` tiver um TURN).
+
+E o console (F12) registra cada mudança: `[graao] conexão (sala): A → B · motivo` e `[graao] rota até a sala …`.
+Copie essas linhas para o relatório em cada falha.
+
+Como ler uma entrada que não conecta:
+
+| Parou em | Significa | Próximo passo |
+|---|---|---|
+| `SIGNALING` (ou "O serviço que conecta os jogadores não respondeu") | o navegador não alcança o Supabase Realtime | testar a internet do convidado; não é NAT |
+| `FAILED` logo após `SIGNALING` com "Nenhuma sala com esse código" | o host não respondeu no canal do código | conferir o código e se a aba do host está aberta |
+| `FAILED` depois de `CONNECTING` com "a rede de um de vocês bloqueia conexões diretas" | ICE sem rota entre as duas redes | **é o caso que só TURN resolve**: registrar as duas redes |
+| `CONNECTED` com rota `STUN` | NAT atravessado sem TURN | nada a fazer |
+
 | # | Cenário | Passos | Medir | Passa se |
 |---|---|---|---|---|
 | 1 | 1 host + 1 convidado, redes diferentes | PC A: site → Jogar → Criar sala (a sala roda na aba). PC B: lista → Entrar. Os dois: Pronto → Draft → OVNI → partida até o fim → Voltar ao lobby | tempo entre Entrar e o lobby, RTT (F3) no lobby e na partida, jitter (variação do ping), quedas | partida termina, os dois voltam ao lobby, 0 quedas |
 | 2 | 1 host + vários convidados (+ bots até 10) | Repetir 1 com 2–4 pessoas e o resto bots | tick (F3), CPU da aba do host (Gerenciador de tarefas do navegador, Shift+Esc), upload do host | tick < 16 ms, nenhum convidado cai, o host continua jogável |
 | 3 | Três hosts simultâneos | PCs A, C, D hospedam ao mesmo tempo; convidados em cada | o mesmo por sala | três partidas completas e independentes |
 | 4 | Queda do host | Fechar a aba do host no meio da partida; noutra rodada, desligar o Wi-Fi do host | tempo até o aviso "Quem criou a sala saiu: a sala fechou." e até a sala sumir da lista | aviso claro, lista limpa em ≤ 30 s |
-| 5 | Reconexão do convidado | Desligar a rede do PC B por 5 s e religar | F3 "quedas conexão", volta à mesma vaga | volta sem perder a partida (janela de `RECONNECT_SECONDS`) |
+| 5 | Reconexão do convidado | Desligar a rede do PC B por 5 s e religar; noutra rodada, por 30 s | F3 "quedas conexão", "conexão" (`RECONNECTING · tentativa n`), volta à mesma vaga | 5 s: volta sem perder a partida; 30 s: desiste em ≈ 19 s com "A conexão com a sala caiu." (nunca fica "reconectando…" para sempre) e o host libera a vaga |
 | 6 | Host em segundo plano | O host troca de aba (ou minimiza) por 30 s no meio da partida | tick e RTT dos convidados nesse intervalo | convidados seguem jogando sem travar |
-| 7 | Rede restrita | Convidado no 4G (celular roteando) ou rede de empresa entra numa sala de PC A | conecta ou mostra "a rede de um de vocês bloqueia conexões diretas" | conecta; se falhar, registrar a rede: é o dado para decidir sobre TURN |
+| 7 | Rede restrita | Convidado no 4G (celular roteando) ou rede de empresa entra numa sala de PC A | conecta ou mostra "a rede de um de vocês bloqueia conexões diretas"; F3 "rota" quando conecta | conecta; se falhar em `CONNECTING`, registrar as duas redes: é o dado para decidir sobre TURN |
 | 8 | Versão incompatível | Host com a aba aberta antes de um deploy × convidado com o build novo | mensagem mostrada | entrada bloqueada com "recarreguem a página", sem estado parcial |
 
 ## Critérios de rede (primeira referência, a confirmar com os dados)

@@ -42,7 +42,7 @@ Sempre antes de entregar: `pnpm typecheck`, `pnpm build`, `pnpm exec vitest run`
 
 | Gate | Marco | Critério | Estado em 19/10/2026 |
 |---|---|---|---|
-| A | M1 Estabilidade | Nenhuma falha sem classificação; build e typecheck íntegros; regressão executada; baseline registrado | **Cumprido** em 19/10/2026: 543/543, typecheck, build ([auditoria](AUDIT_M0_2026-10-19.md)) |
+| A | M1 Estabilidade | Nenhuma falha sem classificação; build e typecheck íntegros; regressão executada; baseline registrado | **Cumprido** em 19/10/2026: 543/543, typecheck, build ([auditoria](AUDIT_M0_2026-10-19.md)); refeito em 20/10/2026 com a falha de reconexão classificada e corrigida ([baseline](BASELINE_2026_10.md)) |
 | B | M2 Alfa externa | Uma partida completa entre PCs em redes diferentes; três hosts independentes quando houver máquinas; falhas registradas | BLOCKED (máquinas/rede) |
 | C | M3 Draft visual | 10 participantes visíveis; 40 magias acessíveis sem abas; 4 escolhas válidas; bots finalizam; nenhum Draft trava; mobile utilizável | NOT_STARTED |
 | D | M6–M7 Oficina + Arsenal | Montar e salvar arma; baús normais; ganhar Suprimentos; pedir, receber e equipar; outro jogador contesta; inventário consistente em multiplayer | NOT_STARTED |
