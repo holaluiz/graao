@@ -432,6 +432,10 @@ export class GraaoApp {
     document.addEventListener('pointerlockchange', () => {
       if (this.phase === 'MATCH') this.updateHint();
     });
+    // A browser that cannot lock the pointer (an embedded web view): the controls come and go without that event.
+    this.input.onEngageChange = () => {
+      if (this.phase === 'MATCH') this.updateHint();
+    };
     // The first touch of the screen switches to the touch controls (a mouse never does); `?touch` forces them.
     window.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'touch' && !this.touch.active) {
@@ -493,6 +497,11 @@ export class GraaoApp {
   /** Only the "click to play" prompt while the pointer is free; nothing over the game while playing. */
   private updateHint(): void {
     if (this.phase !== 'MATCH') return;
+    // Without a pointer lock the camera turns by dragging: say so while playing.
+    if (this.input.freeMouse && this.input.locked && !this.results.visible && !this.spectator.following) {
+      this.hud.setHint('Este navegador não prende o mouse: segure um botão e arraste para olhar · ESC abre opções');
+      return;
+    }
     const quiet = this.input.locked || this.results.visible || this.spectator.following;
     const tap = this.touch.active ? 'Toque' : 'Clique';
     this.hud.setHint(quiet ? '' : this.touch.active ? `${tap} no mundo para jogar · ☰ abre opções` : this.net ? `${tap} no mundo para jogar · ESC abre opções` : `${tap} para jogar · ESC abre opções`);

@@ -32,6 +32,15 @@ export class Input {
   private touchEngaged = false;
   private readonly touchHeld = new Set<Action>();
   private readonly stick = { x: 0, y: 0 };
+  /**
+   * Free mouse: this page can never hold a pointer lock (an embedded web view answers WrongDocumentError). A click
+   * still hands the controls to the game; the cursor stays free and the camera turns while a mouse button is held
+   * (drag to look; the left button also fires, the right one aims).
+   */
+  private mouseFree = false;
+  private freeEngaged = false;
+  /** The controls were taken or given back without a pointer lock change (free mouse). */
+  onEngageChange?: () => void;
   private currentBindings: KeyBindings = { ...DEFAULT_BINDINGS };
   private keys = new Map<string, Action>();
   mouseDX = 0;
@@ -93,8 +102,14 @@ export class Input {
       else if (e.button === 2) this.held.delete('aim');
     });
     on(target, 'contextmenu', (e: Event) => e.preventDefault());
+    // Free mouse: the drag goes on outside the window while the button is held.
+    on(target, 'pointerdown', (e: PointerEvent) => {
+      if (this.mouseFree && this.freeEngaged && e.pointerType === 'mouse') target.setPointerCapture?.(e.pointerId);
+    });
     on(window, 'mousemove', (e: MouseEvent) => {
       if (!this.locked || !this.enabled) return;
+      // Free mouse: only a drag turns the camera (a free cursor would run into the edge of the window).
+      if (this.mouseFree && !(e.buttons & 3)) return;
       this.mouseDX += e.movementX;
       this.mouseDY += e.movementY;
     });
@@ -107,9 +122,21 @@ export class Input {
     });
   }
 
-  /** The game owns the controls: pointer lock on desktop, the engaged touch layer on a touch screen. */
+  /** The game owns the controls: pointer lock on desktop (or the free mouse), the engaged touch layer on a touch screen. */
   get locked(): boolean {
-    return this.touchMode ? this.touchEngaged : document.pointerLockElement === this.target;
+    return this.touchMode ? this.touchEngaged : this.mouseFree ? this.freeEngaged : document.pointerLockElement === this.target;
+  }
+
+  /** This page cannot lock the pointer: the camera turns by dragging (see `mouseFree`). */
+  get freeMouse(): boolean {
+    return this.mouseFree && !this.touchMode;
+  }
+
+  private setFreeEngaged(on: boolean): void {
+    if (on === this.freeEngaged) return;
+    this.freeEngaged = on;
+    if (!on) this.releaseAll();
+    this.onEngageChange?.();
   }
 
   get touch(): boolean {
@@ -250,16 +277,31 @@ export class Input {
       this.touchEngaged = true;
       return;
     }
+    if (this.mouseFree || typeof this.target.requestPointerLock !== 'function') {
+      this.mouseFree = true;
+      this.setFreeEngaged(true);
+      return;
+    }
     if (this.locked) return;
-    // Browsers refuse pointer lock without a user gesture; that is expected, not an error.
-    const p = this.target.requestPointerLock?.() as Promise<void> | undefined;
-    p?.catch?.(() => {});
+    // Browsers refuse pointer lock without a user gesture or right after leaving it; that is expected, not an error.
+    // A page that can never lock it (an embedded web view) switches to the free mouse.
+    const p = this.target.requestPointerLock() as Promise<void> | undefined;
+    p?.catch?.((e: unknown) => {
+      const name = (e as { name?: string } | null)?.name;
+      if (name !== 'WrongDocumentError' && name !== 'NotSupportedError') return;
+      this.mouseFree = true;
+      this.setFreeEngaged(true);
+    });
   }
 
   exitLock(): void {
     if (this.touchMode) {
       this.touchEngaged = false;
       this.releaseAll();
+      return;
+    }
+    if (this.mouseFree) {
+      this.setFreeEngaged(false);
       return;
     }
     if (this.locked) document.exitPointerLock();
