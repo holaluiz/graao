@@ -1,12 +1,25 @@
 /**
  * A guest's connection to a browser-hosted room: finds the host by room code (signaling), opens a WebRTC data channel
  * to it and asks for a seat. If the connection dies, it keeps trying for the room's reconnection window with the
- * session token the host gave (`["rejoin", …]`); meanwhile the session shows "reconectando…".
+ * session token the host gave (`["rejoin", …]`); meanwhile the session shows "reconectando…". Every attempt is cut at
+ * the end of that window, so a stuck negotiation cannot keep "reconectando…" up after the room let the seat go.
+ * Stages: `linkStatus` (SIGNALING → CONNECTING → CONNECTED ⇄ RECONNECTING → FAILED/CLOSED, see RoomLink.ts).
  */
 import { RECONNECT_SECONDS } from '@graao/shared';
-import { BufferedLink, LinkClose, type RoomLink } from '../RoomLink';
+import { BufferedLink, LinkClose, closedState, type RoomLink } from '../RoomLink';
 import { SignalChannel, randomId } from './signaling';
-import { FrameReader, gatheredSdp, iceServers, sendFrame } from './wire';
+import { FrameReader, gatheredSdp, iceRoute, iceServers, sendFrame, within } from './wire';
+
+/** Pause between two reconnection attempts (also bounded by the window). */
+const RETRY_PAUSE_MS = 1500;
+const WINDOW_OVER = 'reconnection window over';
+/** F3/console reason for each way a link ends. */
+const END_REASON: Record<number, string> = {
+  [LinkClose.CONSENTED]: 'saiu',
+  [LinkClose.LOST]: 'janela de reconexão esgotada',
+  [LinkClose.REFUSED]: 'vaga não guardada',
+  [LinkClose.HOST_CLOSED]: 'quem criou a sala saiu',
+};
 
 interface Seat {
   sid: string;
@@ -26,6 +39,7 @@ export class PeerLink extends BufferedLink implements RoomLink {
   private left = false;
   private reconnecting = false;
   private quietTimer: ReturnType<typeof setTimeout> | undefined;
+  private routeText = '-';
   private onIn: (n: number) => void = () => {};
   private onOut: (n: number) => void = () => {};
 
@@ -36,16 +50,27 @@ export class PeerLink extends BufferedLink implements RoomLink {
   /** Joins the room with this code. Rejects with a player-facing message. */
   static async connect(code: string, options: unknown): Promise<PeerLink> {
     const link = new PeerLink(code);
-    const pipe = await link.open();
+    const status = link.linkStatus;
     try {
-      link.seat = await link.handshake(pipe, ['join', options]);
+      const pipe = await link.open((stage) => status.set(stage));
+      try {
+        link.seat = await link.handshake(pipe, ['join', options]);
+      } catch (e) {
+        pipe.pc.close();
+        throw e;
+      }
+      link.adopt(pipe);
     } catch (e) {
-      pipe.pc.close();
+      status.set('FAILED', (e as Error)?.message ?? String(e));
       throw e;
     }
-    link.adopt(pipe);
+    status.set('CONNECTED');
     link.startDelivery();
     return link;
+  }
+
+  route(): string {
+    return this.routeText;
   }
 
   send(type: number, message?: unknown): void {
@@ -62,6 +87,7 @@ export class PeerLink extends BufferedLink implements RoomLink {
   async leave(): Promise<void> {
     if (this.left) return;
     this.left = true;
+    this.linkStatus.set('CLOSED', 'saiu');
     const pipe = this.pipe;
     this.pipe = null;
     if (pipe?.dc.readyState === 'open') pipe.dc.send(JSON.stringify(['bye']));
@@ -70,8 +96,9 @@ export class PeerLink extends BufferedLink implements RoomLink {
 
   // ------------------------------------------------------------------------------------------------ connection
 
-  /** Finds the host on the code's channel and opens a data channel to it. */
-  private async open(): Promise<Pipe> {
+  /** Finds the host on the code's channel (SIGNALING) and opens a data channel to it (CONNECTING: ICE). */
+  private async open(stage: (s: 'SIGNALING' | 'CONNECTING') => void): Promise<Pipe> {
+    stage('SIGNALING');
     const signal = await SignalChannel.open(this.code);
     const me = randomId();
     const pc = new RTCPeerConnection({ iceServers: iceServers() });
@@ -80,6 +107,7 @@ export class PeerLink extends BufferedLink implements RoomLink {
       const here = signal.wait((m) => m.t === 'here' && m.to === me, 4000);
       signal.send({ t: 'knock', from: me });
       if (!(await here)) throw new Error('Nenhuma sala com esse código (ou quem criou já saiu).');
+      stage('CONNECTING');
       const dc = pc.createDataChannel('graao', { ordered: true });
       await pc.setLocalDescription(await pc.createOffer());
       const answer = signal.wait((m) => m.t === 'answer' && m.to === me && typeof m.sdp === 'string', 10000);
@@ -143,11 +171,17 @@ export class PeerLink extends BufferedLink implements RoomLink {
       else if (s === 'disconnected') this.quietTimer = setTimeout(() => this.lost(pipe), 4000);
       else if (s === 'failed' || s === 'closed') this.lost(pipe);
     };
+    void iceRoute(pipe.pc).then((r) => {
+      if (this.pipe !== pipe) return;
+      this.routeText = r ?? '?';
+      console.info(`[graao] rota até a sala ${this.code}: ${this.routeText}`);
+    });
   }
 
   private end(code: number): void {
     if (this.left) return;
     this.left = true;
+    this.linkStatus.set(closedState(code), END_REASON[code] ?? `código ${code}`);
     clearTimeout(this.quietTimer);
     const pipe = this.pipe;
     this.pipe = null;
@@ -162,33 +196,41 @@ export class PeerLink extends BufferedLink implements RoomLink {
     this.pipe = null;
     pipe.pc.close();
     this.reconnecting = true;
+    this.routeText = '-';
+    this.linkStatus.set('RECONNECTING', 'tentativa 1');
     for (const h of this.dropHandlers) h();
     void this.reconnect();
   }
 
+  /** Attempts until the room's window closes (one second early: the seat must still be there when the answer lands). */
   private async reconnect(): Promise<void> {
     const deadline = Date.now() + (RECONNECT_SECONDS - 1) * 1000;
-    while (!this.left && Date.now() < deadline) {
+    let code: number = LinkClose.LOST;
+    for (let attempt = 1; !this.left && Date.now() < deadline; attempt++) {
       let pipe: Pipe | null = null;
+      const stage = (s: 'SIGNALING' | 'CONNECTING') => this.linkStatus.set('RECONNECTING', `tentativa ${attempt} · ${s === 'SIGNALING' ? 'sinalização' : 'ICE'}`);
       try {
-        pipe = await this.open();
-        this.seat = await this.handshake(pipe, ['rejoin', this.seat]);
+        pipe = await within(this.open(stage), deadline - Date.now(), WINDOW_OVER, (late) => late.pc.close());
+        this.seat = await within(this.handshake(pipe, ['rejoin', this.seat]), deadline - Date.now(), WINDOW_OVER);
         if (this.left) {
           pipe.pc.close();
           return;
         }
         this.reconnecting = false;
         this.adopt(pipe);
+        this.linkStatus.set('CONNECTED', `voltou na tentativa ${attempt}`);
         for (const h of this.reconnectHandlers) h();
         return;
       } catch (e) {
         pipe?.pc.close();
-        // The room no longer holds the seat: no point trying again.
-        if (/failed to reconnect|room is gone/.test((e as Error)?.message ?? '')) break;
-        await new Promise((r) => setTimeout(r, 1500));
+        const why = (e as Error)?.message ?? '';
+        // The room no longer holds the seat, or the window is over: no point trying again.
+        if (/failed to reconnect|room is gone/.test(why)) code = LinkClose.REFUSED;
+        if (why === WINDOW_OVER || code === LinkClose.REFUSED) break;
+        await new Promise((r) => setTimeout(r, Math.min(RETRY_PAUSE_MS, Math.max(0, deadline - Date.now()))));
       }
     }
     this.reconnecting = false;
-    this.end(LinkClose.LOST);
+    this.end(code);
   }
 }

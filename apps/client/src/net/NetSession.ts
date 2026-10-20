@@ -56,7 +56,7 @@ import { snapToCharacterState } from './snapState';
 import type { GraaoApp } from '../app/GraaoApp';
 import { RemotePlayer } from './RemotePlayer';
 import { AbilityStateCache } from './AbilityStateCache';
-import { LinkClose, type RoomLink } from './RoomLink';
+import { LinkClose, LinkStatus, closedState, type RoomLink } from './RoomLink';
 import { PeerLink } from './host/PeerLink';
 import { RoomHost } from './host/RoomHost';
 import { dedicatedServer, serverTarget } from './serverTarget';
@@ -120,6 +120,8 @@ export class NetSession {
   private left = false;
   /** Socket drops in this session (each one the SDK tried to recover), for the F3 overlay. */
   private drops = 0;
+  /** The link's own status when it has one (WebRTC guest, in-page host); a dedicated-server room gets one here. */
+  private readonly linkStatus: LinkStatus;
   private closeReason = '';
   private active = false;
   private presentation = false;
@@ -137,6 +139,8 @@ export class NetSession {
     /** Set when this player runs the room (created it in host mode). */
     private readonly host: RoomHost | null = null,
   ) {
+    this.linkStatus = room.linkStatus ?? new LinkStatus('servidor');
+    this.linkStatus.set('CONNECTED');
     this.labels.className = 'nameplates';
     this.labels.hidden = true;
     document.getElementById('ui')!.appendChild(this.labels);
@@ -304,14 +308,18 @@ export class NetSession {
         this.app.onRoomNotice(m);
       });
       // A dropped socket is not the end: the SDK reconnects on its own and the server keeps the seat for a while.
+      // Links with their own status already moved it; these keep a dedicated-server room's status in step (repeats are ignored).
       room.onDrop(() => {
         this.drops++;
+        this.linkStatus.set('RECONNECTING');
         if (!this.left) this.app.onConnectionDrop(true);
       });
       room.onReconnect(() => {
+        this.linkStatus.set('CONNECTED');
         if (!this.left) this.app.onConnectionDrop(false);
       });
       room.onLeave((codeNum: number) => {
+        this.linkStatus.set(closedState(codeNum, this.left || !!this.closeReason), this.closeReason || `código ${codeNum}`);
         if (!this.left) {
           console.warn('[graao] disconnected', codeNum);
           this.app.onDisconnected(
@@ -604,6 +612,8 @@ export class NetSession {
       snapshot: `${this.lastSnapshotBytes} B (#${this.snapshots}, tick ${this.serverTick})`,
       entidades: this.remotes.size + 1,
       bots: this.latestRoom?.players.filter((p) => p.bot).length ?? 0,
+      conexão: this.linkStatus.describe(),
+      rota: this.room.route?.() ?? 'WebSocket',
       'quedas conexão': this.drops,
       'tick servidor': `${this.lastServerTickMs.toFixed(2)} ms`,
       reconciliação: `reexecutados ${this.app.local.stats.replayed} · erro ${(this.app.local.stats.lastCorrection * 100).toFixed(1)} cm`,

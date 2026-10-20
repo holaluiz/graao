@@ -289,6 +289,7 @@ class LocalLink extends BufferedLink implements RoomLink, Endpoint {
   }
 
   started(): void {
+    this.linkStatus.set('CONNECTED', 'nesta aba');
     this.startDelivery();
   }
 
@@ -296,9 +297,14 @@ class LocalLink extends BufferedLink implements RoomLink, Endpoint {
     if (!this.left) this.host.post({ t: 'msg', sid: HOST_SID, type, m: message });
   }
 
+  route(): string {
+    return 'nesta aba';
+  }
+
   async leave(): Promise<void> {
     if (this.left) return;
     this.left = true;
+    this.linkStatus.set('CLOSED', 'saiu');
     this.host.close();
   }
 }

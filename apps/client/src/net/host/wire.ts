@@ -39,6 +39,68 @@ export async function gatheredSdp(pc: RTCPeerConnection, ms = 2500): Promise<str
   return pc.localDescription?.sdp ?? '';
 }
 
+/**
+ * How the data channel reaches the other side, from the ICE candidate types of the selected pair: `direta` (both
+ * `host`: same network or a reachable address), `STUN` (`srflx`/`prflx`: through a NAT, found via STUN), `relay`
+ * (TURN). The external alpha reads this to decide whether TURN is needed (docs/networking/HOST_VALIDATION.md).
+ */
+export function classifyRoute(local: string | undefined, remote: string | undefined): 'direta' | 'STUN' | 'relay' | '?' {
+  if (!local || !remote) return '?';
+  if (local === 'relay' || remote === 'relay') return 'relay';
+  if (local === 'host' && remote === 'host') return 'direta';
+  return 'STUN';
+}
+
+/** The route of the selected candidate pair in a `getStats()` report, e.g. "STUN · udp", or null before one is chosen. */
+export function routeFromStats(stats: ReadonlyMap<string, Record<string, unknown>>): string | null {
+  let pair: Record<string, unknown> | undefined;
+  for (const r of stats.values()) {
+    if (r.type === 'transport' && typeof r.selectedCandidatePairId === 'string') pair = stats.get(r.selectedCandidatePairId);
+  }
+  // Firefox has no transport report: the pair marks itself.
+  if (!pair) for (const r of stats.values()) if (r.type === 'candidate-pair' && (r.selected === true || (r.nominated === true && r.state === 'succeeded'))) pair = r;
+  if (!pair) return null;
+  const local = stats.get(String(pair.localCandidateId));
+  const remote = stats.get(String(pair.remoteCandidateId));
+  const route = classifyRoute(local?.candidateType as string | undefined, remote?.candidateType as string | undefined);
+  const protocol = typeof local?.protocol === 'string' ? local.protocol : '';
+  return protocol ? `${route} · ${protocol}` : route;
+}
+
+export async function iceRoute(pc: RTCPeerConnection): Promise<string | null> {
+  try {
+    return routeFromStats((await pc.getStats()) as unknown as ReadonlyMap<string, Record<string, unknown>>);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `p`, unless `ms` pass first: then it rejects with `message`, and a value that `p` still produces later goes to
+ * `onLate` (to close a connection nobody is waiting for any more).
+ */
+export function within<T>(p: Promise<T>, ms: number, message: string, onLate: (late: T) => void = () => {}): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let over = false;
+    const timer = setTimeout(() => {
+      over = true;
+      reject(new Error(message));
+    }, Math.max(0, ms));
+    p.then(
+      (v) => {
+        if (over) return onLate(v);
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        if (over) return;
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 /** Below every browser's SCTP message limit. */
 const CHUNK = 60000;
 /** A peer this far behind gets no snapshots until it catches up (they are superseded 50 ms later anyway). */
