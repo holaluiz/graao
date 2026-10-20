@@ -452,3 +452,96 @@ describe('traversal prediction under latency (100 ms each way)', () => {
     }
   }, 40000);
 });
+
+describe('a stall of the relay (a hosted room: every command passes through the host tab)', () => {
+  it('everyone silent at once for 350 ms: the glider keeps gliding and every held command is taken in; one client alone silent still falls', async () => {
+    const STALL = 350;
+    const massif = frame('vert-serra-macico');
+    const draft = footing(massif.at(-10.9, 0, -0.8));
+    const ll = dirToLatLon(v3normalize(draft));
+    const a = await new Client(url).create(ROOM_NAME, { ...opts('A'), maxPlayers: 2, freeRoamSpawns: [ll, ll] });
+    const welcome = await new Promise<WelcomeMsg>((r) => a.onMessage(S2C.WELCOME, r));
+    const me = welcome.index;
+    const b = await new Client(url).joinById(welcome.code, opts('B'));
+    await new Promise<WelcomeMsg>((r) => b.onMessage(S2C.WELCOME, r));
+    const h = harness(a, a.roomId);
+    // The relay: what A and B send reaches the server through it; stalled, it holds everything, then lets it all out
+    // in order (as the host page does when its main thread comes back).
+    const held: (() => void)[] = [];
+    let stallAll = false;
+    let stallA = false;
+    const relay = (who: 'A' | 'B', send: () => void) => ((stallAll || (who === 'A' && stallA)) ? held.push(send) : send());
+    const release = () => {
+      stallAll = stallA = false;
+      for (const f of held.splice(0)) f();
+    };
+    const local = new LocalPlayer(clientWorld.physics, draft, massif.side);
+    const corrections: { t: number; c: number }[] = [];
+    let live = false;
+    a.onMessage(S2C.SNAPSHOT, (m: SnapshotMsg) => {
+      const s = m.p.find((p) => p[0] === me);
+      if (!s || !live) return;
+      const st = snapToCharacterState(s);
+      st.aim = { ...local.state.aim };
+      local.reconcile(st, s[14]!);
+      corrections.push({ t: performance.now(), c: local.stats.lastCorrection });
+    });
+    // B: idle commands every 33 ms, through the relay.
+    let bSeq = 1;
+    const bTimer = setInterval(() => {
+      const cmds: InputCmd[] = [0, 1].map(() => [bSeq++, 0, 0, 0, 0, 0, AIM_SCALE, 0] as InputCmd);
+      relay('B', () => b.send(C2S.PLAYER_INPUT, { i: cmds }));
+    }, 33);
+    const up = v3normalize(draft);
+    const right = v3normalize(v3cross(massif.side, up));
+    const camera = { forward: new V3(massif.side.x, massif.side.y, massif.side.z), right: new V3(right.x, right.y, right.z), up: new V3(up.x, up.y, up.z), view: new V3(massif.side.x, massif.side.y, massif.side.z) } as unknown as Parameters<LocalPlayer['update']>[2];
+    const input = { moveAxis: () => ({ x: 0, y: 0 }), isDown: (k: string) => k === 'jump' } as unknown as Input;
+    /** Plays A (jump held: the kite rides the updraft) for `ms`, sampling the server's A every frame. */
+    const play = async (ms: number, sample?: (s: ServerSide['state']) => void) => {
+      const t0 = performance.now();
+      let last = t0;
+      while (performance.now() - t0 < ms) {
+        await sleep(16);
+        const now = performance.now();
+        local.update((now - last) / 1000, input, camera, true);
+        last = now;
+        const cmds = local.outbox.splice(0);
+        if (cmds.length) relay('A', () => a.send(C2S.PLAYER_INPUT, { i: cmds }));
+        sample?.(h.sp(me).state);
+      }
+    };
+    try {
+      h.put(me, draft, massif.side);
+      await sleep(600);
+      local.teleport(h.sp(me).state.pos, massif.side);
+      live = true;
+      await play(1500);
+      expect(h.sp(me).state.traversal, 'A plana na corrente').toBe(TraversalMode.GLIDE);
+      // Everyone silent: the server's A never leaves the kite, and once the relay lets go, the prediction agrees.
+      const during = new Set<number>();
+      stallAll = true;
+      await play(STALL, (s) => during.add(s.traversal));
+      const released = performance.now();
+      release();
+      await play(1000, (s) => during.add(s.traversal));
+      const after = corrections.filter((x) => x.t > released).map((x) => x.c);
+      const worst = Math.max(...after);
+      if (process.env.GRAAO_DEBUG) console.log(`travamento de todos: estados ${[...during].join(',')}, ${after.length} correções, pior ${worst.toFixed(3)} m`);
+      expect([...during], 'A continua planando').toEqual([TraversalMode.GLIDE]);
+      expect(worst, `pior correção ${worst.toFixed(3)} m`).toBeLessThan(0.1);
+      // A alone silent (B's commands keep coming): that is A's own silence; the server drops A from the kite.
+      const alone = new Set<number>();
+      stallA = true;
+      await play(STALL + 150, (s) => alone.add(s.traversal));
+      release();
+      await play(300);
+      if (process.env.GRAAO_DEBUG) console.log(`só A calado: estados ${[...alone].join(',')}`);
+      expect(alone.has(TraversalMode.NONE), 'sem comandos só de A, A cai').toBe(true);
+    } finally {
+      live = false;
+      clearInterval(bTimer);
+      local.dispose();
+      await Promise.all([a.leave(), b.leave()]).catch(() => {});
+    }
+  }, 30000);
+});

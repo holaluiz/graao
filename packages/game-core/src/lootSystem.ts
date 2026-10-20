@@ -14,7 +14,7 @@
  * Every request is validated here (sequence, rate, phase via the host, generation, state, distance, line of sight,
  * capacity). Clients only ever see chest positions and states, never what a closed chest holds.
  */
-import { AMMO, ATTRIBUTES, CONSUMABLES, CONSUMABLE_ORDER, ITEMS, LOOT_RULES, WEAPONS, type ItemId } from '@graao/game-data';
+import { AMMO, ATTRIBUTES, CHEST_REGIONS, CONSUMABLES, CONSUMABLE_ORDER, ITEMS, LOOT_RULES, WEAPONS, type ItemId } from '@graao/game-data';
 import { newPassiveRuntime, passiveModifiers } from './passives';
 import {
   ChestState,
@@ -115,7 +115,8 @@ export class GRALootSystem {
     // The first chest of each region is a starter: it always holds a weapon (everyone lands unarmed).
     const seen = new Set<number>();
     const starters = chosen.map((s) => !seen.has(s.region) && !!seen.add(s.region));
-    const contents = rollMatchLoot(this.seed, chosen.length, starters);
+    // High spots (the Serra's summit, the islands) roll their chest with advantage.
+    const contents = rollMatchLoot(this.seed, chosen.length, starters, chosen.map((s) => !!CHEST_REGIONS[s.region]?.vantage));
     chosen.forEach((spot, i) => {
       const collider = addChestCollider(this.host.physics, spot.pos, spot.up, spot.forward);
       this.colliders.add(collider);

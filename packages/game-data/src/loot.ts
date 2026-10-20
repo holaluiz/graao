@@ -298,8 +298,12 @@ export interface ChestSpotDef {
   covered?: boolean;
 }
 
-/** Region groups the spawner spreads chests over (wilderness spots use 'Trilhas'). */
-export const CHEST_REGIONS: { name: string; min: number }[] = [
+/**
+ * Region groups the spawner spreads chests over (wilderness spots use 'Trilhas'). `vantage`: high, exposed spots reached
+ * by climbing, riding a wind or magic (docs/world/VERTICAL_WORLD_DESIGN.md) — their chests are rolled twice, keeping the
+ * one with the rarer best item (better loot for a riskier climb). New regions go at the end: the index is on the wire.
+ */
+export const CHEST_REGIONS: { name: string; min: number; vantage?: boolean }[] = [
   { name: 'Vila das Lanternas', min: 4 },
   { name: 'Bairro do Horizonte', min: 4 },
   { name: 'Bosque dos Varais', min: 3 },
@@ -311,6 +315,8 @@ export const CHEST_REGIONS: { name: string; min: number }[] = [
   { name: 'Arcos Afundados', min: 1 },
   { name: 'Planalto Norte', min: 2 },
   { name: 'Trilhas', min: 3 },
+  // The summit of the Serra do Mirante and the Arquipélago dos Sinos: one chest up there every match.
+  { name: 'Alturas', min: 1, vantage: true },
 ];
 
 /**

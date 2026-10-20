@@ -1,8 +1,8 @@
 {
   "mapId": "planeta-graao",
-  "mapVersion": 10,
-  "geometryVersion": 10,
-  "collisionVersion": 10,
+  "mapVersion": 11,
+  "geometryVersion": 11,
+  "collisionVersion": 11,
   "placements": [
     {"id":"vila-largo-0","prefab":"pe-de-moleque-4x4","lat":7.9748,"lon":-4.57816,"yaw":359.36,"region":"vila"},
     {"id":"vila-largo-1","prefab":"pe-de-moleque-4x4","lat":10.23917,"lon":-4.60612,"yaw":359.27,"region":"vila"},
@@ -398,9 +398,9 @@
     {"id":"trilha-nordeste","region":"Trilhas","lat":50,"lon":125,"hint":"no campo do nordeste","yaw":40},
     {"id":"trilha-antipoda","region":"Trilhas","lat":12,"lon":175,"hint":"do outro lado do planeta","yaw":0},
     {"id":"trilha-sudoeste","region":"Trilhas","lat":-45,"lon":-125,"hint":"no vale do sudoeste","yaw":150},
-    {"id":"vert-cume-mirante","region":"Trilhas","lat":64.00392,"lon":-78.16581,"hint":"Cume da Serra do Mirante: exposto, alcançável pelas três rotas","surface":"prop","height":11.6,"yaw":179.4},
-    {"id":"vert-ilha-sino-capelinha","region":"Trilhas","lat":59.17081,"lon":-61.97882,"hint":"Ilha do Sino: dentro da capelinha (coberto, uma entrada)","surface":"prop","height":12.9,"yaw":103.7,"covered":true},
-    {"id":"vert-ilha-torre","region":"Trilhas","lat":64.42405,"lon":-50.11847,"hint":"Ilha da Torre: a mais alta, sem cobertura","surface":"prop","height":20.45,"yaw":204.76}
+    {"id":"vert-cume-mirante","region":"Alturas","lat":64.00392,"lon":-78.16581,"hint":"Cume da Serra do Mirante: exposto, alcançável pelas três rotas","surface":"prop","height":11.6,"yaw":179.4},
+    {"id":"vert-ilha-sino-capelinha","region":"Alturas","lat":59.17081,"lon":-61.97882,"hint":"Ilha do Sino: dentro da capelinha (coberto, uma entrada)","surface":"prop","height":12.9,"yaw":103.7,"covered":true},
+    {"id":"vert-ilha-torre","region":"Alturas","lat":64.42405,"lon":-50.11847,"hint":"Ilha da Torre: a mais alta, sem cobertura","surface":"prop","height":20.45,"yaw":204.76}
   ],
   "waypoints": [
     {"id":"vert-wp-pe-trilha","lat":58.91894,"lon":-66.86591,"links":["vert-wp-rampa1-pe"],"region":"serra","kind":"trilha"},

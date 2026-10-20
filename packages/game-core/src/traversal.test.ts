@@ -12,7 +12,7 @@ import type { Placement, SurfacedCollider, WorldLayout } from './layout';
 import { createPhysics, initRapier } from './physics';
 import { headingTangent, latLonToDir } from './sphere';
 import { buildTerrainMesh, type Terrain } from './terrain';
-import { GLIDE_STEPS, TraversalCap, packTraversal, steps, traversalOfMoveState, unpackTraversal } from './traversal';
+import { GLIDE_STEPS, TraversalCap, packTraversal, steps, traversalAllowsCast, traversalOfMoveState, unpackTraversal } from './traversal';
 
 const R = PLANET.radius;
 const DT = 1 / 60;
@@ -360,6 +360,26 @@ describe('climbing', () => {
     done(r);
   });
 
+  it('jumping again and again into a plain face never climbs it (the wall is not ground to jump from)', () => {
+    // On the sphere the face leans back by hz/R: the character controller alone would call it ground at the top of a
+    // jump, and every jump would start from there.
+    for (const caps of [TraversalCap.ALL, 0]) {
+      const r = before(LANE.plain, 1.5, 0.3);
+      r.s.traversalCaps = caps;
+      let top = 0;
+      let groundedHigh = false;
+      run(r, 6, 'north', (i) => (i % 24 < 3 ? InputButton.JUMP : 0), (s) => {
+        top = Math.max(top, height(s.pos));
+        if (s.grounded && height(s.pos) > 0.3) groundedHigh = true;
+        return false;
+      });
+      // A jump and the double jump, never more: no step on the face counted as ground.
+      expect(top).toBeLessThan(2.7);
+      expect(groundedHigh).toBe(false);
+      done(r);
+    }
+  });
+
   it('runs out of stamina on a 20 m face, falls, and cannot grab again until rested', () => {
     const r = before(LANE.tall, 1.5, 0.3);
     run(r, 0.6, 'north', tap, (s) => s.traversal === TraversalMode.CLIMB);
@@ -513,6 +533,17 @@ describe('knockback and abilities', () => {
     run(r, 0.05, 'none');
     expect(r.s.traversal).toBe(TraversalMode.NONE);
     done(r);
+  });
+});
+
+describe('what each state allows', () => {
+  it('on a ledge or a wall only mobility magic is cast (a way out), as on the glider; nothing while pulling up', () => {
+    for (const mode of [TraversalMode.HANG, TraversalMode.CLIMB, TraversalMode.GLIDE]) {
+      for (const id of ['ricochet', 'kite_jump', 'clothesline', 'wind_step', 'paper_wings']) expect(traversalAllowsCast(mode, id), `${mode} ${id}`).toBe(true);
+      for (const id of ['sun_orb', 'paper_wall', 'sun_meteor', 'gust_ring']) expect(traversalAllowsCast(mode, id), `${mode} ${id}`).toBe(false);
+    }
+    expect(traversalAllowsCast(TraversalMode.MANTLE, 'ricochet')).toBe(false);
+    expect(traversalAllowsCast(TraversalMode.NONE, 'sun_orb')).toBe(true);
   });
 });
 

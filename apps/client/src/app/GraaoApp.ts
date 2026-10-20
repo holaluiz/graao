@@ -168,6 +168,7 @@ export class GraaoApp {
   private readonly tmpPos = new THREE.Vector3();
   private readonly tmpFacing = new THREE.Vector3();
   private readonly tmpUp = new THREE.Vector3();
+  private readonly tmpRight = new THREE.Vector3();
   private frameMs = 0;
   /** Optional frame-rate cap ("Limite de FPS"); "Máximo" follows the monitor's refresh rate. */
   readonly limiter = new FrameLimiter();
@@ -964,6 +965,7 @@ export class GraaoApp {
       if (this.spectator.following) viewFocus = this.spectator.focus;
       const s = this.local.state;
       const up = this.tmpUp.copy(feet).normalize();
+      const right = this.tmpRight.set(s.facing.x, s.facing.y, s.facing.z).cross(up).normalize();
       anim = {
         moveState: s.moveState,
         speed: this.local.speed(),
@@ -976,6 +978,7 @@ export class GraaoApp {
         groundDist: this.deploy.groundDist,
         waterDepth: waterDepth(feet),
         vertical: s.vel.x * up.x + s.vel.y * up.y + s.vel.z * up.z,
+        lateral: s.vel.x * right.x + s.vel.y * right.y + s.vel.z * right.z,
       };
       if (!riding) this.obstruction.update(dt, this.r.camera.position, viewFocus, this.spectator.following ? viewFocus.clone().normalize() : up);
       this.updatePlace(viewFocus);

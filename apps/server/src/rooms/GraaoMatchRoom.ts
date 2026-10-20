@@ -120,7 +120,7 @@ import {
   type PlayerHitTarget,
   type TormentaConfig,
 } from '@graao/game-core';
-import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MAP_HASH, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, TRAVERSAL_ACTIONS, TraversalMode, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
+import { ABILITY_RULES, ARENA_CENTER, ATTRIBUTES, BOT_STAT_PROFILE_IDS, CHEST_REGIONS, CREEP_RULES, CREEP_TYPE_IDS, ITEMS, LOOT_RULES, MAP_HASH, MATCH_SPAWNS, MELEE, MOVEMENT, SPAWNS, TORMENTA, TRAVERSAL_ACTIONS, TraversalMode, UFO, ULTIMATE_SLOT, WEAPONS, randomAppearance, validateAppearance, type AbilityId, type BotStatProfile, type ItemId, type TormentaPhaseDef } from '@graao/game-data';
 import {
   AbilityReject,
   AIM_SCALE,
@@ -347,6 +347,21 @@ const BOT_FIGHT_RANGE = 28;
 const BOT_CALM_RANGE = 38;
 const BOT_CHEST_RANGE = 75;
 /**
+ * In a room hosted in a tab every command passes through the host page's main thread: when it stalls (a long frame,
+ * a hiccup in a background tab) every connection falls silent at once. A silence of all of them past RELAY_QUIET_MS is
+ * the relay's, not a client's: nobody starves (falls without input) through it, and the commands that pile up behind
+ * it are taken in afterwards — the queue and the budget may hold RELAY_BACKLOG steps while it lasts and for a moment
+ * after (docs/networking/TRAVERSAL_AUTHORITY.md). Past RELAY_GRACE_MS the silence counts again (everyone away).
+ */
+const RELAY_QUIET_MS = 150;
+const RELAY_GRACE_MS = 1500;
+const RELAY_BACKLOG = 90;
+/**
+ * A chest on a high spot (CHEST_REGIONS `vantage`: the summit, the islands) holds better loot: a bot weighs it as this
+ * much closer (m), so the heights get contested by bots too — it takes the climbs and winds its navigation knows.
+ */
+const BOT_VANTAGE_PULL = 20;
+/**
  * Farming: with a weapon and nobody to fight close by, a bot hunts the nearest creep it can take within
  * BOT_CREEP_RANGE; with empty hands only a basic creep this close (else it keeps looking for a chest). Below
  * BOT_HURT_FRACTION of its Health with no Shield it farms nothing and backs away from tough creeps.
@@ -464,6 +479,9 @@ export class GraaoMatchRoom extends Room {
   private navBells: NavBell[] | null = null;
   private lootSeed: number | null = null;
   private lootSpots: string[] = [];
+  /** Last command from any person (ms) and the end of the catch-up after a silence of everyone (RELAY_QUIET_MS). */
+  private lastInboundAt = 0;
+  private relayCatchUpUntil = 0;
   private chestCount: number = LOOT_RULES.chestsPerMatch;
   /** Creatures that give XP (authoritative), their cap, and whether the development warmup uses empty hands too. */
   private creeps!: GRACreepSystem;
@@ -903,10 +921,16 @@ export class GraaoMatchRoom extends Room {
     if (!this.legacyWarmup && this.phase !== MatchPhase.MATCH && this.phase !== MatchPhase.UFO) return;
     const v = validateInputMsg(m);
     if (!v) return;
+    // The first command after everyone fell silent: the relay stalled; what queued behind it may come in.
+    const now = Date.now();
+    const quiet = now - this.lastInboundAt;
+    if (this.lastInboundAt > 0 && quiet > RELAY_QUIET_MS && quiet < RELAY_GRACE_MS) this.relayCatchUpUntil = now + quiet + 250;
+    this.lastInboundAt = now;
+    const cap = now < this.relayCatchUpUntil ? RELAY_BACKLOG : MAX_INPUT_BACKLOG;
     for (const cmd of v.i) {
       const last = p.queue.length ? p.queue[p.queue.length - 1]![0] : p.lastSeq;
       if (last >= 0 && !seqGreater(cmd[0], last)) continue;
-      if (p.queue.length >= MAX_INPUT_BACKLOG) break;
+      if (p.queue.length >= cap) break;
       p.queue.push(cmd);
     }
   }
@@ -2218,7 +2242,8 @@ export class GraaoMatchRoom extends Room {
     let bestD = BOT_CHEST_RANGE;
     for (const c of chests) {
       if (c.state !== ChestState.CLOSED || taken.has(c.id) || (brain.skipChests.get(c.id) ?? 0) > now) continue;
-      const d = Math.hypot(c.spot.pos.x - p.state.pos.x, c.spot.pos.y - p.state.pos.y, c.spot.pos.z - p.state.pos.z);
+      const d = Math.hypot(c.spot.pos.x - p.state.pos.x, c.spot.pos.y - p.state.pos.y, c.spot.pos.z - p.state.pos.z)
+        - (CHEST_REGIONS[c.spot.region]?.vantage ? BOT_VANTAGE_PULL : 0);
       if (d < bestD) {
         bestD = d;
         best = c;
@@ -2294,8 +2319,12 @@ export class GraaoMatchRoom extends Room {
       if (wall >= close + this.landTimeoutMs) for (const p of this.players.values()) if (p.deploy === DeployState.DIVING) this.forceLand(p);
     }
 
+    // Every person silent at once for a moment: the relay (a hosted room's main thread) stalled, not them.
+    const silence = wall - this.lastInboundAt;
+    const relayQuiet = this.lastInboundAt > 0 && silence > RELAY_QUIET_MS && silence < RELAY_GRACE_MS;
+    const relayBacklog = relayQuiet || wall < this.relayCatchUpUntil;
     for (const p of this.players.values()) {
-      p.budget = Math.min(p.budget + dt * SIM_HZ, MAX_INPUT_BACKLOG);
+      p.budget = Math.min(p.budget + dt * SIM_HZ, relayBacklog && !p.bot ? RELAY_BACKLOG : MAX_INPUT_BACKLOG);
       // Reloads and respawns.
       if (p.reloading >= 0 && wall >= p.reloadEndsAt) {
         finishReload(p.inv, p.reloading);
@@ -2350,9 +2379,10 @@ export class GraaoMatchRoom extends Room {
       }
       // The per-player clock only resyncs on gross drift (stalls); clients adapt to its steady offset.
       if (Math.abs(wall - p.simTime) > 1000) p.simTime = wall - 60;
-      // A client that stops sending (tab hidden) still falls; it is corrected when it resumes.
+      // A client that stops sending (tab hidden) still falls; it is corrected when it resumes. Not while everyone is
+      // silent at once (the relay stalled): its commands are on their way.
       if (stepped === 0) {
-        p.starvedFor += dt;
+        if (!relayQuiet || p.bot) p.starvedFor += dt;
         if (p.starvedFor > 0.3 && !p.state.grounded) {
           p.input.wish.x = p.input.wish.y = p.input.wish.z = 0;
           p.input.buttons = 0;

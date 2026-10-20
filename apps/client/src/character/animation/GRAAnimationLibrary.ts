@@ -46,13 +46,18 @@ export type ClipName =
   | 'punchL'
   | 'punchR'
   | 'skydive'
-  /** Vertical traversal (docs/gameplay/TRAVERSAL_STATES.md): the climbing cycle, the pull-up, the hang, the glide. */
+  /**
+   * Vertical traversal (docs/gameplay/TRAVERSAL_STATES.md): the climbing cycle, the pull-up, the hang and the shimmy
+   * along a ledge, the glide and the ride up an updraft.
+   */
   | 'climb'
   | 'mantle'
   | 'hang'
-  | 'glide';
+  | 'shimmy'
+  | 'glide'
+  | 'updraft';
 
-type UalClip = Exclude<ClipName, 'skydive' | 'hang' | 'glide'>;
+type UalClip = Exclude<ClipName, 'skydive' | 'climb' | 'hang' | 'shimmy' | 'glide' | 'updraft'>;
 
 /** Semantic name → source clip name in the UAL packs. */
 const UAL_SOURCES: Record<UalClip, { pack: 1 | 2; clip: string }> = {
@@ -87,8 +92,7 @@ const UAL_SOURCES: Record<UalClip, { pack: 1 | 2; clip: string }> = {
   // Empty hands: a left jab and a right cross, alternated.
   punchL: { pack: 1, clip: 'Punch_Jab' },
   punchR: { pack: 1, clip: 'Punch_Cross' },
-  // In place (the pelvis only bobs): the capsule's controller does the moving, the clip only the reaching and pulling.
-  climb: { pack: 2, clip: 'ClimbUp_1m' },
+  // In place (the pelvis only bobs): the capsule's controller does the moving, the clip only the pulling up.
   mantle: { pack: 2, clip: 'ClimbUp_1m' },
 };
 
@@ -140,10 +144,11 @@ export class GRAAnimationLibrary {
     }
     this.clips.set('skydive', skydiveClip());
     source.skydive = 'procedural';
-    this.clips.set('hang', hangClip());
-    source.hang = 'procedural';
-    this.clips.set('glide', glideClip());
-    source.glide = 'procedural';
+    // No pack has a wall climb, a shimmy or a kite: graao-authored on the bind pose (a Mixamo override still wins).
+    for (const [name, clip] of [['climb', climbClip()], ['hang', hangClip()], ['shimmy', shimmyClip()], ['glide', glideClip()], ['updraft', updraftClip()]] as const) {
+      this.clips.set(name, clip);
+      source[name] = 'procedural';
+    }
 
     // Optional Mixamo overrides (same retargeter; FBX loader is only fetched when a manifest exists).
     const mixamo = await loadMixamoClips(this.assets, rig);
@@ -202,9 +207,12 @@ export function skydiveClip(): THREE.AnimationClip {
   return new THREE.AnimationClip('skydive', dur, tracks);
 }
 
-/** A looping pose clip on the T-pose bind: each bone's Euler (x, y, z) as a function of a slow sine wave. */
-function poseClip(name: string, dur: number, bones: Record<string, (wave: number) => [number, number, number]>): THREE.AnimationClip {
-  const times = [0, dur * 0.25, dur * 0.5, dur * 0.75, dur];
+/**
+ * A looping pose clip on the T-pose bind: each bone's Euler (x, y, z) as a function of a sine wave over the loop,
+ * sampled at `keys` + 1 times (5 for a slow sway, more for a cycle whose limbs swing far).
+ */
+function poseClip(name: string, dur: number, bones: Record<string, (wave: number) => [number, number, number]>, keys = 4): THREE.AnimationClip {
+  const times = Array.from({ length: keys + 1 }, (_, i) => (dur * i) / keys);
   const e = new THREE.Euler();
   const q = new THREE.Quaternion();
   const tracks = Object.entries(bones).map(([bone, f]) => {
@@ -244,6 +252,88 @@ export function hangClip(): THREE.AnimationClip {
     LeftFoot: () => [0.25, 0, 0],
     RightFoot: () => [0.25, 0, 0],
   });
+}
+
+/**
+ * Wall climb (graao-authored, procedural): one hand reaches high up the wall while the other pulls at shoulder height,
+ * and the opposite foot steps up — then the other side. The knees go out to the sides, not forward (the capsule keeps
+ * 4 cm off the face: forward knees would sink into the rock), the head looks up the route. One loop is two reaches;
+ * the controller runs it with the climbing speed (backward climbing down, sideways along the wall).
+ */
+export function climbClip(): THREE.AnimationClip {
+  return poseClip('climb', 1.1, {
+    Spine: (w) => [0.08, w * 0.07, 0],
+    Spine1: () => [0.04, 0, 0],
+    Neck: () => [-0.2, 0, 0],
+    Head: (w) => [-0.24, w * 0.12, 0],
+    LeftShoulder: (w) => [0, 0, 0.3 + w * 0.12],
+    RightShoulder: (w) => [0, 0, -0.3 + w * 0.12],
+    // Left arm: +Z raises it, −Y brings it forward onto the wall; reaching (w = 1) high and straight, pulling low and bent.
+    LeftArm: (w) => [0, -0.5, 0.95 + w * 0.4],
+    RightArm: (w) => [0, 0.5, -0.95 + w * 0.4],
+    LeftForeArm: (w) => [0, 0, 0.65 - w * 0.5],
+    RightForeArm: (w) => [0, 0, -0.65 - w * 0.5],
+    LeftHand: () => [-0.4, 0, 0],
+    RightHand: () => [-0.4, 0, 0],
+    // Diagonal pairs: the right foot steps up while the left hand reaches. −X flexes the hip, ±Z opens the knee out.
+    LeftUpLeg: (w) => [-0.55 + w * 0.45, 0, 0.35 - w * 0.15],
+    RightUpLeg: (w) => [-0.55 - w * 0.45, 0, -0.35 - w * 0.15],
+    LeftLeg: (w) => [0.9 - w * 0.6, 0, 0],
+    RightLeg: (w) => [0.9 + w * 0.6, 0, 0],
+    LeftFoot: () => [0.3, 0, 0],
+    RightFoot: () => [0.3, 0, 0],
+  }, 8);
+}
+
+/**
+ * Shimmy along a ledge (graao-authored, procedural): the hang, with the leading hand reaching out along the edge and
+ * the other closing in under the head, the legs swinging after them. Played forward moving left, backward moving right.
+ */
+export function shimmyClip(): THREE.AnimationClip {
+  return poseClip('shimmy', 0.9, {
+    Spine: (w) => [0.06, 0, w * 0.05],
+    Spine1: () => [0.04, 0, 0],
+    Spine2: () => [0.02, 0, 0],
+    Neck: () => [-0.18, 0, 0],
+    Head: (w) => [-0.22, w * 0.15, 0],
+    LeftShoulder: (w) => [0, 0, 0.35 - w * 0.08],
+    RightShoulder: (w) => [0, 0, -0.35 - w * 0.08],
+    LeftArm: (w) => [0, -0.32, 1.22 - w * 0.2],
+    RightArm: (w) => [0, 0.32, -1.22 - w * 0.2],
+    LeftForeArm: (w) => [0, 0, 0.12 + Math.max(0, -w) * 0.25],
+    RightForeArm: (w) => [0, 0, -0.12 - Math.max(0, w) * 0.25],
+    LeftHand: () => [-0.5, 0, 0],
+    RightHand: () => [-0.5, 0, 0],
+    LeftUpLeg: (w) => [-0.12, 0, 0.04 + w * 0.12],
+    RightUpLeg: (w) => [-0.06, 0, -0.04 + w * 0.12],
+    LeftLeg: (w) => [0.32 + w * 0.06, 0, 0],
+    RightLeg: (w) => [0.22 - w * 0.06, 0, 0],
+    LeftFoot: () => [0.25, 0, 0],
+    RightFoot: () => [0.25, 0, 0],
+  }, 8);
+}
+
+/**
+ * Riding an updraft under the kite (graao-authored, procedural): the glide's grip on the bar, higher, the body upright
+ * and the legs hanging loose under it, kicked about by the wind. GraaoCharacter also eases the glide's forward lean.
+ */
+export function updraftClip(): THREE.AnimationClip {
+  return poseClip('updraft', 0.8, {
+    Spine: () => [0.02, 0, 0],
+    Spine1: () => [0, 0, 0],
+    Neck: () => [-0.3, 0, 0],
+    Head: () => [-0.22, 0, 0],
+    LeftArm: (w) => [0, -0.12, 1.12 + w * 0.05],
+    RightArm: (w) => [0, 0.12, -1.12 - w * 0.05],
+    LeftForeArm: () => [0, 0, 0.7],
+    RightForeArm: () => [0, 0, -0.7],
+    LeftUpLeg: (w) => [-0.12 + w * 0.12, 0, 0.1],
+    RightUpLeg: (w) => [-0.12 - w * 0.12, 0, -0.1],
+    LeftLeg: (w) => [0.45 + w * 0.2, 0, 0],
+    RightLeg: (w) => [0.45 - w * 0.2, 0, 0],
+    LeftFoot: () => [0.4, 0, 0],
+    RightFoot: () => [0.4, 0, 0],
+  }, 8);
 }
 
 /**

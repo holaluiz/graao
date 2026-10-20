@@ -743,7 +743,7 @@ export class CharacterMotor {
     // Another room's chests are invisible here (only checked when this world holds chests this motor does not own).
     this.controller.computeColliderMovement(body.collider, desired, undefined, PLAYER_GROUPS, this.foreign() ? this.predicate : undefined);
     const mv = this.controller.computedMovement();
-    const groundedNow = this.controller.computedGrounded();
+    const contact = this.controller.computedGrounded();
 
     s.pos.x += mv.x;
     s.pos.y += mv.y;
@@ -754,6 +754,9 @@ export class CharacterMotor {
     this.placeCollider(body.collider, s.pos);
 
     const newUp = v3normalize(s.pos, this.tmpNewUp);
+    // The controller's ground is any contact short of vertical: it must also be walkable ground under the capsule (a
+    // wall leaning back a degree is not a floor to jump from again).
+    const groundedNow = contact && this.probe.standsOn(s.pos, newUp, s.facing);
     // Horizontal velocity follows what actually happened (walls absorb it), transported to the new tangent plane.
     const actualH = v3projectOnPlane({ x: mv.x / dt, y: mv.y / dt, z: mv.z / dt }, newUp);
     let hl = v3len(actualH);

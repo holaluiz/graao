@@ -6,7 +6,7 @@
  * The room provides an AbilityHost (players, physics, phase rule, damage/elimination bookkeeping, dash scheduling on
  * the movement stream, event sink), so the whole system runs in unit tests with a fake host.
  */
-import { ABILITIES, ABILITY_RULES, MOVEMENT, type AbilityDefinition, type AbilityEffect, type AbilityId, type Loadout } from '@graao/game-data';
+import { ABILITIES, ABILITY_RULES, MOVEMENT, TRAVERSAL, TraversalMode, type AbilityDefinition, type AbilityEffect, type AbilityId, type Loadout } from '@graao/game-data';
 import { AbilityReject, DIR_SCALE, POS_SCALE, VEL_SCALE, v3addScaled, v3cross, v3dot, v3len, v3normalize, v3projectOnPlane, v3scale, type AbilityEntityView, type AbilityRevealMsg, type GameEvent, type Vec3 } from '@graao/shared';
 import type { CharacterState } from './character';
 import { applyTemporaryShield, expireTemporaryShield, raySphere, type PlayerHitTarget, type Vitals } from './combat';
@@ -415,7 +415,44 @@ export class GRAAbilitySystem {
     const hit = this.solidRay(origin, dir, range);
     if (!hit || hit.toi < 1 || hit.toi > range) return null;
     const up = v3normalize(caster.state.pos);
-    return v3addScaled(v3addScaled(origin, dir, Math.max(0, hit.toi - 0.8)), up, -1.1);
+    const point = v3addScaled(origin, dir, hit.toi);
+    return this.ledgeHold(point, 'normal' in hit ? (hit as { normal: Vec3 }).normal : null, dir)
+      ?? v3addScaled(v3addScaled(origin, dir, Math.max(0, hit.toi - 0.8)), up, -1.1);
+  }
+
+  /**
+   * A rope that catches a ledge — its face (a wall whose top is a little over the hit: a terrace, a parapet) or, thrown
+   * from below, the underside of its overhang near the edge (an island's slab, an eave, a balcony) — ends out in front
+   * of the edge, low enough for the head to clear the top and high enough for the hands to reach it even when the pull
+   * stops short: pushing toward the wall then grabs the ledge (docs/gameplay/TRAVERSAL_STATES.md). Elsewhere the rope
+   * ends where it struck, as before.
+   */
+  private ledgeHold(point: Vec3, normal: Vec3 | null, dir: Vec3): Vec3 | null {
+    if (!normal) return null;
+    const up = v3normalize(point);
+    const g = TRAVERSAL.grapple;
+    const nu = v3dot(normal, up);
+    let face = point;
+    let out: Vec3;
+    if (Math.abs(nu) <= 0.5) out = v3normalize(v3projectOnPlane(normal, up));
+    else if (nu < -0.5) {
+      // Under an overhang: walk back toward the thrower until there is no ceiling overhead — that is its edge.
+      out = v3projectOnPlane(v3scale(dir, -1), up);
+      if (v3len(out) < 1e-3) return null;
+      v3normalize(out, out);
+      let edge = -1;
+      for (let k = 0.1; k <= g.overhang + 1e-6; k += 0.1) {
+        if (!this.solidRay(v3addScaled(v3addScaled(point, out, k), up, -0.05), up, 0.3)) { edge = k; break; }
+      }
+      if (edge < 0) return null;
+      face = v3addScaled(point, out, edge - 0.05);
+    } else return null;
+    // The top: straight down from over the edge, a little inside it (a ray born inside a taller wall stops at once).
+    const probe = v3addScaled(v3addScaled(face, out, -0.25), up, g.probe);
+    const top = this.solidRay(probe, v3scale(up, -1), g.probe);
+    if (!top || top.toi < 0.05) return null;
+    const topHeight = g.probe - top.toi;
+    return v3addScaled(v3addScaled(face, out, g.out), up, topHeight - g.under);
   }
 
   private nearWall(caster: AbilityActor, req: AbilityRequest, range: number): Vec3 | null {
@@ -743,8 +780,10 @@ export class GRAAbilitySystem {
         case 'mobility': {
           const dir = ctx.req?.dir ?? caster.state.facing;
           const up = v3normalize(caster.state.pos);
-          // Magic movement takes over any traversal (the glider folds; ledges and walls are let go of).
-          releaseTraversal(caster.state, 0);
+          // Magic movement takes over any traversal: the glider folds (a ledge may be grabbed at once), ledges and walls
+          // are let go of with the usual regrab wait (pushing into the wall would catch it again in the same step and
+          // swallow a kick off it or a jump up it).
+          releaseTraversal(caster.state, caster.state.traversal === TraversalMode.GLIDE ? 0 : undefined);
           if (e.mode === 'jump') {
             if (caster.state.grounded || caster.state.abilityJumpUsed) break;
             const along = v3dot(caster.state.vel, up);
