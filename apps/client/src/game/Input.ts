@@ -7,7 +7,19 @@ import { DEFAULT_BINDINGS, normalizeBindings, type KeyBindings, type RebindableA
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'fire' | 'aim'
   | 'weapon1' | 'weapon2' | 'ability1' | 'ability2' | 'ability3' | 'ultimate' | 'reload' | 'ready' | 'menu' | 'debug' | 'scoreboard'
-  | 'interact' | 'item1' | 'item2' | 'item3' | 'stats' | 'stat5' | 'spectatePrevious' | 'spectateNext';
+  | 'interact' | 'item1' | 'item2' | 'item3' | 'stats' | 'stat5' | 'spectatePrevious' | 'spectateNext'
+  // The mouse wheel: the next weapon (wheel down) or the previous one (wheel up).
+  | 'weaponNext' | 'weaponPrev';
+
+/**
+ * Wheel distance (px) that makes one step: a mouse notch is ~100 px (Firefox: 3 lines), a trackpad sends many small
+ * deltas that add up. After a step the wheel rests a moment, longer for a trackpad, whose inertia keeps scrolling after
+ * the swipe: one flick takes one step, not a run through the whole quick bar.
+ */
+const WHEEL_STEP_PX = 50;
+const WHEEL_REST_MS = { notch: 90, trackpad: 320 };
+/** A pause this long (ms) starts a new wheel gesture. */
+const WHEEL_GESTURE_MS = 250;
 
 const ALIASES: Record<string, RebindableAction> = {
   ArrowUp: 'forward',
@@ -50,6 +62,9 @@ export class Input {
   private inputEnabled = true;
   private allowScoreboard = false;
   private allowSpectator = false;
+  private wheelSum = 0;
+  private wheelAt = -Infinity;
+  private wheelRestUntil = -Infinity;
   private readonly unsub: (() => void)[] = [];
 
   constructor(private readonly target: HTMLElement) {
@@ -102,6 +117,7 @@ export class Input {
       else if (e.button === 2) this.held.delete('aim');
     });
     on(target, 'contextmenu', (e: Event) => e.preventDefault());
+    on(window, 'wheel', (e: WheelEvent) => this.wheel(e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1), performance.now()), { passive: true });
     // Free mouse: the drag goes on outside the window while the button is held.
     on(target, 'pointerdown', (e: PointerEvent) => {
       if (this.mouseFree && this.freeEngaged && e.pointerType === 'mouse') target.setPointerCapture?.(e.pointerId);
@@ -217,6 +233,25 @@ export class Input {
     for (const [code, action] of Object.entries(FIXED_KEYS)) this.keys.set(code, action);
     // The attribute panel's fifth row (Energia): Digit5, unless a remapping already owns that key.
     if (!this.keys.has('Digit5')) this.keys.set('Digit5', 'stat5');
+  }
+
+  /** A wheel movement of `dy` px (down positive) at `now` ms: steps the weapon while the game has the controls. */
+  wheel(dy: number, now: number): void {
+    if (!this.locked || !this.enabled || this.touchMode || !dy) return;
+    const notch = Math.abs(dy) >= 40;
+    if (now < this.wheelRestUntil) {
+      // Resting after a step; a trackpad still streaming its inertia keeps it resting.
+      if (!notch) this.wheelRestUntil = now + WHEEL_REST_MS.trackpad;
+      this.wheelSum = 0;
+      return;
+    }
+    if (now - this.wheelAt > WHEEL_GESTURE_MS || Math.sign(dy) !== Math.sign(this.wheelSum)) this.wheelSum = 0;
+    this.wheelAt = now;
+    this.wheelSum += dy;
+    if (Math.abs(this.wheelSum) < WHEEL_STEP_PX) return;
+    this.pressed.add(this.wheelSum > 0 ? 'weaponNext' : 'weaponPrev');
+    this.wheelSum = 0;
+    this.wheelRestUntil = now + (notch ? WHEEL_REST_MS.notch : WHEEL_REST_MS.trackpad);
   }
 
   private pressCode(code: string, action: Action, repeat: boolean): void {

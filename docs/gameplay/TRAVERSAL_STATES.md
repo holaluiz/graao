@@ -84,7 +84,7 @@ Os dois emitem as mesmas intenções (`Input` → `InputCmd`); nenhum caminho de
 | Soltar da parede | Shift (borda) ou para trás | contextual SOLTAR |
 | Interagir (baú, porta, sino) | F | contextual com o verbo do aviso (ABRIR, TOCAR, PEGAR…) |
 | Câmera | mouse com o ponteiro preso | arrastar fora dos botões |
-| Combate | mouse, R, E/Q (armas), 1/2/3/4 (magias), Z/X/C (itens) | ATIRAR (segurar), MIRAR (alterna), RECARREGAR; os próprios ícones do HUD (magias, cartões de arma, cinto de itens) são os botões |
+| Combate | mouse, R, E/Q ou roda do mouse (armas), 1/2/3/4 (magias), Z/X/C (itens) | ATIRAR (segurar), MIRAR (alterna), RECARREGAR; os próprios ícones do HUD (magias, cartões de arma, cinto de itens) são os botões |
 
 Um único botão contextual cobre a travessia e o mundo, pela prioridade: mãos na beirada ou na parede → aviso de
 interação → parede ou beirada ao alcance de um pulo (sondas do próprio motor). O modo toque liga no primeiro toque na

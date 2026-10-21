@@ -98,4 +98,17 @@ describe('WeaponController (local prediction)', () => {
     expect(w.reserveFor(1)).toBe(20);
     expect(w.reserve.heavy).toBeLessThanOrEqual(AMMO.heavy.max);
   });
+
+  it('steps the mouse wheel to the next slot holding a weapon, wrapping, and nowhere when it is the only one', () => {
+    const w = new WeaponController(BOT_KIT);
+    expect(w.slot).toBe(0);
+    expect(w.cycleSlot(1)).toBe(1);
+    expect(w.cycleSlot(-1)).toBe(1);
+    w.update(1 / 60, 1000, { ...idle, switchTo: w.cycleSlot(1) }, true);
+    expect(w.slot).toBe(1);
+    expect(w.cycleSlot(1)).toBe(0);
+    const alone = new WeaponController(STARTING_KIT);
+    expect(alone.cycleSlot(1)).toBe(-1);
+    expect(alone.cycleSlot(-1)).toBe(-1);
+  });
 });

@@ -4,8 +4,9 @@
  *   bottom-left   Fôlego bubbles (only under water / catching breath), Escudo / Vida / Mana (+ status chips: LENTO)
  *   bottom-centre ability slots 1 2 3 + Ultimate 4: icon (shape per ability), Mana cost, cooldown sweep
  *   bottom-right  SOCOS card (empty hands, H) and the E / Q weapon slots (rarity mark, magazine · reserve, reload
- *                 progress; "Vazio" until a chest gives a weapon); above them the consumable belt Z / X / C and the
- *                 pickup feed (LootHud)
+ *                 progress; "Vazio" until a chest gives a weapon) with a cursor under the card in hand; above them the
+ *                 consumable belt Z / X / C and the pickup feed (LootHud). A swap (keys or mouse wheel) animates: the
+ *                 card taken rises, the cursor slides, the reticle draws in and the weapon's name passes under it
  *   centre-low    interaction prompt [F], the weapon replacement card, the use bar (LootHud)
  *   centre        reticle per weapon profile (spread, blocked shot), hitmarkers by hit kind, damage direction arcs;
  *                 the stamina wheel to its right while it is not full (climbing, hanging, gliding) with the glide time
@@ -32,6 +33,8 @@ import '../styles/abilities-v2.css';
 import '../styles/traversal.css';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+/** Weapon card swap animations (main.css) → the class each one's end removes (the shine outlasts the rise). */
+const SWAP_ANIMATION_END: Record<string, string> = { 'slot-shine': 'equip', 'slot-holster': 'holster', 'slot-nudge': 'nudge' };
 /** The reticle follows the spread cone at this fraction of its true screen size: it still opens and closes with the
  *  weapon, aiming and bloom, but stays compact (the full cone of the Rajada de Pétalas covered a big slice of the screen). */
 const RETICLE_SCALE = 0.35;
@@ -220,6 +223,13 @@ export class Hud {
   // Weapons.
   private readonly weaponsEl = el('div', 'weapons', this.el);
   private readonly slots: { root: HTMLElement; name: HTMLElement; ammo: HTMLElement; fill: HTMLElement; key: HTMLElement; rarity: HTMLElement; last: string }[] = [];
+  /** Slides under the card in hand; the swap callout under the reticle names the weapon just taken. */
+  private readonly weaponCursor = el('i', 'weapon-cursor', this.weaponsEl);
+  private readonly weaponSwap = el('div', 'weapon-swap', this.el);
+  /** Slot in hand (-1: empty hands), -2 before the first update (nothing animates then). */
+  private shownWeapon = -2;
+  private cursorDirty = true;
+  private cursorPlaced = false;
   private readonly ammoHint = el('div', 'ammo-hint', this.el);
   private reloadKey = keyLabel(DEFAULT_BINDINGS.reload);
 
@@ -304,7 +314,14 @@ export class Hud {
       const track = el('div', 'slot-reload', root);
       const fill = el('i', '', track);
       this.slots.push({ root, name, ammo, fill, key, rarity, last: '' });
+      // A swap animation leaves with its class: a card that once sank must rise the next time it is taken.
+      root.addEventListener('animationend', (e) => {
+        const done = SWAP_ANIMATION_END[e.animationName];
+        if (done) root.classList.remove(done);
+      });
     }
+    // The cards change size with the window (small screens): the cursor finds its card again.
+    window.addEventListener('resize', () => (this.cursorDirty = true));
   }
 
   private bar(kind: string, label: string): { root: HTMLElement; fill: HTMLElement; ghost: HTMLElement; value: HTMLElement } {
@@ -631,10 +648,70 @@ export class Hud {
       }
       v.fill.style.width = i === active && reload >= 0 ? `${reload * 100}%` : '0%';
     });
+    const shown = slots[active] && !slots[active]!.empty ? active : -1;
+    if (shown !== this.shownWeapon) {
+      if (this.shownWeapon !== -2) this.animateSwap(this.shownWeapon, shown, slots[shown]);
+      this.shownWeapon = shown;
+      this.cursorDirty = true;
+    }
+    if (this.cursorDirty) this.placeCursor();
     const a = slots[active];
     const dry = !!a && !a.empty && a.ammo === 0 && reload < 0;
     this.ammoHint.hidden = !(dry || reload >= 0);
     this.ammoHint.textContent = reload >= 0 ? 'RECARREGANDO…' : a && a.reserve <= 0 ? 'SEM MUNIÇÃO · procure caixas de munição' : `SEM MUNIÇÃO · ${this.reloadKey}`;
+  }
+
+  /**
+   * A weapon swap, read at a glance: the card taken rises with a spring and a shine, the one put away sinks, the reticle
+   * draws itself in again and the weapon's name comes in under it from the side of the card taken.
+   */
+  private animateSwap(from: number, to: number, view: WeaponSlotView | undefined): void {
+    const old = this.slots[from]?.root;
+    const card = this.slots[to]?.root;
+    // A swap back in the middle of one cuts it: the opposite motion takes over.
+    old?.classList.remove('equip', 'nudge');
+    card?.classList.remove('holster', 'nudge');
+    if (old) replay(old, 'holster');
+    if (!card || !view) return;
+    replay(card, 'equip');
+    replay(this.center, 'equip');
+    const dx = old ? card.offsetLeft - old.offsetLeft : 0;
+    this.weaponSwap.dataset.from = dx < 0 ? 'right' : dx > 0 ? 'left' : 'below';
+    this.weaponSwap.style.setProperty('--rarity', view.rarity?.color ?? 'var(--sun)');
+    const mark = el('span', 'weapon-swap-rarity', undefined, view.rarity?.symbol ?? '');
+    const name = el('b', '', undefined, view.name);
+    const ammo = el('small', '', undefined, `${view.ammo} / ${view.reserve}`);
+    this.weaponSwap.replaceChildren(mark, name, ammo);
+    replay(this.weaponSwap, 'show');
+  }
+
+  /** The cursor under the card in hand (hidden with empty hands); waits while the HUD is hidden (aboard the UFO). */
+  private placeCursor(): void {
+    const card = this.slots[this.shownWeapon]?.root;
+    this.weaponCursor.classList.toggle('on', !!card);
+    if (!card) {
+      this.cursorDirty = false;
+      return;
+    }
+    if (!card.offsetWidth) return;
+    // The first placement jumps there; later ones slide.
+    if (!this.cursorPlaced) this.weaponCursor.style.transition = 'none';
+    this.weaponCursor.style.width = `${card.offsetWidth}px`;
+    this.weaponCursor.style.transform = `translateX(${card.offsetLeft}px)`;
+    if (!this.cursorPlaced) {
+      void this.weaponCursor.offsetWidth;
+      this.weaponCursor.style.transition = '';
+      this.cursorPlaced = true;
+    }
+    this.cursorDirty = false;
+  }
+
+  /** The wheel turned but no other slot holds a weapon: the card in hand nudges that way and back. */
+  weaponNudge(step: number): void {
+    const card = this.slots[this.shownWeapon]?.root;
+    if (!card) return;
+    card.style.setProperty('--nudge', `${step > 0 ? -8 : 8}px`);
+    replay(card, 'nudge');
   }
 
   /** Ability slots 1–4. The views mirror the server (cooldowns, Mana, wind-up); the HUD never decides. */

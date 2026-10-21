@@ -76,6 +76,19 @@ export class WeaponController {
     return this.reloadEndsAt > 0;
   }
 
+  /**
+   * The slot the wheel steps to: the nearest one holding a weapon `step` (±1) away from the selected slot, wrapping
+   * around the quick bar; -1 when no other slot holds a weapon.
+   */
+  cycleSlot(step: number): number {
+    const n = this.ids.length;
+    for (let k = 1; k < n; k++) {
+      const i = (((this.slot + Math.sign(step) * k) % n) + n) % n;
+      if (this.ids[i]) return i;
+    }
+    return -1;
+  }
+
   /** Reserve rounds for the weapon in `slot` (0 for an empty slot). */
   reserveFor(slot: number): number {
     const id = this.ids[slot];

@@ -272,6 +272,42 @@ body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-u
 .slot.dry .slot-ammo { color: var(--danger); }
 .slot-reload { height: 4px; border-radius: 4px; background: rgba(42, 33, 48, .18); overflow: hidden; margin-top: 3px; }
 .slot-reload > i { display: block; height: 100%; width: 0; background: var(--orange); }
+/* A weapon swap (Hud.animateSwap): the card taken rises on a spring with a shine across it, the one put away sinks,
+   a sun-coloured cursor slides under the card in hand, the reticle draws in again and the weapon's name passes under it. */
+.slot.equip { animation: slot-equip .34s cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes slot-equip { 0% { transform: translateY(4px) scale(.94); } 55% { transform: translateY(-12px) scale(1.06); } 100% { transform: translateY(-6px) scale(1); } }
+.slot.equip::after { content: ''; position: absolute; inset: 0; border-radius: 10px; pointer-events: none;
+  background: linear-gradient(105deg, transparent 32%, rgba(255, 255, 255, .8) 48%, transparent 64%) no-repeat; background-size: 260% 100%;
+  animation: slot-shine .5s ease-out forwards; }
+@keyframes slot-shine { from { background-position: 130% 0; } to { background-position: -40% 0; opacity: 0; } }
+.slot.equip .slot-ammo { animation: slot-ammo-in .3s ease-out; }
+@keyframes slot-ammo-in { from { translate: 0 7px; opacity: .25; } }
+.slot.holster { animation: slot-holster .26s ease-out; }
+@keyframes slot-holster { 0% { transform: translateY(-6px); } 45% { transform: translateY(5px) scale(.96); } 100% { transform: none; } }
+.slot.nudge { animation: slot-nudge .3s ease-out; }
+@keyframes slot-nudge { 30% { translate: var(--nudge, 8px) 0; } 65% { translate: calc(var(--nudge, 8px) * -.35) 0; } }
+.weapon-cursor { position: absolute; left: 0; bottom: -13px; width: 0; height: 6px; border-radius: 4px; background: var(--sun);
+  box-shadow: 0 2px 0 var(--ink); opacity: 0; transition: transform .3s cubic-bezier(.34, 1.56, .64, 1), width .3s, opacity .15s; }
+.weapon-cursor.on { opacity: 1; }
+.reticle-wrap.equip { animation: reticle-equip .24s ease-out; }
+@keyframes reticle-equip { from { scale: .55; opacity: .15; } }
+.weapon-swap { position: absolute; left: 50%; top: calc(50% + 104px); translate: -50% 0; display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 12px 5px; border-radius: 10px; border-left: 5px solid var(--rarity, var(--sun)); background: rgba(42, 33, 48, .6);
+  color: #fff; white-space: nowrap; pointer-events: none; opacity: 0; --from: 0px; }
+.weapon-swap b { font-weight: 900; font-size: 15px; letter-spacing: .06em; text-transform: uppercase; }
+.weapon-swap small { font-weight: 800; font-size: 12px; opacity: .75; }
+.weapon-swap-rarity { color: var(--rarity, var(--sun)); font-size: 13px; }
+.weapon-swap[data-from='left'] { --from: -28px; }
+.weapon-swap[data-from='right'] { --from: 28px; }
+.weapon-swap.show { animation: weapon-swap 1.1s ease-out forwards; }
+@keyframes weapon-swap { 0% { opacity: 0; transform: translateX(var(--from)) scale(.92); } 14% { opacity: 1; transform: none; } 72% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .slot.equip, .slot.equip .slot-ammo, .slot.holster, .slot.nudge, .reticle-wrap.equip { animation: none; }
+  .slot.equip::after { display: none; }
+  .weapon-cursor { transition: opacity .15s; }
+  .weapon-swap.show { animation: weapon-swap-fade 1.1s forwards; }
+  @keyframes weapon-swap-fade { 0%, 100% { opacity: 0; } 10%, 75% { opacity: 1; } }
+}
 
 /* Kill feed, top-right under the room code. */
 .feed { position: absolute; right: 18px; top: 56px; display: grid; gap: 5px; justify-items: end; }
@@ -468,6 +504,8 @@ body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-u
 
 @media (max-width: 980px) {
   .abilities { bottom: 172px; }
+  /* The raised ability bar: the swap callout stays above its key badges. */
+  .weapon-swap { top: min(calc(50% + 92px), calc(100% - 294px)); }
 }
 
 @media (max-width: 720px) {
