@@ -136,7 +136,7 @@ export class SettingsPanel {
     const next = button('→', () => { this.capture = null; this.feedback = ''; this.page++; this.render(); });
     next.setAttribute('aria-label', 'Próxima página de teclas'); next.disabled = this.page + 1 === pages;
     pagination.append(previous, node('span', '', `${this.page + 1} / ${pages}`), next);
-    const feedback = node('p', 'settings-binding-feedback', this.capture ? this.feedback || 'Aguardando uma tecla…' : this.feedback || 'TAB: placar · ESC: opções · ← →: espectador');
+    const feedback = node('p', 'settings-binding-feedback', this.capture ? this.feedback || 'Aguardando uma tecla…' : this.feedback || 'TAB: placar · ESC: opções · RODA DO MOUSE: trocar de arma · ← →: espectador');
     feedback.setAttribute('role', 'status');
     const reset = button('Restaurar teclas', () => {
       this.capture = null; this.state.keyBindings = { ...DEFAULT_BINDINGS }; this.feedback = 'Teclas padrão restauradas.'; this.emit(); this.render();

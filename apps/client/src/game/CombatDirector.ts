@@ -225,7 +225,14 @@ export class CombatDirector {
     const traversal = TRAVERSAL_ACTIONS[app.local.state.traversal];
     if (firePressed && input.locked && this.alive && !traversal.fire) app.hud.notice(`${TRAVERSAL_LABEL[app.local.state.traversal]} · MÃOS OCUPADAS`, 0.9);
     const reloadPressed = input.consume('reload') && traversal.reload;
-    const switchTo = !traversal.switchWeapon ? -1 : input.consume('weapon1') ? 0 : input.consume('weapon2') ? 1 : -1;
+    // The wheel is read every frame (a turn while climbing is dropped, never replayed later).
+    const step = (input.consume('weaponNext') ? 1 : 0) - (input.consume('weaponPrev') ? 1 : 0);
+    let switchTo = !traversal.switchWeapon ? -1 : input.consume('weapon1') ? 0 : input.consume('weapon2') ? 1 : -1;
+    if (switchTo < 0 && step && traversal.switchWeapon && this.alive) {
+      switchTo = this.weapon.cycleSlot(step);
+      // Nothing else in the quick bar: the card nudges toward the wheel instead.
+      if (switchTo < 0) app.hud.weaponNudge(step);
+    }
     const fists = !this.weapon.armed;
     const r = this.weapon.update(
       dt,

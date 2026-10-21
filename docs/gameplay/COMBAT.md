@@ -14,7 +14,10 @@ Player-facing text is Portuguese (pt-BR); ids and code stay in English.
   `shotSeed(player, seq)`) casts the camera ray against the world (Rapier) and players, and requires muzzle line of
   sight to the aimed point (no shooting around corners). Distance falloff per weapon. Rewind / lag compensation is
   deferred.
-- Reload: R, or automatically when the magazine empties. Switch: E / Q with a 220 ms equip delay.
+- Reload: R, or automatically when the magazine empties. Switch: E / Q, or the mouse wheel (down: next slot holding a
+  weapon, wrapping; one notch or one trackpad swipe is one step; with no other weapon the card nudges), with a 220 ms
+  equip delay. The HUD animates the swap: the card taken rises with a shine, the other sinks, a cursor slides under
+  the card in hand, the reticle draws in again and the weapon's name passes under it.
 - `SELF` status (private): weapon, ammo, reload, alive, respawn time and `shotSeq` (last FIRE handled, accepted or
   refused) so the client knows which predicted shots are still in flight.
 

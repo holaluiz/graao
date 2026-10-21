@@ -432,3 +432,69 @@ describe('a page that cannot lock the pointer (free mouse)', () => {
     expect(input.freeMouse).toBe(false);
   });
 });
+
+describe('mouse wheel weapon switching', () => {
+  let keyboard: EventTarget;
+  let documentStub: DocumentStub;
+  let surface: ElementStub;
+  let input: Input;
+
+  beforeEach(() => {
+    keyboard = new EventTarget();
+    documentStub = new DocumentStub();
+    surface = new ElementStub('canvas');
+    vi.stubGlobal('window', keyboard);
+    vi.stubGlobal('document', documentStub);
+    vi.stubGlobal('HTMLElement', ElementStub);
+    input = new Input(surface as unknown as HTMLElement);
+  });
+
+  afterEach(() => {
+    input.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it('steps the weapon once per wheel notch while the game has the controls', () => {
+    function wheel(deltaY: number, deltaMode = 0): void {
+      const event = new Event('wheel');
+      Object.defineProperties(event, { deltaY: { value: deltaY }, deltaMode: { value: deltaMode } });
+      keyboard.dispatchEvent(event);
+    }
+    wheel(100);
+    expect(input.consume('weaponNext')).toBe(false); // menus: the wheel scrolls them, never the weapon
+    documentStub.pointerLockElement = surface;
+    wheel(100);
+    expect(input.consume('weaponNext')).toBe(true);
+    expect(input.consume('weaponNext')).toBe(false);
+    input.wheel(-100, 10_000);
+    expect(input.consume('weaponPrev')).toBe(true);
+    // Two notches 40 ms apart are one step; the next one after the rest is another.
+    input.wheel(100, 20_000);
+    input.wheel(100, 20_040);
+    expect(input.consume('weaponNext')).toBe(true);
+    input.wheel(100, 20_150);
+    expect(input.consume('weaponNext')).toBe(true);
+    // Firefox counts lines: three lines are a notch.
+    input.wheel(3 * 40, 30_000);
+    expect(input.consume('weaponNext')).toBe(true);
+    input.enabled = false;
+    input.wheel(100, 40_000);
+    input.enabled = true;
+    expect(input.consume('weaponNext')).toBe(false);
+  });
+
+  it('takes one step per trackpad swipe, its inertia included', () => {
+    documentStub.pointerLockElement = surface;
+    let steps = 0;
+    // A swipe and its inertia: 4 px every 16 ms for a second, a stream of small deltas.
+    for (let t = 0; t < 1000; t += 16) {
+      input.wheel(4, 50_000 + t);
+      if (input.consume('weaponNext')) steps++;
+    }
+    expect(steps).toBe(1);
+    // A new swipe after a pause takes the next step; the other way is the previous weapon.
+    for (let t = 0; t < 300; t += 16) input.wheel(-4, 52_000 + t);
+    expect(input.consume('weaponPrev')).toBe(true);
+    expect(input.consume('weaponNext')).toBe(false);
+  });
+});
