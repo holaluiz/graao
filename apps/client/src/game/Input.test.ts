@@ -366,6 +366,27 @@ describe('desktop keyboard input', () => {
     expect(input.moveAxis()).toEqual({ x: 0, y: 0 });
     expect(input.isDown('fire')).toBe(false);
   });
+
+  it('touch mode ignores compatibility mouse events and reports engagement without pointer lock', () => {
+    input.setTouchMode(true);
+    const changed = vi.fn(); input.onEngageChange = changed;
+    input.requestLock(); input.requestLock();
+    expect(changed).toHaveBeenCalledTimes(1);
+    input.touchDown('fire'); input.touchDown('aim');
+    for (const button of [0, 2]) {
+      const event = new Event('mouseup'); Object.defineProperty(event, 'button', { value: button });
+      keyboard.dispatchEvent(event);
+    }
+    const move = new Event('mousemove');
+    Object.defineProperties(move, { movementX: { value: 20 }, movementY: { value: 10 }, buttons: { value: 1 } });
+    keyboard.dispatchEvent(move);
+    expect(input.isDown('fire')).toBe(true); expect(input.isDown('aim')).toBe(true);
+    expect(input.mouseDX).toBe(0); expect(input.mouseDY).toBe(0);
+    documentStub.hidden = true; documentStub.dispatchEvent(new Event('visibilitychange'));
+    expect(input.locked).toBe(false);
+    expect(input.isDown('fire')).toBe(false); expect(input.isDown('aim')).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('a page that cannot lock the pointer (free mouse)', () => {

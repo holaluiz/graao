@@ -63,6 +63,7 @@ import { signalingConfigured } from '../net/host/signaling';
 import { dedicatedServer } from '../net/serverTarget';
 import { FPS_CAPS, FrameLimiter, type FpsCap } from './FrameLimiter';
 import { normalizeGameSettings } from './GameSettings';
+import { observeAppViewport } from './Viewport';
 
 export type HudPhase = 'BOOT' | 'MENU' | 'ROOM_BROWSER' | 'ROOM_LOBBY' | 'LOADING' | 'ROOM' | 'CHARACTER_CREATOR' | 'ABILITY_DRAFT' | 'UFO' | 'DROP' | 'MATCH' | 'RESULTS';
 
@@ -184,7 +185,7 @@ export class GraaoApp {
   constructor(canvas: HTMLCanvasElement, private readonly ui: HTMLElement) {
     // Presentation settings live in their own screen; the development quality override remains available.
     const q = new URLSearchParams(location.search).get('quality')?.toUpperCase();
-    const savedSettings = normalizeGameSettings(readStorage<unknown>(STORAGE.settings, {}, (v): v is unknown => !!v && typeof v === 'object'));
+    const savedSettings = normalizeGameSettings(readStorage<unknown>(STORAGE.settings, {}, (v): v is unknown => !!v && typeof v === 'object'), window.matchMedia('(pointer: coarse)').matches);
     const quality = (['LOW', 'MEDIUM', 'HIGH'].includes(q ?? '') ? q : savedSettings.quality) as Quality;
     this.r = new GRARenderer(canvas, quality);
     this.input = new Input(canvas);
@@ -203,7 +204,7 @@ export class GraaoApp {
     this.appearance = migrateAppearance(readStorage<unknown>(STORAGE.appearance, null, (_v): _v is unknown => true)) ?? { ...DEFAULT_APPEARANCE };
     this.name = readStorage<string>(STORAGE.name, '', (v): v is string => typeof v === 'string');
     this.limiter.cap = readStorage<FpsCap>(STORAGE.fpsCap, savedSettings.fpsCap, (v): v is FpsCap => (FPS_CAPS as readonly unknown[]).includes(v));
-    window.addEventListener('resize', () => {
+    observeAppViewport(() => {
       this.r.resize();
       // Resizing clears the canvas: redraw on the next frame even behind a screen that throttles the world.
       this.lastWorldRender = 0;
@@ -374,6 +375,7 @@ export class GraaoApp {
       save: (a) => { this.applyAppearance(a); this.setPhase(this.creatorReturn); this.toast.show('Aparência salva'); },
       discard: (a) => { this.character.setAppearance(a); this.setPhase(this.creatorReturn); },
       resetView: () => { this.creatorYaw = 0; this.creatorZoom = 3.1; },
+      viewDelta: (rotation, zoom) => { this.creatorYaw += rotation; this.creatorZoom = THREE.MathUtils.clamp(this.creatorZoom + zoom, 1.6, 4.6); },
       sound: (cue) => this.audio.play(cue),
     }, new CreatorThumbnails(this.parts, this.anims));
     this.draftUi = new DraftScreen({ pick: (round, id) => this.net?.sendDraftPick(round, id), sound: (cue) => this.audio.play(cue) });
@@ -437,16 +439,16 @@ export class GraaoApp {
     this.input.onEngageChange = () => {
       if (this.phase === 'MATCH') this.updateHint();
     };
-    // The first touch of the screen switches to the touch controls (a mouse never does); `?touch` forces them.
+    // Fullscreen/orientation need a gesture even when coarse-pointer detection already enabled the touch UI.
+    let landscapeRequested = false;
     window.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'touch' && !this.touch.active) {
-        this.touch.enable();
-        // Phones play in landscape: fullscreen and lock it now, inside the gesture.
-        void this.touch.lockLandscape();
+      if (e.pointerType === 'touch') {
+        if (!this.touch.active) this.touch.enable();
+        if (!landscapeRequested) { landscapeRequested = true; void this.touch.lockLandscape(); }
         this.updateHint();
       }
     }, true);
-    if (new URLSearchParams(location.search).has('touch')) this.touch.enable();
+    if (new URLSearchParams(location.search).has('touch') || window.matchMedia('(pointer: coarse)').matches) this.touch.enable();
   }
 
   /**
@@ -492,6 +494,8 @@ export class GraaoApp {
       prompt: this.loot.hud.currentPrompt,
       wallAhead,
       alive: this.combat.alive,
+      deployment: this.deploy.riding ? 'ufo' : this.deploy.diving ? 'drop' : 'combat',
+      swimming: s.swimming,
     };
   }
 

@@ -27,11 +27,13 @@ export function focusScreen(el: HTMLElement): void {
     el.querySelector<HTMLElement>('[data-focus], button:not(:disabled), input, select')?.focus({ preventScroll: true }),
   );
 }
+let nextModalForm = 0;
 export class Modal {
   readonly el = node('div', 'gra-modal');
   readonly card = node('section', 'gra-panel gra-dialog');
   readonly body = node('div', 'gra-dialog-body');
   readonly note = node('p', 'gra-feedback');
+  readonly footer = node('footer', 'gra-dialog-actions');
   private previous: HTMLElement | null = null;
   constructor(
     title: string,
@@ -46,7 +48,7 @@ export class Modal {
       node('h2', '', title),
       button('✕', () => this.hide()),
     );
-    this.card.append(head, this.body, this.note);
+    this.card.append(head, this.body, this.note, this.footer);
     this.el.append(this.card);
     this.el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
@@ -72,6 +74,21 @@ export class Modal {
   }
   show(): void {
     this.previous = document.activeElement as HTMLElement | null;
+    // The main action stays outside a keyboard-constrained scrolling form. Native form association retains
+    // required-field validation and Enter submission even after its submit button moves to the fixed footer.
+    const submit = this.body.querySelector<HTMLButtonElement>('form button[type="submit"]');
+    const form = submit?.closest('form');
+    if (submit && form) {
+      form.id ||= `graao-modal-form-${++nextModalForm}`;
+      submit.setAttribute('form', form.id);
+      this.footer.append(submit);
+    } else {
+      const primary = [...this.body.children].find((child) => child.tagName === 'BUTTON' && child.classList.contains('primary'));
+      if (primary) this.footer.append(primary);
+    }
+    // A transformed menu would make a fixed dialog use that menu as its viewport (cropped on phones).
+    const overlay = document.getElementById('ui');
+    if (overlay && this.el.parentElement !== overlay) overlay.append(this.el);
     this.el.hidden = false;
     focusScreen(this.el);
   }

@@ -12,6 +12,7 @@ import { graaoHostRooms, hostApiConfigured } from '../net/graaoHost/hostSite';
 import { roomDirectory, type DirectoryStatus } from '../net/host/roomDirectory';
 import { httpBase, serverTarget } from '../net/serverTarget';
 import { badge, button, field, focusScreen, Modal, node } from './components';
+import { roomRowsPerPage } from './RoomBrowserLayout';
 import '../styles/graao-host.css';
 export interface CreateRoomSettings {
   roomName: string;
@@ -118,12 +119,15 @@ export class RoomBrowser {
       this.createButton.disabled = true;
       this.codeButton.disabled = true;
     }
-    window.addEventListener('resize', () => {
+    const relayout = () => {
       if (this.visible && this.online) {
         this.renderKey = '';
         this.render();
       }
-    });
+    };
+    window.addEventListener('resize', relayout);
+    window.addEventListener('graao:viewportresize', relayout);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(relayout).observe(this.list);
   }
   get visible(): boolean {
     return !this.el.hidden;
@@ -282,7 +286,9 @@ export class RoomBrowser {
   }
   /** Rows per page from the real height, so the footer actions never leave the screen. */
   private get pageSize(): number {
-    return Math.max(3, Math.min(6, Math.floor((window.innerHeight - 450) / 72)));
+    const style = getComputedStyle(this.list);
+    const height = this.list.clientHeight - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0);
+    return roomRowsPerPage(height, parseFloat(style.getPropertyValue('--room-row-height')) || 76, parseFloat(style.rowGap) || 0);
   }
   private render(): void {
     const all = this.allRooms;
@@ -299,7 +305,7 @@ export class RoomBrowser {
       pages = Math.ceil(all.length / size);
     this.page = Math.max(0, Math.min(this.page, pages - 1));
     const rows = all.slice(this.page * size, (this.page + 1) * size);
-    const key = JSON.stringify(rows) + this.page + this.busy;
+    const key = JSON.stringify(rows) + this.page + this.busy + size;
     if (key === this.renderKey) return;
     this.renderKey = key;
     this.list.replaceChildren();
@@ -349,10 +355,11 @@ export class RoomBrowser {
     dialog.show();
   }
   openCreate(): void {
-    const hostApp = hostApiConfigured();
+    // A phone can host through the browser; the desktop Graao Host installer must not be its default action.
+    const hostApp = hostApiConfigured() && !(this.source === 'hosted' && window.matchMedia('(pointer: coarse)').matches);
     if (this.source === 'none' && !hostApp) return;
     const dialog = new Modal('Criar sala'),
-      form = node('form', 'gra-form'),
+      form = node('form', 'gra-form room-create-form'),
       name = node('input', 'field'),
       visibility = node('select', 'field'),
       bots = node('select', 'field');
@@ -376,7 +383,7 @@ export class RoomBrowser {
     const seats = node('p', 'gra-fine create-seats');
     const updateSeats = () => {
       const n = Number(bots.value);
-      seats.textContent = `Você + ${n} ${n === 1 ? 'bot' : 'bots'} = ${n + 1} de ${MAX_PLAYERS} participantes. Quem entrar ocupa a vaga de um bot até o Draft começar.`;
+      seats.textContent = `Você + ${n} ${n === 1 ? 'bot' : 'bots'}: ${n + 1}/${MAX_PLAYERS} participantes. Quem entrar ocupa a vaga de um bot até o Draft.`;
     };
     bots.addEventListener('change', updateSeats);
     updateSeats();
@@ -448,7 +455,11 @@ export class RoomBrowser {
   }
   setBusy(busy: boolean): void {
     this.busy = busy;
-    for (const e of this.el.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button,input,select')) e.disabled = busy;
+    // Modal.show portals its dialog into #ui so it can fill the viewport instead of a transformed menu.
+    for (const root of [this.el, this.dialog?.el]) {
+      if (!root) continue;
+      for (const e of root.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button,input,select')) e.disabled = busy;
+    }
     if (!busy) {
       if (this.source === 'none' && !hostApiConfigured()) {
         this.createButton.disabled = true;

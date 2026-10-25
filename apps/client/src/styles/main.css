@@ -1,4 +1,8 @@
 :root {
+  --app-width: 100vw;
+  --app-height: 100dvh;
+  --app-left: 0px;
+  --app-top: 0px;
   /* Messenger-style cards: off-white faces, hard slate shadows, dark slate glyphs. */
   --card: #f8f8f8;
   --card-shadow: #647a87;
@@ -22,7 +26,15 @@
 [hidden] { display: none !important; }
 body { font-family: var(--font); color: var(--ink); user-select: none; -webkit-user-select: none; }
 
-#game { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; }
+#game { position: fixed; inset: 0; width: var(--app-width); height: var(--app-height); display: block; outline: none; touch-action: none; }
+#game, #ui, #paper, #vignette, #underwater, #boot { inset: var(--app-top) auto auto var(--app-left) !important; width: var(--app-width); height: var(--app-height); }
+html, body { overscroll-behavior: none; }
+input, select, textarea, button { -webkit-tap-highlight-color: transparent; }
+@media (pointer: coarse) {
+  /* A hover transform may persist after a tap and push the control beyond its safe area. */
+  .btn:hover, .tab:hover, .opt:hover, .ink-btn:hover { transform: rotate(var(--tilt, 0deg)); }
+  input, select, textarea { font-size: 16px; }
+}
 
 /* Fine paper grain over the whole frame: a multiply overlay costs no shader work. */
 #paper {
