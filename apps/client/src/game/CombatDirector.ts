@@ -506,7 +506,7 @@ export class CombatDirector {
       } else {
         if (this.countdownShown > 0) {
           this.countdownShown = 0;
-          hud.banner('LUTEM!', 'O último de pé vence · TAB: placar', 1.2, 'good');
+          hud.banner('LUTEM!', this.app.input.touch ? 'O último de pé vence · segure PLACAR' : 'O último de pé vence · TAB: placar', 1.2, 'good');
           this.app.audio.play('go');
         }
         const standing = this.players.filter((p) => p.inMatch && p.connected).length - this.eliminatedInMatch.size;

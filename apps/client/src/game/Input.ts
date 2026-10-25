@@ -113,6 +113,7 @@ export class Input {
       } else if (e.button === 2) this.held.add('aim');
     });
     on(window, 'mouseup', (e: MouseEvent) => {
+      if (this.touchMode) return; // Compatibility mouse events must not release another finger's fire or aim.
       if (e.button === 0) this.held.delete('fire');
       else if (e.button === 2) this.held.delete('aim');
     });
@@ -123,15 +124,21 @@ export class Input {
       if (this.mouseFree && this.freeEngaged && e.pointerType === 'mouse') target.setPointerCapture?.(e.pointerId);
     });
     on(window, 'mousemove', (e: MouseEvent) => {
-      if (!this.locked || !this.enabled) return;
+      if (!this.locked || !this.enabled || this.touchMode) return;
       // Free mouse: only a drag turns the camera (a free cursor would run into the edge of the window).
       if (this.mouseFree && !(e.buttons & 3)) return;
       this.mouseDX += e.movementX;
       this.mouseDY += e.movementY;
     });
-    on(window, 'blur', () => this.releaseAll());
+    on(window, 'blur', () => {
+      this.releaseAll();
+      if (this.touchMode) this.setTouchEngaged(false);
+    });
     on(document, 'visibilitychange', () => {
-      if (document.hidden) this.releaseAll();
+      if (document.hidden) {
+        this.releaseAll();
+        if (this.touchMode) this.setTouchEngaged(false);
+      }
     });
     on(document, 'pointerlockchange', () => {
       if (!this.locked) this.releaseAll();
@@ -151,6 +158,13 @@ export class Input {
   private setFreeEngaged(on: boolean): void {
     if (on === this.freeEngaged) return;
     this.freeEngaged = on;
+    if (!on) this.releaseAll();
+    this.onEngageChange?.();
+  }
+
+  private setTouchEngaged(on: boolean): void {
+    if (on === this.touchEngaged) return;
+    this.touchEngaged = on;
     if (!on) this.releaseAll();
     this.onEngageChange?.();
   }
@@ -297,6 +311,7 @@ export class Input {
   set scoreboardEnabled(enabled: boolean) {
     this.allowScoreboard = enabled;
     if (!enabled) {
+      this.touchUp('scoreboard');
       this.releaseCode('Tab');
       this.held.delete('scoreboard');
       this.pressed.delete('scoreboard');
@@ -309,7 +324,7 @@ export class Input {
 
   requestLock(): void {
     if (this.touchMode) {
-      this.touchEngaged = true;
+      this.setTouchEngaged(true);
       return;
     }
     if (this.mouseFree || typeof this.target.requestPointerLock !== 'function') {
@@ -331,8 +346,7 @@ export class Input {
 
   exitLock(): void {
     if (this.touchMode) {
-      this.touchEngaged = false;
-      this.releaseAll();
+      this.setTouchEngaged(false);
       return;
     }
     if (this.mouseFree) {

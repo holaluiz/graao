@@ -1,6 +1,6 @@
 /* Touch controls (apps/client/src/game/TouchControls.ts): stick on the left, camera drag elsewhere, buttons on the right. */
 .touch { position: absolute; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none;
-  --touch-face: rgba(255, 246, 228, .16); --touch-line: rgba(255, 246, 228, .72); --touch-ink: #fff6e4; --touch-on: rgba(242, 193, 78, .42); }
+  --touch-face: rgba(42, 33, 48, .58); --touch-line: rgba(255, 246, 228, .9); --touch-ink: #fff6e4; --touch-on: rgba(242, 193, 78, .9); }
 /* Direct children of #ui are interactive by default (main.css); the layer itself only frames its zones and buttons. */
 #ui > .touch { pointer-events: none; }
 .touch[hidden] { display: none; }
@@ -16,7 +16,7 @@
 .touch-btn { position: absolute; pointer-events: auto; touch-action: none; border-radius: 50%; border: 2px solid var(--touch-line);
   background: var(--touch-face); color: var(--touch-ink); font: 800 11px/1 'Nunito', system-ui, sans-serif; letter-spacing: .04em;
   text-shadow: 0 1px 2px rgba(30, 20, 30, .7); display: grid; place-items: center; padding: 0; -webkit-tap-highlight-color: transparent; }
-.touch-btn.down, .touch-btn.on { background: var(--touch-on); }
+.touch-btn.down, .touch-btn.on { background: var(--touch-on); color: #2a2130; text-shadow: none; }
 .touch-fire { right: 0; bottom: 64px; width: 84px; height: 84px; font-size: 12px; }
 .touch-jump { right: 92px; bottom: 0; width: 74px; height: 74px; }
 .touch-jump.glide { border-color: #9fe3ef; color: #dff7fb; }
@@ -26,25 +26,90 @@
 .touch-reload { right: 176px; bottom: 6px; width: 54px; height: 54px; font-size: 8px; }
 .touch-menu { left: calc(14px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); width: 44px; height: 44px;
   border-radius: 12px; font-size: 20px; }
+.touch-scoreboard { left: calc(68px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); width: 72px; height: 44px;
+  border-radius: 12px; font-size: 10px; }
+.touch-scoreboard[hidden] { display: none; }
+.touch-swap { right: 176px; bottom: 74px; width: 54px; height: 54px; font-size: 9px; }
+.touch-dive { display: none; right: 176px; bottom: 6px; width: 58px; height: 58px; font-size: 8px; }
+.touch.swimming .touch-dive { display: grid; }
+.touch.swimming :is(.touch-fire, .touch-aim, .touch-reload, .touch-swap) { display: none; }
+.touch[data-deployment='ufo'] :is(.touch-fire, .touch-aim, .touch-reload, .touch-swap, .touch-dive),
+.touch[data-deployment='drop'] :is(.touch-fire, .touch-aim, .touch-reload, .touch-swap, .touch-dive) { display: none; }
 .touch.dead .touch-pad, .touch.dead .touch-stick-zone { display: none; }
 
 /* The HUD laid out for thumbs: its ability slots, weapon cards and item belt are the buttons (TouchControls.bindHud). */
 body.touch-ui .ab-slot, body.touch-ui .weapons .slot, body.touch-ui .belt-slot { pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; }
-body.touch-ui .abilities { left: auto; right: calc(12px + env(safe-area-inset-right)); top: calc(10px + env(safe-area-inset-top)); bottom: auto;
-  transform: scale(.78); transform-origin: right top; }
-body.touch-ui .weapons { right: auto; left: 50%; bottom: calc(6px + env(safe-area-inset-bottom)); transform: translateX(-50%) scale(.66); transform-origin: center bottom; }
-body.touch-ui .loot-belt { right: auto; left: calc(68px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); bottom: auto;
-  transform: scale(.82); transform-origin: left top; }
-body.touch-ui .hud .hint { bottom: auto; top: 96px; }
-body.touch-ui .vitals { width: min(190px, 46vw); bottom: calc(250px + env(safe-area-inset-bottom)); }
-@media (max-height: 420px) {
-  .touch-pad { transform: scale(.88); transform-origin: right bottom; }
+body.touch-ui .abilities { left: auto; right: calc(12px + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); bottom: auto; transform: none; gap: 10px; }
+body.touch-ui .ab-slot { width: 48px; height: 48px; }
+body.touch-ui .ab-slot.ult { width: 54px; height: 54px; }
+body.touch-ui .ab-icon { width: 30px; height: 30px; }
+body.touch-ui .ab-slot.ult .ab-icon { width: 34px; height: 34px; }
+body.touch-ui .ab-name { font-size: 8px; max-width: 68px; }
+body.touch-ui .ab-slot[data-kind='passive'] { cursor: default; }
+body.touch-ui .weapons { right: auto; left: 50%; bottom: calc(8px + env(safe-area-inset-bottom)); transform: translateX(-50%); gap: 8px; }
+body.touch-ui .weapons .slot { width: 106px; min-height: 52px; padding: 6px 7px; }
+body.touch-ui .slot-name { font-size: 10px; }
+body.touch-ui .slot-ammo { font-size: 17px; }
+body.touch-ui .slot-key { font-size: 10px; }
+body.touch-ui .loot-belt { right: auto; left: calc(50% - 16px); top: auto; bottom: calc(80px + env(safe-area-inset-bottom)); transform: translateX(-50%); gap: 6px; }
+body.touch-ui .belt-slot { min-width: 48px; min-height: 44px; padding: 4px; }
+body.touch-ui .belt-key { display: none; }
+body.touch-ui .hud .hint { bottom: auto; top: 86px; font-size: 10px; }
+body.touch-ui .hud .room { top: calc(83px + env(safe-area-inset-top)); font-size: 9px; padding: 3px 7px; }
+body.touch-ui .status-chip { top: calc(96px + env(safe-area-inset-top)); font-size: 10px; padding: 4px 8px; }
+body.touch-ui .vitals { left: calc(12px + env(safe-area-inset-left)); top: calc(70px + env(safe-area-inset-top)); bottom: auto; width: 166px; gap: 3px; }
+body.touch-ui .vbar { grid-template-columns: 48px 1fr 26px; gap: 4px; }
+body.touch-ui .vbar-label { font-size: 9px; letter-spacing: .03em; }
+body.touch-ui .vbar-value { font-size: 12px; }
+body.touch-ui .vbar-track { height: 10px; }
+body.touch-ui .prog { grid-template-columns: 1fr auto; gap: 4px; }
+body.touch-ui :is(.prog-track, .prog-xp) { display: none; }
+body.touch-ui .prog-level { font-size: 8px; padding-inline: 4px; }
+body.touch-ui .prog-points { grid-area: 1 / 2; min-height: 44px; max-width: 96px; font-size: 8px; padding: 4px; }
+body.touch-ui .torm-col { left: calc(214px + env(safe-area-inset-left)); top: calc(10px + env(safe-area-inset-top)); gap: 5px; justify-items: start; }
+body.touch-ui .tormenta { width: 130px; padding: 4px 6px; gap: 1px; }
+body.touch-ui .torm-title { font-size: 9px; letter-spacing: .03em; }
+body.touch-ui .torm-icon { width: 16px; height: 16px; }
+body.touch-ui .torm-state { font-size: 9px; }
+body.touch-ui .torm-time { font-size: 16px; }
+body.touch-ui .torm-rate { font-size: 8px; }
+body.touch-ui .torm-map-disc { width: 64px; height: 64px; }
+body.touch-ui .torm-map-me { top: 32px; width: 16px; height: 16px; }
+body.touch-ui .torm-map-legend { font-size: 8px; gap: 4px; }
+body.touch-ui .torm-out { top: calc(122px + env(safe-area-inset-top)); padding: 4px 7px; gap: 4px; }
+body.touch-ui .torm-arrow { width: 24px; height: 24px; }
+body.touch-ui .torm-out-title { font-size: 10px; }
+body.touch-ui .torm-out-line { font-size: 9px; }
+body.touch-ui .feed { top: calc(116px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); }
+body.touch-ui .feed-row { font-size: 10px; padding: 3px 6px; }
+@media (max-width: 640px) {
+  body.touch-ui .abilities { gap: 8px; }
+  body.touch-ui .ab-slot { width: 44px; height: 44px; }
+  body.touch-ui .ab-slot.ult { width: 50px; height: 50px; }
+  body.touch-ui .weapons .slot { width: 92px; }
+  body.touch-ui .loot-belt { left: calc(45% - 16px); }
+}
+@media (max-height: 340px) {
+  .touch-pad { width: 212px; height: 178px; right: calc(12px + env(safe-area-inset-right)); bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .touch-fire { width: 68px; height: 68px; bottom: 48px; }
+  .touch-jump { width: 60px; height: 60px; right: 78px; }
+  .touch-action { width: 60px; height: 60px; right: 78px; bottom: 72px; }
+  .touch-aim { width: 44px; height: 44px; right: 4px; bottom: 124px; }
+  .touch-reload, .touch-dive { width: 48px; height: 48px; right: 148px; bottom: 2px; }
+  .touch-swap { width: 48px; height: 48px; right: 148px; bottom: 62px; }
+  body.touch-ui .status-chip { left: calc(150px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); transform: none; width: 54px; min-height: 44px; white-space: normal; text-align: center; font-size: 9px; line-height: 1.1; padding: 4px; }
+  body.touch-ui .torm-out { left: calc(214px + env(safe-area-inset-left)); top: calc(86px + env(safe-area-inset-top)); transform: none; width: 130px; white-space: normal; }
+  body.touch-ui .torm-out-title { font-size: 9px; letter-spacing: 0; }
+  body.touch-ui .torm-out-line { font-size: 8px; }
+}
+@media (max-height: 340px) and (max-width: 640px) {
+  .touch-reload, .touch-dive, .touch-swap { right: 138px; }
+  body.touch-ui .weapons .slot { width: 80px; }
 }
 
 /* Phones play in landscape (TouchControls.lockLandscape): in portrait on a touch screen this card covers everything. */
-.rotate-hint { display: none; position: fixed; inset: 0; z-index: 1000; place-items: center; padding: 24px; background: #f3e9d8;
+.rotate-hint { display: none; position: fixed; inset: var(--app-top, 0px) auto auto var(--app-left, 0px); width: var(--app-width, 100vw); height: var(--app-height, 100dvh); z-index: 1000; place-items: center; padding: 24px; background: #f3e9d8;
   color: #2a2130; touch-action: none; text-align: center; font-family: 'Nunito', system-ui, sans-serif; }
-@media (orientation: portrait) and (pointer: coarse) { .rotate-hint { display: grid; } }
 @media (orientation: portrait) { body.touch-ui .rotate-hint { display: grid; } }
 .rotate-card { display: grid; justify-items: center; gap: 10px; max-width: 280px; }
 .rotate-phone { width: 46px; height: 78px; border: 4px solid #2a2130; border-radius: 10px; margin-bottom: 14px;

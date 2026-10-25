@@ -32,3 +32,32 @@
   .settings-panel .settings-binding-feedback { min-height: 27px; }
   .settings-panel[data-section='Teclas'] .settings-content { gap: 6px; }
 }
+
+.settings-panel .settings-slider { min-height: 36px; touch-action: pan-x; }
+.settings-panel .gra-field > input[type='checkbox'] { min-width: 28px; min-height: 28px; }
+.settings-panel { padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); }
+@media (max-height: 450px) and (min-width: 560px) {
+  .settings-panel .gra-dialog { width: min(760px, 100%); max-height: 100%; padding: 10px 12px; gap: 6px; }
+  .settings-panel .gra-heading h2 { font-size: 18px; }
+  .settings-panel .gra-dialog > .gra-heading .gra-button { min-height: 32px; padding: 3px 10px; }
+  .settings-panel .gra-dialog-body { grid-template-columns: 106px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); align-items: start; gap: 6px 12px; overflow: hidden; padding-bottom: 0; }
+  .settings-panel .gra-tabs { grid-column: 1; grid-row: 1; display: grid; grid-template-columns: 1fr; align-content: start; gap: 4px; }
+  .settings-panel .gra-tabs .gra-button { min-height: 32px; padding: 5px; font-size: 11px; }
+  .settings-panel .settings-content { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; gap: 7px 12px; }
+  .settings-panel .gra-dialog-actions > .gra-button { padding: 6px; min-height: 40px; }
+  .settings-panel .gra-field { gap: 3px; font-size: 10px; }
+  .settings-panel .field { min-height: 36px; padding: 5px 7px; font-size: 12px; }
+  .settings-panel .settings-range { gap: 4px; }
+  .settings-panel .settings-value { flex-basis: 42px; font-size: 10px; }
+  .settings-panel .settings-help { grid-column: 1 / -1; font-size: 9px; }
+  .settings-panel[data-section='Controles'] .settings-help { display: none; }
+  .settings-panel[data-section='Teclas'] .settings-content { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; }
+  .settings-panel[data-section='Teclas'] .settings-help { display: none; }
+  .settings-panel .settings-binding-feedback { display: block; grid-column: 1 / -1; min-height: 0; font-size: 9px; }
+  .settings-panel .settings-bindings { grid-column: 1; grid-row: 1 / 3; gap: 5px; }
+  .settings-panel .settings-binding { font-size: 10px; }
+  .settings-panel .settings-binding .gra-button { min-width: 90px; padding: 5px; min-height: 30px; }
+  .settings-panel .settings-binding-pages { grid-column: 2; gap: 5px; }
+  .settings-panel .settings-binding-pages .gra-button { min-width: 32px; min-height: 32px; padding: 5px; }
+  .settings-panel[data-section='Teclas'] .settings-content > .gra-button { grid-column: 2; font-size: 10px; padding: 5px; }
+}

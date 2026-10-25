@@ -14,8 +14,8 @@
  * - ☰ opens the options (the ESC menu).
  *
  * The game is played in landscape on a phone: the first touch asks for fullscreen and locks the orientation to
- * landscape where the browser allows it (Android); in portrait on a touch screen a full-screen "gire o celular" card
- * covers everything (touch.css) until the phone is turned, with a button that tries the lock again.
+ * landscape where the browser allows it (Android). Mobile menus and matches require landscape; browsers that cannot
+ * lock orientation show the turn-device card until the player turns the phone themselves.
  */
 import { TRAVERSAL, TraversalMode } from '@graao/game-data';
 import type { Action, Input } from './Input';
@@ -34,11 +34,14 @@ export interface TouchContext {
   /** A climbable face, or an edge within a jump's reach, in front of the character (on foot). */
   wallAhead: 'climb' | 'ledge' | null;
   alive: boolean;
+  deployment?: 'combat' | 'ufo' | 'drop';
+  swimming?: boolean;
 }
 
 /** The contextual button for this moment (null: hidden), by priority: the wall or ledge the hands are on, the world, the wall ahead. */
 export function touchAction(c: TouchContext): { label: string; kind: TouchActionKind } | null {
   if (!c.alive) return null;
+  if (c.deployment && c.deployment !== 'combat') return null;
   if (c.traversal === TraversalMode.HANG) return { label: 'SUBIR', kind: 'mantle' };
   if (c.traversal === TraversalMode.CLIMB) return { label: 'SOLTAR', kind: 'drop' };
   if (c.traversal !== TraversalMode.NONE) return null;
@@ -49,6 +52,9 @@ export function touchAction(c: TouchContext): { label: string; kind: TouchAction
 
 /** The jump button's label: what holding it does now. */
 export function jumpLabel(c: TouchContext): string {
+  if (c.deployment === 'ufo') return 'SALTAR';
+  if (c.deployment === 'drop') return 'MERGULHAR';
+  if (c.swimming) return 'SUBIR';
   if (c.traversal === TraversalMode.GLIDE) return 'PLANANDO';
   if (!c.grounded && c.traversal === TraversalMode.NONE && c.canGlide) return 'PLANAR';
   return 'PULAR';
@@ -92,6 +98,7 @@ export class TouchControls {
   private readonly jump: HTMLButtonElement;
   private readonly action: HTMLButtonElement;
   private readonly aim: HTMLButtonElement;
+  private readonly scoreboard: HTMLButtonElement;
   private enabled = false;
   private stickId = -1;
   private stickOrigin = { x: 0, y: 0 };
@@ -104,6 +111,8 @@ export class TouchControls {
   private pushFor = 0;
   /** Buttons tapped (pressed then let go a moment later), with the time left (s). */
   private readonly taps = new Map<Action, number>();
+  private readonly buttons = new Map<HTMLButtonElement, { pointerId: number; release?: () => void }>();
+  private readonly releaseListeners = new AbortController();
   /** Portrait on a touch screen: "turn the phone" (shown by CSS, over everything). */
   private readonly rotate = el('div', 'rotate-hint');
 
@@ -113,23 +122,35 @@ export class TouchControls {
     const menu = this.button('touch-menu', '☰', () => this.hooks.pause());
     menu.setAttribute('aria-label', 'Opções');
     this.root.append(menu);
-    this.jump = this.hold('touch-jump', 'PULAR', 'jump');
+    this.scoreboard = this.hold('touch-scoreboard', 'PLACAR', 'scoreboard');
+    this.scoreboard.setAttribute('aria-label', 'Segure para ver o placar');
+    this.root.append(this.scoreboard);
+    this.jump = this.hold('touch-jump', 'PULAR', () => this.context.deployment === 'drop' ? 'sprint' : 'jump');
     this.action = this.button('touch-action', '', () => this.onAction());
     this.action.hidden = true;
     this.pad.append(this.hold('touch-fire', 'ATIRAR', 'fire'), this.jump, this.action);
     this.aim = this.button('touch-aim', 'MIRAR', () => this.toggleAim());
-    this.pad.append(this.aim, this.button('touch-reload', 'RECARREGAR', () => this.tap('reload')));
+    this.pad.append(this.aim, this.button('touch-reload', 'RECARREGAR', () => this.tap('reload')),
+      this.button('touch-swap', 'TROCAR', () => this.tap('weaponNext')),
+      this.hold('touch-dive', 'MERGULHAR', 'sprint'));
     this.bindStick();
     this.bindLook();
     this.bindHud();
     const card = el('div', 'rotate-card', this.rotate);
     el('div', 'rotate-phone', card);
-    el('p', 'rotate-title', card, 'Gire o celular');
-    el('p', 'rotate-note', card, 'O graao é jogado na horizontal.');
-    const again = el('button', 'rotate-btn', card, 'Tela cheia na horizontal');
+    el('p', 'rotate-title', card, 'Gire o celular para jogar');
+    el('p', 'rotate-note', card, 'Use o aparelho na horizontal. A tela cheia está disponível nos navegadores compatíveis.');
+    const again = el('button', 'rotate-btn', card, 'Ativar tela cheia');
     again.type = 'button';
     again.addEventListener('click', () => void this.lockLandscape());
     document.body.append(this.rotate);
+    // A lost pointer/focus must not leave a finger ID or toggle latched after returning to the game.
+    const signal = this.releaseListeners.signal;
+    window.addEventListener('blur', () => this.releaseAll(), { signal });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.releaseAll(); }, { signal });
+    window.addEventListener('resize', () => {
+      if (window.matchMedia('(orientation: portrait)').matches) { this.releaseAll(); this.input.exitLock(); }
+    }, { signal });
   }
 
   /**
@@ -143,7 +164,7 @@ export class TouchControls {
       // No fullscreen here (iPhone, an iframe without permission): the rotate card asks instead.
     }
     try {
-      await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.('landscape');
+      await (screen.orientation as (ScreenOrientation & { lock?: (o: string) => Promise<void> }) | undefined)?.lock?.('landscape');
     } catch {
       // No orientation lock outside fullscreen or on this browser.
     }
@@ -164,6 +185,7 @@ export class TouchControls {
   /** Shown during the match (not under a menu); hiding lets go of everything it held. */
   show(on: boolean): void {
     const visible = this.enabled && on;
+    document.body.classList.toggle('touch-playing', visible);
     if (this.root.hidden === !visible) return;
     this.root.hidden = !visible;
     if (!visible) this.releaseAll();
@@ -172,7 +194,11 @@ export class TouchControls {
   /** Per frame: labels from the local state, taps let go, the push after ESCALAR. */
   update(dt: number, context: TouchContext): void {
     if (!this.enabled || this.root.hidden) return;
+    if ((this.context.alive && !context.alive) || (this.context.deployment ?? 'combat') !== (context.deployment ?? 'combat')) this.releaseAll();
     this.context = context;
+    this.root.dataset.deployment = context.deployment ?? 'combat';
+    this.root.classList.toggle('swimming', !!context.swimming);
+    this.scoreboard.hidden = !this.input.scoreboardEnabled;
     for (const [a, left] of this.taps) {
       if (left - dt <= 0) {
         this.taps.delete(a);
@@ -191,6 +217,10 @@ export class TouchControls {
     if (this.jump.textContent !== jl) this.jump.textContent = jl;
     this.jump.classList.toggle('glide', jl !== 'PULAR');
     this.root.classList.toggle('dead', !context.alive);
+    // Also clear a toggle whose input was released by a focus change outside this layer.
+    if (this.aiming && !this.input.isTouchHeld('aim')) {
+      this.aiming = false; this.aim.classList.remove('on');
+    }
   }
 
   private onAction(): void {
@@ -224,9 +254,13 @@ export class TouchControls {
   }
 
   private releaseAll(): void {
+    for (const [button, held] of this.buttons) {
+      held.release?.(); button.classList.remove('down');
+    }
+    this.buttons.clear();
     for (const a of this.taps.keys()) this.input.touchUp(a);
     this.taps.clear();
-    for (const a of ['jump', 'fire', 'aim', 'sprint'] as const) this.input.touchUp(a);
+    for (const a of ['jump', 'fire', 'aim', 'sprint', 'scoreboard'] as const) this.input.touchUp(a);
     this.aiming = false;
     this.aim.classList.remove('on');
     this.stickId = -1;
@@ -236,32 +270,38 @@ export class TouchControls {
     this.stickBase.classList.remove('on');
   }
 
-  private button(cls: string, label: string, onPress: () => void): HTMLButtonElement {
+  private button(cls: string, label: string, onPress: () => void, onRelease?: () => void): HTMLButtonElement {
     const b = el('button', `touch-btn ${cls}`, undefined, label);
     b.type = 'button';
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (!this.enabled || this.root.hidden || !this.input.enabled || b.disabled || this.buttons.has(b)) return;
+      this.buttons.set(b, { pointerId: e.pointerId, release: onRelease });
+      capture(b, e.pointerId);
       this.input.requestLock();
       onPress();
       b.classList.add('down');
     });
-    const up = () => b.classList.remove('down');
+    const up = (e: PointerEvent) => {
+      const held = this.buttons.get(b);
+      if (!held || held.pointerId !== e.pointerId) return;
+      this.buttons.delete(b); held.release?.(); b.classList.remove('down');
+    };
     b.addEventListener('pointerup', up);
     b.addEventListener('pointercancel', up);
+    b.addEventListener('lostpointercapture', up);
     b.addEventListener('contextmenu', (e) => e.preventDefault());
     return b;
   }
 
   /** A button held for as long as the finger stays on it. */
-  private hold(cls: string, label: string, action: Action): HTMLButtonElement {
-    const b = this.button(cls, label, () => this.input.touchDown(action));
-    const release = () => this.input.touchUp(action);
-    b.addEventListener('pointerup', release);
-    b.addEventListener('pointercancel', release);
-    b.addEventListener('lostpointercapture', release);
-    b.addEventListener('pointerdown', (e) => capture(b, e.pointerId));
-    return b;
+  private hold(cls: string, label: string, action: Action | (() => Action)): HTMLButtonElement {
+    let held: Action | null = null;
+    return this.button(cls, label, () => {
+      held = typeof action === 'function' ? action() : action;
+      this.input.touchDown(held);
+    }, () => { if (held) this.input.touchUp(held); held = null; });
   }
 
   /**
@@ -279,6 +319,7 @@ export class TouchControls {
       for (const [sel, actions] of groups) {
         const hit = e.target.closest(sel);
         if (!hit) continue;
+        if ((hit as HTMLElement).dataset.kind === 'passive' || (hit as HTMLElement).dataset.state === 'disabled') return;
         const action = actions[[...this.mount.querySelectorAll(sel)].indexOf(hit)];
         if (!action) return;
         e.preventDefault();
@@ -286,7 +327,7 @@ export class TouchControls {
         this.tap(action);
         return;
       }
-    });
+    }, { signal: this.releaseListeners.signal });
   }
 
   private bindStick(): void {
@@ -316,6 +357,7 @@ export class TouchControls {
     };
     zone.addEventListener('pointerup', end);
     zone.addEventListener('pointercancel', end);
+    zone.addEventListener('lostpointercapture', end);
   }
 
   private moveStick(x: number, y: number): void {
@@ -351,6 +393,14 @@ export class TouchControls {
     };
     this.look.addEventListener('pointerup', end);
     this.look.addEventListener('pointercancel', end);
+    this.look.addEventListener('lostpointercapture', end);
+  }
+
+  dispose(): void {
+    this.releaseAll(); this.releaseListeners.abort(); this.enabled = false;
+    this.input.setTouchMode(false);
+    this.root.remove(); this.rotate.remove();
+    document.body.classList.remove('touch-ui', 'touch-playing');
   }
 }
 

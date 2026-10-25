@@ -474,7 +474,7 @@ export class DeployDirector {
       hud.setDeploy({
         title: asked ? 'SALTANDO…' : 'SALTE QUANDO QUISER',
         line: `Salto automático em ${Math.ceil(left / 1000)} s · escolha onde cair no planeta`,
-        key: keyLabel(this.app.input.keyFor('jump')),
+        key: this.app.input.touch ? 'TOQUE' : keyLabel(this.app.input.keyFor('jump')),
         keyLabel: 'SALTAR',
         progress: left / Math.max(1, r.close - r.open),
         tone: left < 4000 ? 'urgent' : 'relevant',
@@ -482,7 +482,9 @@ export class DeployDirector {
     } else if (this.mode === 'dive') {
       const steerKeys = (['forward', 'left', 'back', 'right'] as const).map((action) => keyLabel(this.app.input.keyFor(action))).join('/');
       const diveKey = keyLabel(this.app.input.keyFor('sprint'));
-      hud.setDeploy({ title: 'QUEDA', line: `${Math.round(this.groundDist)} m · ${steerKeys} planar · ${diveKey} mergulho rápido`, altitude: this.groundDist, tone: 'quiet' });
+      hud.setDeploy({ title: 'QUEDA', line: this.app.input.touch
+        ? `${Math.round(this.groundDist)} m · joystick para planar · segure MERGULHAR`
+        : `${Math.round(this.groundDist)} m · ${steerKeys} planar · ${diveKey} mergulho rápido`, altitude: this.groundDist, tone: 'quiet' });
     } else if (this.mode === 'landed') {
       const waiting = aboard + falling;
       hud.setDeploy(

@@ -24,12 +24,30 @@ export interface CreatorActions {
   /** Restores the appearance present when the workshop opened and returns to its origin. */
   discard: (appearance: CharacterAppearance) => void;
   resetView: () => void;
+  /** Rotation in radians and a change in camera distance, from dragging/pinching the preview or zoom buttons. */
+  viewDelta?: (rotation: number, zoom: number) => void;
   sound?: (cue: 'ui.click' | 'ui.swap') => void;
 }
 
 export interface CreatorThumbnailSource {
   request(key: keyof CharacterAppearance, id: string, appearance: CharacterAppearance, signal?: AbortSignal): Promise<string>;
   setActive(on: boolean): void;
+}
+
+export function creatorGestureDelta(before: readonly { x: number; y: number }[], after: readonly { x: number; y: number }[]): { rotation: number; zoom: number } {
+  if (before.length !== after.length || !after.length) return { rotation: 0, zoom: 0 };
+  if (after.length === 1) return { rotation: (after[0]!.x - before[0]!.x) * .012, zoom: 0 };
+  const span = (points: readonly { x: number; y: number }[]) => Math.hypot(points[0]!.x - points[1]!.x, points[0]!.y - points[1]!.y);
+  const previous = span(before), next = span(after);
+  return { rotation: 0, zoom: previous > 4 && next > 4 ? Math.max(-.5, Math.min(.5, -Math.log(next / previous) * 2)) : 0 };
+}
+
+/** Six large swatches fit even the narrow portrait panel; every color remains available through explicit pages. */
+export function creatorPalettePage<T>(colors: readonly T[], page: number, compact: boolean): { colors: T[]; page: number; pages: number } {
+  const size = compact ? 6 : Math.max(1, colors.length);
+  const pages = Math.max(1, Math.ceil(colors.length / size));
+  const current = Math.max(0, Math.min(pages - 1, Math.floor(page)));
+  return { colors: colors.slice(current * size, (current + 1) * size), page: current, pages };
 }
 
 export class Creator {
@@ -48,6 +66,9 @@ export class Creator {
   private readonly status = document.createElement('p');
   private readonly media = window.matchMedia('(max-width: 760px), (max-height: 640px)');
   private readonly mobile = window.matchMedia('(max-width: 760px)');
+  private readonly compact = window.matchMedia('(max-width: 760px), (max-height: 450px)');
+  private panelMode: 'pieces' | 'colors' = 'pieces';
+  private colorPage = 0;
   private thumbnailRequest: AbortController | null = null;
 
   constructor(appearance: CharacterAppearance, private readonly actions: CreatorActions, private readonly thumbnails: CreatorThumbnailSource) {
@@ -77,7 +98,7 @@ export class Creator {
     this.tabs.className = 'creator-categories';
     this.tabs.setAttribute('aria-label', 'Categorias de aparência');
     this.tabs.setAttribute('role', 'tablist');
-    this.tabs.setAttribute('aria-orientation', this.mobile.matches ? 'horizontal' : 'vertical');
+    this.tabs.setAttribute('aria-orientation', this.compact.matches ? 'horizontal' : 'vertical');
     this.previewSurface.className = 'creator-preview';
     this.previewSurface.setAttribute('aria-label', 'Prévia 3D do personagem');
     this.avatarSpace.className = 'creator-avatar-space';
@@ -86,9 +107,14 @@ export class Creator {
     controls.className = 'creator-view-controls';
     controls.append(this.button('Visão frontal', () => this.actions.resetView(), 'creator-tool', 'rotate'));
     const hint = document.createElement('p');
-    hint.textContent = 'Arraste para girar · role para aproximar';
-    controls.append(hint);
+    hint.textContent = 'Arraste para girar · dois dedos ou + / − para aproximar';
+    const farther = this.button('−', () => this.actions.viewDelta?.(0, .3), 'creator-tool creator-zoom');
+    farther.setAttribute('aria-label', 'Afastar personagem');
+    const closer = this.button('+', () => this.actions.viewDelta?.(0, -.3), 'creator-tool creator-zoom');
+    closer.setAttribute('aria-label', 'Aproximar personagem');
+    controls.append(farther, closer, hint);
     this.previewSurface.append(this.avatarSpace, controls);
+    this.bindPreviewGestures();
     this.opts.className = 'creator-options';
     this.opts.id = 'creator-options';
     this.opts.setAttribute('role', 'tabpanel');
@@ -105,11 +131,42 @@ export class Creator {
     foot.append(this.status, buttons);
     this.el.append(header, this.tabs, this.previewSurface, this.opts, foot);
     this.media.addEventListener('change', () => { this.revealSelectedPage(); this.renderOptions(); });
+    this.compact.addEventListener('change', () => {
+      this.tabs.setAttribute('aria-orientation', this.compact.matches ? 'horizontal' : 'vertical');
+      this.colorPage = 0; this.renderOptions();
+    });
     this.mobile.addEventListener('change', () => {
-      this.tabs.setAttribute('aria-orientation', this.mobile.matches ? 'horizontal' : 'vertical');
+      this.tabs.setAttribute('aria-orientation', this.compact.matches ? 'horizontal' : 'vertical');
     });
     this.renderTabs();
     this.renderOptions();
+  }
+
+  private bindPreviewGestures(): void {
+    const points = new Map<number, { x: number; y: number }>();
+    const snapshot = () => [...points.values()].slice(0, 2).map((point) => ({ ...point }));
+    this.avatarSpace.addEventListener('pointerdown', (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      event.preventDefault();
+      points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      try { this.avatarSpace.setPointerCapture(event.pointerId); } catch { /* A cancelled pointer needs no capture. */ }
+    });
+    this.avatarSpace.addEventListener('pointermove', (event) => {
+      if (!points.has(event.pointerId)) return;
+      event.preventDefault();
+      const before = snapshot();
+      points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const delta = creatorGestureDelta(before, snapshot());
+      if (delta.rotation || delta.zoom) this.actions.viewDelta?.(delta.rotation, delta.zoom);
+    });
+    const release = (event: PointerEvent) => { points.delete(event.pointerId); };
+    this.avatarSpace.addEventListener('pointerup', release);
+    this.avatarSpace.addEventListener('pointercancel', release);
+    this.avatarSpace.addEventListener('lostpointercapture', release);
+    window.addEventListener('blur', () => points.clear());
+    this.avatarSpace.addEventListener('wheel', (event) => {
+      event.preventDefault(); this.actions.viewDelta?.(0, event.deltaY * .0025);
+    }, { passive: false });
   }
 
   private button(label: string, fn: () => void, className: string, icon?: string): HTMLButtonElement {
@@ -148,6 +205,7 @@ export class Creator {
   private selectCategory(category: Category, focus = true): void {
     this.actions.sound?.('ui.click');
     this.cat = category;
+    this.panelMode = 'pieces'; this.colorPage = 0;
     this.sectionKey = category.sections[0]!.key;
     this.revealSelectedPage();
     this.renderTabs();
@@ -192,6 +250,18 @@ export class Creator {
     const pieces = this.cat.sections.filter((s) => !s.colors);
     const section = pieces.find((s) => s.key === this.sectionKey) ?? pieces[0]!;
     this.sectionKey = section.key;
+    const colorSections = this.cat.sections.filter((s) => s.colors && (!s.when || s.when(this.appearance)));
+    if (!colorSections.length) this.panelMode = 'pieces';
+    this.opts.dataset.mode = this.compact.matches ? this.panelMode : 'all';
+    const modes = document.createElement('div');
+    modes.className = 'creator-panel-tabs';
+    if (this.compact.matches && colorSections.length) {
+      for (const [mode, label] of [['pieces', 'Peças'], ['colors', 'Cores']] as const) {
+        const tab = this.button(label, () => { this.panelMode = mode; this.renderOptions(); }, 'creator-section-tab');
+        tab.setAttribute('aria-pressed', String(this.panelMode === mode));
+        modes.append(tab);
+      }
+    }
     const sectionTabs = document.createElement('div');
     sectionTabs.className = 'creator-section-tabs';
     sectionTabs.setAttribute('aria-label', 'Tipo de opção');
@@ -224,7 +294,7 @@ export class Creator {
       placeholder.textContent = empty ? 'Sem peça' : '3D';
       image.append(placeholder);
       image.dataset.state = empty ? 'empty' : 'loading';
-      if (signal && !empty) {
+      if (signal && !empty && this.opts.dataset.mode !== 'colors') {
         button.setAttribute('aria-busy', 'true');
         void this.thumbnails.request(section.key, option.id, { ...this.appearance }, signal).then((url) => {
           if (signal.aborted || !image.isConnected) return;
@@ -271,7 +341,7 @@ export class Creator {
     pagination.hidden = pages < 2;
     const palette = document.createElement('div');
     palette.className = 'creator-palette';
-    for (const colors of this.cat.sections.filter((s) => s.colors && (!s.when || s.when(this.appearance)))) {
+    for (const colors of colorSections) {
       const label = document.createElement('p');
       label.className = 'creator-palette-label';
       const selected = colors.colors!.find((color) => color.id === this.appearance[colors.key]);
@@ -280,7 +350,9 @@ export class Creator {
       swatches.className = 'creator-swatches';
       swatches.setAttribute('role', 'group');
       swatches.setAttribute('aria-label', colors.label);
-      for (const color of colors.colors!) {
+      const colorView = creatorPalettePage(colors.colors!, this.colorPage, this.compact.matches);
+      this.colorPage = colorView.page;
+      for (const color of colorView.colors) {
         const swatch = this.button('', () => this.set({ ...this.appearance, [colors.key]: color.id }), 'creator-swatch');
         swatch.title = color.name;
         swatch.dataset.option = color.id;
@@ -292,10 +364,19 @@ export class Creator {
         swatches.append(swatch);
       }
       palette.append(label, swatches);
+      if (this.compact.matches && colorView.pages > 1) {
+        const pages = document.createElement('div'); pages.className = 'creator-color-pages';
+        const previous = this.button('‹', () => { this.colorPage--; this.renderOptions(); }, 'creator-page-button');
+        previous.setAttribute('aria-label', 'Cores anteriores'); previous.disabled = this.colorPage === 0;
+        const position = document.createElement('span'); position.textContent = `${this.colorPage + 1} / ${colorView.pages}`;
+        const next = this.button('›', () => { this.colorPage++; this.renderOptions(); }, 'creator-page-button');
+        next.setAttribute('aria-label', 'Próximas cores'); next.disabled = this.colorPage + 1 === colorView.pages;
+        pages.append(previous, position, next); palette.append(pages);
+      }
       if (colors.note) palette.append(this.note(colors.note));
     }
     if (section.note) palette.append(this.note(section.note));
-    this.opts.replaceChildren(heading, sectionTabs, grid, pagination, palette);
+    this.opts.replaceChildren(heading, modes, sectionTabs, grid, pagination, palette);
     const changed = (Object.keys(this.appearance) as (keyof CharacterAppearance)[]).some((key) => this.appearance[key] !== this.baseline[key]);
     this.status.textContent = changed ? 'Seu novo visual está na prévia. Salve para usar.' : 'Um visual com a sua cara.';
     if (focused) [...this.opts.querySelectorAll<HTMLButtonElement>('[data-option]')].find((button) => button.dataset.option === focused)?.focus({ preventScroll: true });

@@ -92,9 +92,11 @@ export class Spectator {
       this.kills.setAttribute('aria-label', `${amount(target.kills)} eliminações`);
     }
     this.previous.disabled = this.next.disabled = !target || living <= 1;
+    const touch = document.body?.classList.contains('touch-ui');
     this.hint.textContent = !target
-      ? 'A partida continua · TAB placar'
-      : living > 1 ? '← → trocar jogador · TAB placar' : 'Último sobrevivente · TAB placar';
+      ? touch ? 'A partida continua · segure PLACAR' : 'A partida continua · TAB placar'
+      : living > 1 ? touch ? 'Toque nas setas · segure PLACAR' : '← → trocar jogador · TAB placar'
+        : touch ? 'Último sobrevivente · segure PLACAR' : 'Último sobrevivente · TAB placar';
   }
 
   show(on: boolean): void {

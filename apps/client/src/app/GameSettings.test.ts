@@ -3,6 +3,11 @@ import { DEFAULT_BINDINGS } from '../game/KeyBindings';
 import { normalizeGameSettings } from './GameSettings';
 
 describe('settings migration and profile values', () => {
+  it('starts a fresh phone with a lighter profile while preserving explicit player preferences', () => {
+    expect(normalizeGameSettings({}, true)).toMatchObject({ quality: 'LOW', fpsCap: 30 });
+    expect(normalizeGameSettings({ quality: 'HIGH', fpsCap: 60 }, true)).toMatchObject({ quality: 'HIGH', fpsCap: 60 });
+    expect(normalizeGameSettings({})).toMatchObject({ quality: 'HIGH', fpsCap: 0 });
+  });
   it('keeps old saved controls and adds the new independent controls at their original strength', () => {
     const settings = normalizeGameSettings({ quality: 'LOW', fpsCap: 60, volume: .35, sensitivity: .003, invertY: true });
     expect(settings).toMatchObject({ quality: 'LOW', fpsCap: 60, volume: .35, sensitivity: .003, invertY: true, effectsVolume: 1, ambienceVolume: 1, shakeIntensity: 1 });
